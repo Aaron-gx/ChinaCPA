@@ -456,7 +456,10 @@ func (p *Panel) handleTraeCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<h3>✅ Trae 登录成功，账号已纳管</h3><p>返回面板即可看到新账号（刷新页面）。</p><p><a href="/">返回面板</a></p>`)
+	fmt.Fprint(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
+		`<meta http-equiv="refresh" content="2;url=/">`+
+		`<style>body{background:#0d1117;color:#e6edf3;font-family:"Microsoft YaHei",sans-serif;padding:60px;text-align:center}a{color:#58a6ff}</style></head><body>`+
+		`<h3>✅ Trae 登录成功，账号已纳管</h3><p>2 秒后自动返回面板…</p><p><a href="/">立即返回</a></p></body></html>`)
 }
 
 func (p *Panel) traeProvider() traeProviderIface {

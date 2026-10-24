@@ -307,6 +307,7 @@ async function startLogin(prov){
   $('#loginFlow').innerHTML='<div class="status-line wait">正在发起授权...</div>';
   const r=await api('/api/login/start',{method:'POST',body:JSON.stringify({provider:prov,callback_base:location.origin})});
   if(r.error){$('#loginFlow').innerHTML=`<div class="status-line err">发起失败：${esc(r.error)}</div>`;return}
+  savePending(prov,r.id);
   const html=`<h3 style="margin-top:8px">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae'})[prov]} 授权登录</h3>
     <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':'在浏览器打开链接完成腾讯账号登录：'}</p>
     ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
@@ -321,11 +322,33 @@ async function startLogin(prov){
 async function pollLogin(prov,id){
   try{
     const r=await api(`/api/login/poll?provider=${prov}&id=${encodeURIComponent(id)}`);
-    const el=$('#loginStatus');if(!el){clearInterval(POLL_TIMER);POLL_TIMER=null;return}
-    if(r.status==='success'){el.className='status-line ok';el.innerHTML=`✅ 纳管成功：${esc(r.account?.nickname||r.account?.uid||'')}，已自动签到并拉取额度`;clearInterval(POLL_TIMER);POLL_TIMER=null;setTimeout(refreshAll,1000)}
-    else if(r.status==='failed'){el.className='status-line err';el.textContent='❌ '+(r.message||'失败');clearInterval(POLL_TIMER);POLL_TIMER=null}
-    else{el.className='status-line wait';el.textContent=r.message||'等待授权完成...'}
+    const el=$('#loginStatus');
+    if(r.status==='success'){
+      clearPending();
+      if(el){el.className='status-line ok';el.innerHTML=`✅ 纳管成功：${esc(r.account?.nickname||r.account?.uid||'')}，已自动签到并拉取额度`}
+      clearInterval(POLL_TIMER);POLL_TIMER=null;setTimeout(refreshAll,1000);
+    }else if(r.status==='failed'){
+      clearPending();
+      if(el){el.className='status-line err';el.textContent='❌ '+(r.message||'失败')}
+      clearInterval(POLL_TIMER);POLL_TIMER=null;
+    }else if(el){el.className='status-line wait';el.textContent=r.message||'等待授权完成...'}
   }catch(e){}
+}
+// 登录票据持久化：面板页被跳走/刷新后，回来仍能自动检测纳管结果
+function savePending(prov,id){localStorage.setItem('ccpa_pending_login',JSON.stringify({provider:prov,id,ts:Date.now()}))}
+function clearPending(){localStorage.removeItem('ccpa_pending_login')}
+function resumePending(){
+  let p=null;try{p=JSON.parse(localStorage.getItem('ccpa_pending_login'))}catch(e){}
+  if(!p||!p.provider||!p.id)return;
+  if(Date.now()-(p.ts||0)>15*60*1000){clearPending();return}
+  if(POLL_TIMER)clearInterval(POLL_TIMER);
+  POLL_TIMER=setInterval(async()=>{
+    let r=null;
+    try{r=await api(`/api/login/poll?provider=${p.provider}&id=${encodeURIComponent(p.id)}`)}catch(e){r=null}
+    if(!r||r.error){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;refreshAll();return}
+    if(r.status==='success'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;toast(`✅ 纳管成功：${r.account?.nickname||r.account?.uid||''}（已自动签到）`);refreshAll()}
+    else if(r.status==='failed'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null}
+  },3000);
 }
 async function doImport(){
   const prov=$('#importProv').value,cred=$('#importCred').value.trim();
@@ -340,7 +363,7 @@ async function doImport(){
 (async()=>{
   const r=await fetch('/api/overview');
   if(r.status===401){showLogin()}
-  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll()}).catch(showLogin)}
+  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll();resumePending()}).catch(showLogin)}
 })();
 setInterval(()=>{if($('#main').style.display!=='none')refreshAll()},30000);
 </script>
