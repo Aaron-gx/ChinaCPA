@@ -196,10 +196,10 @@ async function refreshAll(){
 
 function renderOverview(o){
   const host=location.host;
-  $('#gwinfo').innerHTML=`🔌 <b>OpenAI 兼容接口</b>：<code>http://${host}/v1</code>
-    &nbsp;密钥：<code>${esc(localStorage.getItem('showKey')==='1'?o.api_key_hint||'config.json api_key':'••••••••（config.json api_key）')}</code>
-    &nbsp;<a href="javascript:void 0" onclick="localStorage.setItem('showKey',localStorage.getItem('showKey')==='1'?'0':'1');refreshAll()">显示/隐藏</a>
-    <br>模型调用：<code>{"model":"qwen:qwen3-coder-plus"}</code>（支持前缀 <code>workbuddy:</code> / <code>qwen:</code> / <code>trae:</code>，裸模型名自动匹配唯一平台）`;
+  $('#gwinfo').innerHTML=`🔌 <b>三协议接入</b>（地址均为 <code>http://${host}/v1</code>，密钥 <code>config.json api_key</code>）：
+    <br>① OpenAI SDK / 通用：<code>POST /v1/chat/completions</code>　② Codex CLI（wire_api=responses）：<code>POST /v1/responses</code>　③ Claude Code：<code>POST /v1/messages</code>
+    <br>模型调用：<code>{"model":"qwen:qwen3-coder-plus"}</code>（前缀 <code>workbuddy:</code> / <code>qwen:</code> / <code>trae:</code>，裸名自动匹配）
+    <br>Codex/Claude Code 里模型名写死不合适时，在 config.json 配 <code>model_aliases</code> 别名映射（如 gpt-5.2-codex → workbuddy:glm-5.3）`;
   const mc=o.model_count||{};
   $('#acctCount').textContent=`共 ${o.account_total} 个账号`;
   const cards=[

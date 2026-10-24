@@ -4,12 +4,14 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
 
+	"chinacpa/internal/model"
 	"chinacpa/internal/pool"
 	"chinacpa/internal/provider"
 	"chinacpa/internal/usage"
@@ -39,6 +41,8 @@ func (g *Gateway) SetQwenCounter(c qwenCounter) { g.qwenProv = c }
 func (g *Gateway) Register(mux *http.ServeMux, authKey string) {
 	mux.HandleFunc("/v1/models", g.auth(g.handleModels, authKey))
 	mux.HandleFunc("/v1/chat/completions", g.auth(g.handleChat, authKey))
+	mux.HandleFunc("/v1/responses", g.auth(g.handleResponses, authKey))
+	mux.HandleFunc("/v1/messages", g.auth(g.handleClaudeMessages, authKey))
 }
 
 func (g *Gateway) auth(next http.HandlerFunc, key string) http.HandlerFunc {
@@ -59,6 +63,75 @@ func (g *Gateway) auth(next http.HandlerFunc, key string) http.HandlerFunc {
 }
 
 // ── /v1/models ───────────────────────────────────────────
+
+// openAIStream 一次成功的 provider 调用（body 恒为 OpenAI 兼容 SSE 流）。
+type openAIStream struct {
+	acct *model.Account
+	pid  string
+	body io.ReadCloser
+}
+
+// callOpenAIStream 失败转移调用：轮询 provider 可用账号直到成功。
+// 请求体必须 stream=true；失败时已写错误响应，返回 nil。
+func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, pid, mname string, body []byte) *openAIStream {
+	pr, ok := g.pool.Provider(pid)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "provider_missing", pid)
+		return nil
+	}
+	var lastStatus int
+	var lastBody []byte
+	var lastErr *provider.Error
+	tried := map[string]bool{}
+	for {
+		a, perr := g.pool.Pick(pid)
+		if perr != nil {
+			break
+		}
+		if tried[a.UID] {
+			break
+		}
+		tried[a.UID] = true
+		if _, terr := g.pool.EnsureFreshToken(ctx, a); terr != nil {
+			lastErr = provider.AsError(terr)
+			continue
+		}
+		res, cerr := pr.ChatStream(ctx, a, mname, body)
+		if cerr != nil {
+			g.pool.MarkError(a, cerr)
+			lastErr = provider.AsError(cerr)
+			continue
+		}
+		if res.Err != nil || res.Status >= 400 {
+			if res.Err != nil {
+				g.pool.MarkError(a, res.Err)
+				lastErr = res.Err
+			}
+			if res.Body != nil {
+				res.Body.Close()
+			}
+			lastStatus, lastBody = res.Status, res.RespBody
+			continue
+		}
+		g.pool.MarkSuccess(a)
+		if pid == "qwen" && g.qwenProv != nil {
+			g.qwenProv.CountRequest(a.UID)
+		}
+		return &openAIStream{acct: a, pid: pid, body: res.Body}
+	}
+	msg := "上游调用失败"
+	if lastErr != nil {
+		msg = lastErr.Error()
+	} else if len(lastBody) > 0 {
+		msg = string(lastBody[:min(300, len(lastBody))])
+	}
+	status := http.StatusBadGateway
+	if lastStatus > 0 {
+		status = lastStatus
+	}
+	writeErr(w, status, "upstream_error", msg)
+	return nil
+}
 
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 	all, err := g.pool.AllModels(r.Context())

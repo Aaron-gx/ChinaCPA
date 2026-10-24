@@ -30,6 +30,8 @@ type Pool struct {
 	cooldown map[string]time.Time
 	// rr 每个 provider 的轮询游标
 	rr map[string]int
+	// modelAliases 模型别名表（config.model_aliases）
+	modelAliases map[string]string
 	// 模型缓存：provider -> models（带过期）
 	modelsMu sync.Mutex
 	models   map[string]*modelCache
@@ -48,7 +50,8 @@ func New(st *store.Store, provs []provider.Provider) (*Pool, error) {
 		store:    st,
 		provs:    map[string]provider.Provider{},
 		cooldown: map[string]time.Time{},
-		rr:       map[string]int{},
+		rr:           map[string]int{},
+		modelAliases: map[string]string{},
 		models:   map[string]*modelCache{},
 	}
 	for _, pr := range provs {
@@ -308,13 +311,25 @@ func (p *Pool) AllModels(ctx context.Context) (map[string][]model.ModelInfo, err
 	return out, nil
 }
 
+// SetModelAliases 注入模型别名表（客户端固定模型名 → ChinaCPA 模型名）。
+func (p *Pool) SetModelAliases(m map[string]string) {
+	p.modelAliases = m
+}
+
 // ResolveModel 模型名解析：
+//   - 别名表命中（Codex/Claude Code 固定模型名 → 实际模型）
 //   - "provider:model" → 直接路由
 //   - 裸名 → 在全部 provider 模型表中查找；唯一命中即用，多命中/未命中报错
 func (p *Pool) ResolveModel(ctx context.Context, name string) (providerID, modelName string, err error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return "", "", fmt.Errorf("缺少 model 参数")
+	}
+	p.mu.RLock()
+	alias := p.modelAliases[name]
+	p.mu.RUnlock()
+	if alias != "" {
+		name = alias
 	}
 	if i := strings.Index(name, ":"); i > 0 {
 		pid, mname := name[:i], name[i+1:]

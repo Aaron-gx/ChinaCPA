@@ -39,7 +39,49 @@ go build -o chinacpa.exe ./cmd/chinacpa
 2. 仪表板实时看：账号池状态、剩余额度、今日用量、费用估算
 3. 网关信息区有现成的接入参数（地址 + 密钥）
 
-### 客户端接入（与 OpenAI API 完全一致）
+### 客户端接入（三种原生协议）
+
+网关同时支持三种请求协议（翻译层完整移植自 CLIProxyAPI）：
+
+| 端点 | 协议 | 适用客户端 |
+|---|---|---|
+| `POST /v1/chat/completions` | OpenAI Chat Completions | OpenAI SDK / 主流龙虾 |
+| `POST /v1/responses` | OpenAI Responses API | **Codex CLI**（wire_api=responses） |
+| `POST /v1/messages` | Anthropic Messages | **Claude Code**（x-api-key 鉴权） |
+
+**模型别名**：Codex / Claude Code 客户端可能写死模型名，在 config.json 配置映射：
+
+```json
+{
+  "model_aliases": {
+    "gpt-5.2-codex": "workbuddy:glm-5.3",
+    "claude-sonnet-4-6": "trae:glm-5.2"
+  }
+}
+```
+
+**Codex CLI 接入**（`~/.codex/config.toml`）：
+
+```toml
+model = "gpt-5.2-codex"            # 经 model_aliases 映射，或直接写 workbuddy:glm-5.3
+model_provider = "chinacpa"
+wire_api = "responses"
+
+[model_providers.chinacpa]
+name = "ChinaCPA"
+base_url = "http://127.0.0.1:8318/v1"
+env_key = "CHINACPA_API_KEY"       # export CHINACPA_API_KEY=<你的 api_key>
+```
+
+**Claude Code 接入**：
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8318
+export ANTHROPIC_API_KEY=<你的 api_key>
+export ANTHROPIC_MODEL=trae:glm-5.2        # 或用 model_aliases 映射 claude-sonnet-4-6
+```
+
+**标准 OpenAI SDK**：
 
 ```bash
 curl http://127.0.0.1:8318/v1/chat/completions \

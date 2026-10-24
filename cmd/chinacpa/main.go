@@ -59,6 +59,7 @@ func main() {
 			log.Printf("WARN: 账号凭证落盘失败 %s/%s: %v", a.Provider, a.UID, err)
 		}
 	}
+	pl.SetModelAliases(cfg.ModelAliases)
 
 	// usage
 	u, err := usage.New(filepath.Join(cfg.DataDir, "usage"), cfg.PricingFileAbs())

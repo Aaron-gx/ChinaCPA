@@ -22,6 +22,10 @@ type Config struct {
 
 	Qwen QwenConfig `json:"qwen"`
 
+	// ModelAliases 模型别名：客户端写死的模型名 -> ChinaCPA 模型名。
+	// 例：{"gpt-5.2-codex": "workbuddy:glm-5.3", "claude-sonnet-4-6": "trae:glm-5.2"}
+	ModelAliases map[string]string `json:"model_aliases"`
+
 	Pricing PricingConfig `json:"pricing"`
 
 	Server ServerConfig `json:"server"`
