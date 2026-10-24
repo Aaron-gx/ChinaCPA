@@ -126,6 +126,8 @@ func (p *Panel) handleIndex(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// 面板单页应用：禁缓存，保证升级后浏览器总是拿到最新 HTML
+	w.Header().Set("Cache-Control", "no-store, must-revalidate")
 	raw, err := staticFS.ReadFile("static/index.html")
 	if err != nil {
 		http.Error(w, "panel asset missing", http.StatusInternalServerError)

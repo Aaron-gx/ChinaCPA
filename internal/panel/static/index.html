@@ -234,7 +234,7 @@ function renderOverview(o){
     if(a.checkin_today){chk=a.checkin_today.ok?`<span style="color:var(--green)">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span style="color:var(--yellow)">${esc(a.checkin_today.message||'未签')}</span>`}
     const days=a.token_days_left;
     const exp=a.expires_at>0?`${days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'}`:'长期';
-    const provTag={`<span class="tag ${a.provider}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE'})[a.provider]||a.provider}</span>`};
+    const provTag=`<span class="tag ${a.provider}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE'})[a.provider]||a.provider}</span>`;
     tb.insertAdjacentHTML('beforeend',`<tr>
       <td>${provTag} ${esc(a.provider_name)}</td>
       <td>${esc(a.nickname||a.uid)}</td>
