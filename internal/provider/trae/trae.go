@@ -665,7 +665,9 @@ func (p *Provider) getUserInfo(ctx context.Context, a *model.Account) (uid, nick
 
 // ── 额度查询 ─────────────────────────────────────────────
 
-// Quota 聚合权益包额度（同旧实现）。
+// Quota 聚合两路余额：权益包（付费号有 credits_limit）+ 签到免费积分池
+// （免费号权益包 quota 只有功能开关、无数值，真实余额在 checkin_credits/status
+// 的 credits + extra_credits）。
 func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epEntUsage, bytes.NewReader([]byte("{}")))
 	if err != nil {
@@ -704,9 +706,18 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 		remain += l - u
 		packs++
 	}
-	// 对话流实时上报的 ide_credits 更准，优先展示
-	if ide, _, ok := p.LastIdeCredits(a.UID); ok {
-		remain = int64(ide)
+	// 免费积分池：签到状态接口（100 基础 + extra），失败时降级用对话流上报
+	free, checkedIn := p.freeCredits(ctx, a)
+	if free == 0 {
+		if ide, _, ok := p.LastIdeCredits(a.UID); ok && ide > 0 {
+			free = int64(ide)
+		}
+	}
+	remain += free
+	limit += free
+	detail := map[string]any{"packs": packs, "free_credits": free}
+	if checkedIn != nil {
+		detail["checked_in"] = *checkedIn
 	}
 	return &model.QuotaInfo{
 		Provider:  p.ID(),
@@ -716,8 +727,31 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 		Remaining: float64(remain),
 		Unit:      "ide_credits",
 		Healthy:   remain > 0,
-		Detail:    map[string]any{"packs": packs},
+		Detail:    detail,
 	}, nil
+}
+
+// freeCredits 查签到状态接口的免费余额（credits + extra_credits）。
+// 第二返回值为 checked_in 指针（接口失败时 nil）。
+func (p *Provider) freeCredits(ctx context.Context, a *model.Account) (int64, *bool) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epCheckinStatus, bytes.NewReader([]byte("{}")))
+	if err != nil {
+		return 0, nil
+	}
+	p.ugHeaders(req, a)
+	data, err := p.doJSON(req)
+	if err != nil {
+		return 0, nil
+	}
+	var st struct {
+		CheckedIn    bool  `json:"checked_in"`
+		Credits      int64 `json:"credits"`
+		ExtraCredits int64 `json:"extra_credits"`
+	}
+	if json.Unmarshal(data, &st) != nil {
+		return 0, nil
+	}
+	return st.Credits + st.ExtraCredits, &st.CheckedIn
 }
 
 // ReportIdeCredits 对话流 notify_usage 实时上报（SOLO 通道真实余额）。
@@ -749,40 +783,35 @@ func (p *Provider) LastIdeCredits(uid string) (ide, work float64, ok bool) {
 // ── 签到（每日 +200 ide_credits） ────────────────────────
 
 func (p *Provider) Checkin(ctx context.Context, a *model.Account) (*model.CheckinResult, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epCheckinStatus, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return nil, err
-	}
-	p.ugHeaders(req, a)
-	data, err := p.doJSON(req)
-	if err != nil {
-		return nil, err
-	}
-	var st struct {
-		CheckedIn bool  `json:"checked_in"`
-		Credits   int64 `json:"credits"`
-	}
-	if err := json.Unmarshal(data, &st); err != nil {
-		return nil, fmt.Errorf("签到状态解析失败: %w", err)
-	}
-	if st.CheckedIn {
-		return &model.CheckinResult{OK: true, Already: true, Message: "今天已签到"}, nil
+	before, beforeChecked := p.freeCredits(ctx, a)
+	if beforeChecked != nil && *beforeChecked {
+		return &model.CheckinResult{OK: true, Already: true, Message: "今天已签到", CreditsEarned: before}, nil
 	}
 	creq, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epCheckinClaim, bytes.NewReader([]byte("{}")))
 	if err != nil {
 		return nil, err
 	}
 	p.ugHeaders(creq, a)
-	cdata, err := p.doJSON(creq)
-	if err != nil {
+	if _, err := p.doJSON(creq); err != nil {
 		pe := provider.AsError(err)
 		if strings.Contains(pe.Msg, "9074") || strings.Contains(pe.Msg, "人数太多") {
 			return &model.CheckinResult{OK: false, Message: "签到人数过多（9074），稍后自动重试"}, nil
 		}
 		return nil, err
 	}
-	_ = cdata
-	return &model.CheckinResult{OK: true, Message: "签到成功", CreditsEarned: 200}, nil
+	// claim 返回 code 0 不代表记上（设备指纹被拒也返回 0）：回查状态确认。
+	after, afterChecked := p.freeCredits(ctx, a)
+	if afterChecked == nil || !*afterChecked {
+		// 回查失败或未翻真：无法确认，按未生效处理（下次定时再试）
+		return &model.CheckinResult{OK: false, Message: "签到未确认生效（设备指纹被拒或已领过），稍后自动重试"}, nil
+	}
+	earned := int64(200)
+	if after > before {
+		earned = after - before
+	}
+	// 回填实时余额，面板额度立即可见
+	p.ReportIdeCredits(a.UID, float64(after), 0)
+	return &model.CheckinResult{OK: true, Message: "签到成功", CreditsEarned: earned}, nil
 }
 
 // ── 模型列表（双 scene 合并） ────────────────────────────
