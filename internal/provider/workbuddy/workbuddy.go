@@ -9,6 +9,7 @@
 package workbuddy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -748,6 +749,95 @@ func (p *Provider) claimReward(ctx context.Context, a *model.Account, taskCode s
 
 // ── 模型列表 ─────────────────────────────────────────────
 
+// Models 拉取模型列表（/console/enterprises/personal/models → agents[cli].models）。
+// 上游结构随版本变化：agents 可能是数组或映射；models 元素可能是字符串或对象。
+// 这里做双形状兼容解析。
+func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chatBase(a)+"/console/enterprises/personal/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	p.commonHeaders(req, a)
+	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
+	data, err := p.doJSON(req)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Agents json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("解析模型列表失败: %w", err)
+	}
+	// agents: 数组形态 [{"name":"cli","models":[...]}] / 映射形态 {"cli":{"models":[...]}}
+	type agentEntry struct {
+		Name   string          `json:"name"`
+		Models json.RawMessage `json:"models"`
+	}
+	var entries []agentEntry
+	var asArr []agentEntry
+	if json.Unmarshal(resp.Agents, &asArr) == nil {
+		entries = asArr
+	} else {
+		var asMap map[string]agentEntry
+		if json.Unmarshal(resp.Agents, &asMap) == nil {
+			for name, e := range asMap {
+				e.Name = name
+				entries = append(entries, e)
+			}
+		}
+	}
+	var out []model.ModelInfo
+	for _, ag := range entries {
+		if ag.Name != "cli" && len(entries) > 1 {
+			continue
+		}
+		out = append(out, parseModelList(ag.Models)...)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("模型列表为空")
+	}
+	return out, nil
+}
+
+// parseModelList 解析 models 数组：字符串形态（新版上游）与对象形态（旧版）。
+func parseModelList(raw json.RawMessage) []model.ModelInfo {
+	var out []model.ModelInfo
+	// 新版：[]string
+	var ids []string
+	if json.Unmarshal(raw, &ids) == nil {
+		for _, id := range ids {
+			if id == "" || id == "auto" {
+				continue
+			}
+			out = append(out, model.ModelInfo{ID: id, Provider: "workbuddy"})
+		}
+		return out
+	}
+	// 旧版：[]modelEntry
+	var objs []modelEntry
+	if json.Unmarshal(raw, &objs) == nil {
+		for _, m := range objs {
+			if m.Disabled || m.NonChatModel || m.ID == "" {
+				continue
+			}
+			out = append(out, model.ModelInfo{
+				ID:             m.ID,
+				Provider:       "workbuddy",
+				Name:           m.Name,
+				Description:    m.Description,
+				ContextWindow:  m.MaxInputTokens,
+				MaxTokens:      m.MaxOutputTokens,
+				SupportsTools:  m.SupportsTool,
+				SupportsImages: m.SupportsImages,
+				Credits:        m.Credits,
+			})
+		}
+	}
+	return out
+}
+
+// modelEntry 旧版上游模型目录对象形态。
 type modelEntry struct {
 	ID              string `json:"id"`
 	Name            string `json:"name"`
@@ -761,60 +851,21 @@ type modelEntry struct {
 	NonChatModel    bool   `json:"nonChatModel"`
 }
 
-// Models 拉取模型列表（/console/enterprises/personal/models → agents[cli].models）。
-func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chatBase(a)+"/console/enterprises/personal/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	p.commonHeaders(req, a)
-	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
-	data, err := p.doJSON(req)
-	if err != nil {
-		return nil, err
-	}
-	var resp struct {
-		Agents map[string]struct {
-			Models []modelEntry `json:"models"`
-		} `json:"agents"`
-	}
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("解析模型列表失败: %w", err)
-	}
-	var out []model.ModelInfo
-	for agent, g := range resp.Agents {
-		if agent != "cli" {
-			continue
-		}
-		for _, m := range g.Models {
-			if m.Disabled || m.NonChatModel || m.ID == "" {
-				continue
-			}
-			out = append(out, model.ModelInfo{
-				ID:             m.ID,
-				Provider:       p.ID(),
-				Name:           m.Name,
-				Description:    m.Description,
-				ContextWindow:  m.MaxInputTokens,
-				MaxTokens:      m.MaxOutputTokens,
-				SupportsTools:  m.SupportsTool,
-				SupportsImages: m.SupportsImages,
-				Credits:        m.Credits,
-			})
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("模型列表为空")
-	}
-	return out, nil
-}
-
 // ── 对话转发 ─────────────────────────────────────────────
 
-// ChatStream 透传 OpenAI 兼容请求到 /v2/chat/completions（SSE 原样透传）。
+// ChatStream 转发到 /v2/chat/completions。上游 2026 起仅支持流式（11101），
+// 故恒以 stream=true 出站；客户端请求非流式时在本地聚合为完整 OpenAI JSON。
 func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName string, body []byte) (*provider.ChatResult, error) {
-	// 注入 prompt_cache_key（命中上游前缀缓存，显著降费）
-	body = injectCacheKey(body, a.UID)
+	wantStream := false
+	var probe struct {
+		Stream bool   `json:"stream"`
+		Model  string `json:"model"`
+	}
+	if json.Unmarshal(body, &probe) == nil {
+		wantStream = probe.Stream
+	}
+	// 改写：模型名覆盖 + 强制流式 + 注入 prompt_cache_key（命中上游前缀缓存，显著降费）
+	body = rewriteChatBody(body, modelName, a.UID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatBase(a)+"/v2/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -834,23 +885,106 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 			Err:      classifyHTTP(resp.StatusCode, raw),
 		}, nil
 	}
-	ct := resp.Header.Get("Content-Type")
-	return &provider.ChatResult{Body: resp.Body, ContentType: ct}, nil
+	if wantStream {
+		return &provider.ChatResult{Body: resp.Body, ContentType: "text/event-stream"}, nil
+	}
+	agg, aerr := aggregateOpenAISSE(resp.Body, modelName)
+	resp.Body.Close()
+	if aerr != nil {
+		return nil, aerr
+	}
+	return &provider.ChatResult{
+		Body:        io.NopCloser(bytes.NewReader(agg)),
+		ContentType: "application/json",
+	}, nil
 }
 
-// injectCacheKey 注入按账号隔离的稳定缓存键（费用优化）。
-func injectCacheKey(body []byte, uid string) []byte {
+// rewriteChatBody 模型名覆盖 + 强制 stream + prompt_cache_key 注入。
+func rewriteChatBody(body []byte, modelName, uid string) []byte {
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return body
 	}
-	if _, exists := obj["prompt_cache_key"]; exists {
-		return body
+	if modelName != "" {
+		obj["model"] = modelName
 	}
-	obj["prompt_cache_key"] = "chinacpa:" + uid
+	obj["stream"] = true
+	if _, exists := obj["prompt_cache_key"]; !exists {
+		obj["prompt_cache_key"] = "chinacpa:" + uid
+	}
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return body
 	}
 	return out
+}
+
+// aggregateOpenAISSE 聚合 OpenAI 格式 SSE 流为完整 chat.completion JSON。
+func aggregateOpenAISSE(body io.Reader, modelName string) ([]byte, error) {
+	sc := bufio.NewScanner(body)
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
+	var content, reasoning strings.Builder
+	var toolCalls []any
+	var usage map[string]any
+	finish := "stop"
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" {
+			continue
+		}
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+					ToolCalls        []any  `json:"tool_calls"`
+				} `json:"delta"`
+				FinishReason *string `json:"finish_reason"`
+			} `json:"choices"`
+			Usage map[string]any `json:"usage"`
+		}
+		if json.Unmarshal([]byte(payload), &chunk) != nil {
+			continue
+		}
+		if chunk.Usage != nil {
+			usage = chunk.Usage
+		}
+		for _, c := range chunk.Choices {
+			content.WriteString(c.Delta.Content)
+			reasoning.WriteString(c.Delta.ReasoningContent)
+			toolCalls = append(toolCalls, c.Delta.ToolCalls...)
+			if c.FinishReason != nil && *c.FinishReason != "" {
+				finish = *c.FinishReason
+			}
+		}
+	}
+	msg := map[string]any{"role": "assistant", "content": content.String()}
+	if reasoning.Len() > 0 {
+		msg["reasoning_content"] = reasoning.String()
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+	}
+	resp := map[string]any{
+		"id":      "chatcmpl-" + randHex(8),
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   modelName,
+		"choices": []any{map[string]any{
+			"index":         0,
+			"message":       msg,
+			"finish_reason": finish,
+		}},
+	}
+	if usage != nil {
+		resp["usage"] = usage
+	}
+	return json.Marshal(resp)
 }
