@@ -111,12 +111,12 @@ func TestAggregateSolo(t *testing.T) {
 // TestPrepareBody OpenAI → SOLO 请求体转换。
 func TestPrepareBody(t *testing.T) {
 	in := `{"model":"glm-5.2","stream":false,"messages":[{"role":"user","content":"hi"}]}`
-	out := prepareBody([]byte(in), "glm-5.2")
+	out := prepareBody([]byte(in), "glm-5.2", fallbackScene)
 	var obj map[string]any
 	if err := json.Unmarshal(out, &obj); err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if obj["function"] != soloFunction {
+	if obj["function"] != fallbackScene {
 		t.Errorf("function 字段错误: %v", obj["function"])
 	}
 	if obj["stream"] != true {
@@ -138,9 +138,9 @@ func TestPrepareBody(t *testing.T) {
 
 // TestBuildLoginURL 登录 URL 关键参数。
 func TestBuildLoginURL(t *testing.T) {
-	u := BuildLoginURL("m123", "d456", "http://127.0.0.1:8318/trae/callback")
+	u := buildLoginURL("m123", "d456", "http://127.0.0.1:8318/trae/callback", "trace123", "verifier-abc")
 	for _, want := range []string{
-		"auth_callback_url=", "machine_id=m123", "device_id=d456", "client_id=" + clientID,
+		"auth_callback_url=", "machine_id=m123", "device_id=d456", "client_id=" + clientID, "code_challenge=", "login_trace_id=trace123",
 	} {
 		if !strings.Contains(u, want) {
 			t.Errorf("URL 缺少 %s: %s", want, u)

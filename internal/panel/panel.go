@@ -155,7 +155,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts := p.pool.Accounts()
 	var views []acctView
-	var totalCredits, totalIdeCredits float64
+	var totalCredits, totalIdeCredits, totalQoderCredits float64
 	var qwenRemaining float64
 	providerCount := map[string]int{}
 	for _, a := range accounts {
@@ -195,6 +195,8 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 				totalIdeCredits += q.Remaining
 			case "qwen":
 				qwenRemaining += q.Remaining
+			case "qoder":
+				totalQoderCredits += q.Remaining
 			}
 		}
 		if ci, ok := p.st.TodayCheckin(a.Provider, a.UID); ok {
@@ -224,6 +226,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"total_credits":     totalCredits,
 		"total_ide_credits": totalIdeCredits,
 		"qwen_remaining":    qwenRemaining,
+		"qoder_remaining":   totalQoderCredits,
 		"usd_cny":           p.usage.USDCNY(),
 		"gateway_url":       "/v1",
 		"listen":            p.cfg.Listen,

@@ -3,6 +3,7 @@ module chinacpa
 go 1.23
 
 require (
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/sirupsen/logrus v1.10.2 // indirect
 	github.com/tidwall/gjson v1.20.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect

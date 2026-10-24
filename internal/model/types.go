@@ -25,6 +25,11 @@ type Account struct {
 	// Qwen 专属（OAuth resource_url，如 portal.qwen.ai）
 	ResourceURL string `json:"resource_url,omitempty"`
 
+	// Trae 专属（PKCE 设备密钥 + 刷新客户端绑定 + 区域 host 覆盖）
+	DevicePrivateKey string `json:"device_private_key,omitempty"`
+	RefreshClientID  string `json:"refresh_client_id,omitempty"`
+	AuthHost         string `json:"auth_host,omitempty"` // OAuth host 覆盖（回调 host 参数）
+
 	Disabled bool  `json:"disabled,omitempty"`
 	CreatedAt int64 `json:"created_at,omitempty"`
 	LastUsedAt int64 `json:"last_used_at,omitempty"`

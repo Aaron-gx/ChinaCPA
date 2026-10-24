@@ -7,11 +7,16 @@
 |---|---|---|---|
 | **WorkBuddy / CodeBuddy**（腾讯） | OAuth 浏览器授权 | 积分制（资源包） | ✅ 每日签到 + 任务中心自动领奖 |
 | **Qwen 通义千问**（chat.qwen.ai） | 设备码授权 | 2000 次请求/天 | —（无签到体系，本地自动计数） |
-| **Trae**（字节 SOLO 免费通道） | 授权 URL 回调 | ide_credits | ✅ 每日 +200 积分 |
+| **Trae**（字节 SOLO 免费通道，CN/国际） | PKCE 授权码回调 | ide_credits | ✅ 每日 +200 积分 |
+| **Qoder**（阿里，CN qoder.com.cn / 国际 qoder.sh） | 控制台 PAT 导入 | credits（套餐+加购+组织） | ✅ 每日积分活动自动领取 |
+
+> Trae 2026-10 起切换到 PKCE 授权码登录（客户端 3.3.62），本项目已跟进新流程；旧版 refreshToken 凭证仍可粘贴导入。
+> Qoder 分区：国内版 PAT 直接粘贴；国际版加前缀 `global:`。
 
 ## ✨ 功能
 
-- **凭证即用**：面板发起 OAuth / 粘贴 refreshToken 两种纳管方式，不需要安装官方 IDE/CLI
+- **凭证即用**：面板 OAuth 授权 / PAT / refreshToken 三种纳管方式，不需要安装官方 IDE/CLI
+- **四大平台**：WorkBuddy、Qwen、Trae（CN/国际）、Qoder（CN/国际），模型前缀 `workbuddy:` `qwen:` `trae:` `qoder:`
 - **自动签到积分**：每日 9 点、21 点自动签到（可配），WorkBuddy 任务中心自动接受任务+领取奖励
 - **额度自动获取**：每 10 分钟自动刷新各账号剩余额度（WorkBuddy 积分 / Trae ide_credits / Qwen 今日剩余次数）
 - **全量模型列表**：自动拉取各平台全部可用模型，统一暴露
