@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -804,12 +805,37 @@ func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelI
 		if name == "" {
 			name, _ = m["displayName"].(string)
 		}
-		out = append(out, model.ModelInfo{ID: key, Name: name, Provider: p.ID(), SupportsTools: true})
+		out = append(out, model.ModelInfo{ID: key, Name: name, Provider: p.ID(), SupportsTools: true, Credits: qoderCredits(m)})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("模型目录为空")
 	}
 	return out, nil
+}
+
+// qoderCredits 目录条目的计价倍率：显式 credits 原文优先；否则 price_factor
+// 渲染 "<factor>x"（控制台同款）；is_free=true 且无正倍率才算免费（上游会出现
+// is_free=true 但 price_factor>0 的情况，以正倍率为准）。
+func qoderCredits(m map[string]any) string {
+	if c, _ := m["credits"].(string); strings.TrimSpace(c) != "" {
+		return c
+	}
+	factor, hasFactor := 0.0, false
+	switch v := m["price_factor"].(type) {
+	case float64:
+		factor, hasFactor = v, true
+	case string:
+		if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil {
+			factor, hasFactor = f, true
+		}
+	}
+	if hasFactor && factor > 0 {
+		return strconv.FormatFloat(factor, 'f', -1, 64) + "x"
+	}
+	if free, _ := m["is_free"].(bool); free {
+		return "免费"
+	}
+	return ""
 }
 
 // ── 对话（COSY 签名 SSE → OpenAI SSE） ───────────────────

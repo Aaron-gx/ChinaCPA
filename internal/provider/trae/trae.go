@@ -870,10 +870,11 @@ func (p *Provider) fetchScene(ctx context.Context, a *model.Account, scene strin
 	}
 	var resp struct {
 		ConfigInfoList []struct {
-			ConfigName    string `json:"config_name"`
-			DisplayConfig struct {
+			ConfigName            string `json:"config_name"`
+			DisplayConfig         struct {
 				DisplayName string `json:"display_name"`
 			} `json:"display_config"`
+			DisplayContactConfig json.RawMessage `json:"display_contact_config"`
 		} `json:"config_info_list"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
@@ -884,9 +885,41 @@ func (p *Provider) fetchScene(ctx context.Context, a *model.Account, scene strin
 		if cfg.ConfigName == "" {
 			continue
 		}
-		out = append(out, model.ModelInfo{ID: cfg.ConfigName, Name: cfg.DisplayConfig.DisplayName, Provider: p.ID()})
+		out = append(out, model.ModelInfo{
+			ID: cfg.ConfigName, Name: cfg.DisplayConfig.DisplayName,
+			Provider: p.ID(), Credits: traeCredits(cfg.DisplayContactConfig),
+		})
 	}
 	return out, nil
+}
+
+// traeCredits 从 display_contact_config（可能是二次 JSON 编码的字符串）提取
+// consumption_rate.data.rate，渲染为控制台同款 "x0.78"。enable=false/缺失返回空。
+func traeCredits(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	payload := raw
+	var encoded string
+	if json.Unmarshal(raw, &encoded) == nil && strings.TrimSpace(encoded) != "" {
+		payload = json.RawMessage(encoded)
+	}
+	var contact struct {
+		ConsumptionRate struct {
+			Enable bool `json:"enable"`
+			Data   struct {
+				Rate float64 `json:"rate"`
+			} `json:"data"`
+		} `json:"consumption_rate"`
+	}
+	if json.Unmarshal(payload, &contact) != nil || !contact.ConsumptionRate.Enable {
+		return ""
+	}
+	r := contact.ConsumptionRate.Data.Rate
+	if r <= 0 {
+		return ""
+	}
+	return "x" + strconv.FormatFloat(r, 'f', -1, 64)
 }
 
 // sceneFor 模型 → scene（目录缓存，缺省 chat_v3）。

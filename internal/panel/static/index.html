@@ -6,94 +6,251 @@
 <title>ChinaCPA · 国产反代管理面板</title>
 <style>
 :root{
-  --bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
-  --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--purple:#bc8cff;
+  --bg:#faf9f5; --bg-soft:#f4f2ea; --card:#ffffff; --border:#e8e4d9; --border2:#d8d3c4;
+  --text:#1f1e1d; --text2:#45433f; --muted:#8a867b; --faint:#aca899;
+  --accent:#c96442; --accent2:#d97757; --accent-soft:#f7ebe4;
+  --green:#5c8a5e; --green-soft:#e9f0e9; --red:#b3564e; --red-soft:#f7e7e4;
+  --yellow:#9a7b2d; --yellow-soft:#f5eedb; --purple:#7a6ab5; --purple-soft:#ece8f7;
+  --blue:#4b7fa8; --blue-soft:#e7eff5; --teal:#3f8f96; --teal-soft:#e5f2f3;
+  --shadow:0 1px 2px rgba(31,30,29,.05),0 1px 8px rgba(31,30,29,.04);
+  --shadow-lift:0 2px 4px rgba(31,30,29,.06),0 8px 24px rgba(31,30,29,.08);
+  --serif:Georgia,"Times New Roman","Noto Serif SC","SimSun",serif;
+  --sans:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.55;
+  background-image:radial-gradient(1200px 500px at 85% -10%,rgba(217,119,87,.06),transparent 60%)}
 a{color:var(--accent);text-decoration:none}
-.container{max-width:1200px;margin:0 auto;padding:20px}
-header{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;gap:10px}
-header h1{font-size:20px}
-header h1 span{color:var(--accent)}
-.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid var(--border);color:var(--muted)}
-.btn{background:#21262d;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
-.btn:hover{border-color:var(--accent);color:var(--accent)}
-.btn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+a:hover{text-decoration:underline}
+::selection{background:var(--accent-soft)}
+
+/* ── 动画 ─────────────────────────────── */
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+@keyframes modalIn{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes toastIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:translateX(0)}}
+@keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── 布局 ─────────────────────────────── */
+.container{max-width:1180px;margin:0 auto;padding:0 24px 60px}
+header{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;
+  padding:15px 0;margin-bottom:26px;gap:12px;flex-wrap:wrap;
+  background:rgba(250,249,245,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
+.brand{display:flex;align-items:center;gap:12px}
+.brand .mark{width:28px;height:28px;flex:none;color:var(--accent);animation:fadeUp .6s both}
+.brand h1{font-family:var(--serif);font-size:21px;font-weight:600;letter-spacing:.2px;animation:fadeUp .6s .05s both}
+.brand h1 em{font-style:normal;color:var(--accent)}
+.brand .sub{font-size:12px;color:var(--muted);margin-top:1px;animation:fadeUp .6s .1s both}
+.actions{display:flex;gap:8px;flex-wrap:wrap;animation:fadeUp .6s .15s both}
+
+/* ── 按钮 ─────────────────────────────── */
+.btn{background:#fff;border:1px solid var(--border2);color:var(--text2);padding:6px 14px;border-radius:10px;
+  cursor:pointer;font-size:13px;font-family:var(--sans);transition:transform .16s,box-shadow .16s,border-color .16s,background .16s,color .16s}
+.btn:hover{border-color:var(--faint);color:var(--text);transform:translateY(-1px);box-shadow:var(--shadow)}
+.btn:active{transform:translateY(0) scale(.98)}
+.btn.primary{background:var(--text);border-color:var(--text);color:#faf9f5}
+.btn.primary:hover{background:#000;border-color:#000;color:#fff}
+.btn.accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.accent:hover{background:#b5573a;border-color:#b5573a;color:#fff}
+.btn.sm{padding:3px 10px;font-size:12px;border-radius:8px}
+.btn.icon{padding:4px 9px}
 .btn.danger:hover{border-color:var(--red);color:var(--red)}
-.btn.sm{padding:3px 8px;font-size:12px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:22px}
-.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
-.card .label{color:var(--muted);font-size:12px;margin-bottom:6px}
-.card .value{font-size:22px;font-weight:600}
-.card .sub{color:var(--muted);font-size:12px;margin-top:4px}
-.card .value.green{color:var(--green)}.card .value.blue{color:var(--accent)}.card .value.purple{color:var(--purple)}.card .value.yellow{color:var(--yellow)}
-section{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px}
-section h2{font-size:15px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+.btn[disabled]{opacity:.45;pointer-events:none}
+
+/* ── 卡片与区块 ───────────────────────── */
+section{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:22px 24px;margin-bottom:22px;
+  box-shadow:var(--shadow);animation:fadeUp .55s both}
+section h2{font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.h2-extra{font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:var(--faint)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(156px,1fr));gap:14px;margin-bottom:22px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px 18px;
+  box-shadow:var(--shadow);transition:transform .2s,box-shadow .2s,border-color .2s;
+  animation:fadeUp .5s both;animation-delay:calc(var(--i)*55ms)}
+.card:hover{transform:translateY(-3px);box-shadow:var(--shadow-lift);border-color:var(--border2)}
+.card .label{color:var(--muted);font-size:12px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.card .label .dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.card .value{font-family:var(--serif);font-size:26px;font-weight:600;line-height:1.15;font-variant-numeric:tabular-nums}
+.card .sub{color:var(--faint);font-size:11.5px;margin-top:6px;line-height:1.5}
+.card .value.green{color:var(--green)}.card .value.blue{color:var(--blue)}.card .value.purple{color:var(--purple)}
+.card .value.yellow{color:var(--yellow)}.card .value.accent{color:var(--accent)}.card .value.teal{color:var(--teal)}
+
+/* ── 表格 ─────────────────────────────── */
+.tblwrap{overflow-x:auto;margin:0 -6px}
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;white-space:nowrap}
-th{color:var(--muted);font-weight:500;font-size:12px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border);font-size:13px;white-space:nowrap}
+th{color:var(--faint);font-weight:600;font-size:11px;letter-spacing:.07em;text-transform:uppercase;padding-top:2px}
+tbody tr{animation:fadeUp .4s both;animation-delay:calc(min(var(--r),12)*30ms);transition:background .15s}
+tbody tr:hover{background:var(--bg-soft)}
 tr:last-child td{border-bottom:none}
-.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px}
-.tag.ok{color:var(--green);border:1px solid var(--green)}
-.tag.cooldown{color:var(--yellow);border:1px solid var(--yellow)}
-.tag.disabled{color:var(--muted);border:1px solid var(--muted)}
-.tag.expired{color:var(--red);border:1px solid var(--red)}
-.tag.wb{color:#4fc3f7;border:1px solid #4fc3f7}
-.tag.qwen{color:var(--purple);border:1px solid var(--purple)}
-.tag.trae{color:#ff8a65;border:1px solid #ff8a65}
-.bars{display:flex;align-items:flex-end;gap:6px;height:120px;padding-top:10px}
-.bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
-.bar{width:100%;background:linear-gradient(180deg,#1f6feb,#388bfd55);border-radius:3px 3px 0 0;min-height:2px}
-.bar-label{font-size:10px;color:var(--muted)}
-.bar-val{font-size:10px;color:var(--muted)}
-/* 登录遮罩 */
-#loginMask{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:99}
-#loginMask .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:30px;width:340px}
-#loginMask h2{margin-bottom:16px;font-size:18px}
-#loginMask input{width:100%;padding:9px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px}
-/* 弹窗 */
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
-.modal.open{display:flex}
-.modal .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:22px;width:min(560px,92vw);max-height:86vh;overflow:auto}
-.modal h3{margin-bottom:14px;font-size:16px}
+td .mini{font-size:12px;color:var(--muted)}
+code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;border-radius:6px;font-size:12px;
+  color:var(--text2);font-family:Consolas,"SF Mono",monospace}
+
+/* ── 标签 ─────────────────────────────── */
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:99px;font-size:11px;font-weight:500;white-space:nowrap}
+.tag.ok{color:var(--green);background:var(--green-soft)}
+.tag.cooldown{color:var(--yellow);background:var(--yellow-soft)}
+.tag.disabled{color:var(--muted);background:var(--bg-soft)}
+.tag.expired{color:var(--red);background:var(--red-soft)}
+.tag.p-wb{color:var(--blue);background:var(--blue-soft)}
+.tag.p-qwen{color:var(--purple);background:var(--purple-soft)}
+.tag.p-trae{color:var(--accent);background:var(--accent-soft)}
+.tag.p-qoder{color:var(--teal);background:var(--teal-soft)}
+.tag.p-qoder-intl{color:var(--green);background:var(--green-soft)}
+.tag.plain{color:var(--muted);background:var(--bg-soft)}
+
+/* ── 网关信息 ─────────────────────────── */
+.gwinfo{background:linear-gradient(135deg,#fff,#faf8f2);border:1px solid var(--border);border-radius:16px;
+  padding:18px 20px;margin-bottom:22px;font-size:13px;line-height:2;box-shadow:var(--shadow);animation:fadeUp .5s both}
+.gwinfo .k{display:inline-flex;align-items:center;gap:6px;margin-right:8px;color:var(--accent);font-weight:600}
+
+/* ── 柱状图 ───────────────────────────── */
+.bars{display:flex;align-items:flex-end;gap:8px;height:150px;padding-top:8px}
+.bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;min-width:0}
+.bar{width:min(100%,38px);background:linear-gradient(180deg,var(--accent2),#c05f3d);border-radius:6px 6px 3px 3px;
+  transform:scaleY(0);transform-origin:bottom;transition:transform .75s cubic-bezier(.22,.9,.28,1),filter .2s;cursor:default}
+.bar-col:hover .bar{filter:brightness(1.12) saturate(1.1)}
+.bar-val{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar-label{font-size:10.5px;color:var(--faint)}
+
+/* ── 登录遮罩 ─────────────────────────── */
+#loginMask{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:99;
+  background-image:radial-gradient(900px 400px at 70% -5%,rgba(217,119,87,.08),transparent 60%)}
+#loginMask .box{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:36px 32px;width:360px;
+  box-shadow:var(--shadow-lift);animation:modalIn .4s cubic-bezier(.2,.8,.25,1) both}
+#loginMask .logo{display:flex;justify-content:center;margin-bottom:14px;color:var(--accent)}
+#loginMask h2{font-family:var(--serif);text-align:center;font-size:20px;margin-bottom:4px}
+#loginMask .tagline{text-align:center;color:var(--muted);font-size:12.5px;margin-bottom:22px}
+
+/* ── 输入 ─────────────────────────────── */
+input,select,textarea{font-family:var(--sans);background:#fff;border:1px solid var(--border2);border-radius:10px;
+  color:var(--text);padding:8px 12px;font-size:13px;transition:border-color .16s,box-shadow .16s;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent2);box-shadow:0 0 0 3px var(--accent-soft)}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+textarea{width:100%;height:96px;font-family:Consolas,monospace;font-size:12px;margin:8px 0;resize:vertical}
+label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
+.hint{color:var(--muted);font-size:12px;line-height:1.8}
+
+/* ── 弹窗 ─────────────────────────────── */
+.modal{position:fixed;inset:0;background:rgba(31,30,29,.35);backdrop-filter:blur(3px);display:none;
+  align-items:center;justify-content:center;z-index:50;opacity:0;transition:opacity .22s}
+.modal.open{display:flex;opacity:1}
+.modal .box{background:var(--card);border:1px solid var(--border);border-radius:20px;padding:26px 28px;
+  width:min(600px,92vw);max-height:86vh;overflow:auto;box-shadow:var(--shadow-lift);
+  animation:modalIn .3s cubic-bezier(.2,.8,.25,1) both}
+.modal .box.wide{width:min(720px,94vw)}
+.modal h3{font-family:var(--serif);font-size:18px;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center}
+.modal .m-sub{color:var(--muted);font-size:12.5px;margin-bottom:14px}
+.xbtn{background:none;border:none;color:var(--faint);font-size:15px;cursor:pointer;padding:4px 8px;border-radius:8px;transition:all .15s}
+.xbtn:hover{color:var(--text);background:var(--bg-soft)}
+
+/* 平台选择卡 */
 .prov-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-.prov-card{border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;text-align:center}
-.prov-card:hover{border-color:var(--accent)}
-.prov-card .t{font-size:14px;font-weight:600;margin-bottom:4px}
-.prov-card .d{font-size:11px;color:var(--muted)}
-.urlbox{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;word-break:break-all;margin:10px 0;font-family:monospace}
-.hint{color:var(--muted);font-size:12px;line-height:1.7}
-textarea{width:100%;height:90px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:10px;font-family:monospace;font-size:12px;margin:8px 0}
+.prov-card{border:1px solid var(--border);border-radius:14px;padding:14px 10px;cursor:pointer;text-align:center;
+  transition:transform .16s,box-shadow .16s,border-color .16s,background .16s}
+.prov-card:hover{border-color:var(--accent2);transform:translateY(-2px);box-shadow:var(--shadow-lift);background:var(--accent-soft)}
+.prov-card .t{font-size:13.5px;font-weight:600;margin-bottom:3px}
+.prov-card .d{font-size:11px;color:var(--muted);line-height:1.5}
+
+.urlbox{background:var(--bg-soft);border:1px dashed var(--border2);border-radius:10px;padding:12px;font-size:12px;
+  word-break:break-all;margin:10px 0;font-family:Consolas,monospace}
 .status-line{margin-top:10px;font-size:13px}
 .status-line.ok{color:var(--green)}.status-line.err{color:var(--red)}.status-line.wait{color:var(--yellow)}
+
+/* ── 发布模型 ─────────────────────────── */
+.pub-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px}
+.pub-card{border:1px solid var(--border);border-radius:16px;padding:18px;transition:transform .18s,box-shadow .18s,border-color .18s;
+  animation:fadeUp .45s both;animation-delay:calc(var(--i)*50ms)}
+.pub-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lift)}
+.pub-card .head{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+.pub-card .name{font-family:Consolas,monospace;font-size:14.5px;font-weight:600;color:var(--text);word-break:break-all}
+.pub-card .note{color:var(--muted);font-size:12px;margin-top:3px}
+.pub-card .ops{display:flex;gap:4px;flex:none}
+.pub-card .price{display:flex;gap:14px;margin:12px 0;padding:8px 12px;background:var(--bg-soft);border-radius:10px;font-size:12px;color:var(--muted)}
+.pub-card .price b{color:var(--text2);font-weight:600;font-variant-numeric:tabular-nums}
+.pub-card .chlabel{font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
+.ch-list{display:flex;flex-direction:column;gap:6px}
+.ch-row{display:flex;align-items:center;gap:8px;font-size:12.5px;background:#fff;border:1px solid var(--border);
+  border-radius:10px;padding:6px 10px;transition:border-color .15s}
+.ch-row:hover{border-color:var(--border2)}
+.ch-row .arrow{color:var(--faint);flex:none}
+.ch-row .m{font-family:Consolas,monospace;word-break:break-all}
+.empty-pub{border:1.5px dashed var(--border2);border-radius:16px;padding:36px 20px;text-align:center;color:var(--muted)}
+.empty-pub .big{font-size:15px;margin-bottom:6px;color:var(--text2)}
+
+/* 渠道编辑行 */
+.ed-ch{display:grid;grid-template-columns:150px 1fr auto;gap:8px;margin-bottom:8px;align-items:center;animation:fadeUp .3s both}
+.ed-ch select,.ed-ch input{width:100%}
+
+/* tabs */
+.tabs{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.tab{padding:4px 14px;border-radius:99px;cursor:pointer;font-size:12.5px;color:var(--muted);border:1px solid transparent;
+  transition:all .18s;user-select:none}
+.tab:hover{color:var(--text);background:var(--bg-soft)}
+.tab.active{color:var(--accent);background:var(--accent-soft);border-color:#eccdbd;font-weight:500}
+
+/* ── 折叠内部模型库 ────────────────────── */
+details.lib{border-top:1px solid var(--border);margin-top:18px;padding-top:14px}
+details.lib summary{cursor:pointer;color:var(--muted);font-size:12.5px;user-select:none;list-style:none;
+  display:flex;align-items:center;gap:8px;transition:color .15s}
+details.lib summary:hover{color:var(--text)}
+details.lib summary::before{content:'▸';transition:transform .2s;color:var(--faint)}
+details.lib[open] summary::before{transform:rotate(90deg)}
+details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
+
+/* ── Toast ────────────────────────────── */
+#toast{position:fixed;bottom:26px;right:26px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--green);
+  border-radius:12px;padding:12px 18px;display:none;z-index:100;font-size:13px;box-shadow:var(--shadow-lift);max-width:380px}
+#toast.show{display:block;animation:toastIn .3s cubic-bezier(.2,.8,.25,1) both}
+#toast.hide{animation:toastOut .25s both}
+#toast.err{border-left-color:var(--red)}
+
+.empty{text-align:center;color:var(--faint);padding:28px;font-size:13px}
 .muted{color:var(--muted)}
-.gwinfo{background:var(--bg);border:1px dashed var(--border);border-radius:8px;padding:12px;margin-bottom:18px;font-size:13px;line-height:1.9}
-code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#79c0ff}
-#toast{position:fixed;bottom:24px;right:24px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 18px;display:none;z-index:100;font-size:13px}
-.tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-.tabs .tab{padding:4px 12px;border:1px solid var(--border);border-radius:14px;cursor:pointer;font-size:12px;color:var(--muted)}
-.tabs .tab.active{color:var(--accent);border-color:var(--accent)}
-.empty{text-align:center;color:var(--muted);padding:26px}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border2);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
+@media (max-width:640px){
+  .prov-grid{grid-template-columns:repeat(2,1fr)}
+  .ed-ch{grid-template-columns:1fr 1fr}
+  section{padding:16px}
+}
 </style>
 </head>
 <body>
+
 <div id="loginMask">
   <div class="box">
-    <h2>🇨🇳 ChinaCPA 管理面板</h2>
-    <input type="password" id="pwInput" placeholder="面板密码（config.json panel_password）" onkeydown="if(event.key==='Enter')doLogin()">
-    <button class="btn primary" style="width:100%" onclick="doLogin()">登 录</button>
-    <p class="hint" style="margin-top:12px">默认密码 123456，登录后可在 config.json 修改。</p>
+    <div class="logo">
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+        <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>
+      </svg>
+    </div>
+    <h2>ChinaCPA 管理面板</h2>
+    <div class="tagline">国产大模型 · 一站式反代网关</div>
+    <input type="password" id="pwInput" placeholder="面板密码（config.json panel_password）" style="width:100%" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn primary" style="width:100%;margin-top:12px;padding:9px" onclick="doLogin()">登 录</button>
+    <p class="hint" style="margin-top:14px;text-align:center">默认密码 123456，登录后可在 config.json 修改</p>
   </div>
 </div>
 
 <div class="container" id="main" style="display:none">
+
   <header>
-    <h1>🇨🇳 ChinaCPA <span>国产反代</span> <span class="badge">workbuddy · qwen · trae · qoder</span></h1>
-    <div>
-      <button class="btn sm" onclick="refreshAll()">↻ 刷新</button>
+    <div class="brand">
+      <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>
+      </svg>
+      <div>
+        <h1>ChinaCPA <em>·</em> 国产反代</h1>
+        <div class="sub">workbuddy · qwen · trae · qoder</div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn sm" onclick="refreshAll(true)">↻ 刷新</button>
       <button class="btn sm" onclick="checkinAll()">⚡ 全部签到</button>
-      <button class="btn sm" onclick="openAdd()">＋ 添加账号</button>
+      <button class="btn sm primary" onclick="openAdd()">＋ 添加账号</button>
     </div>
   </header>
 
@@ -101,9 +258,9 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
 
   <div class="cards" id="cards"></div>
 
-  <section>
-    <h2>账号池 <span class="muted" id="acctCount"></span></h2>
-    <div style="overflow-x:auto">
+  <section style="animation-delay:.15s">
+    <h2>账号池 <span class="h2-extra" id="acctCount"></span></h2>
+    <div class="tblwrap">
     <table id="acctTable">
       <thead><tr>
         <th>平台</th><th>账号</th><th>剩余额度</th><th>额度明细</th><th>今日签到</th><th>Token 有效期</th><th>状态</th><th>操作</th>
@@ -114,56 +271,71 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
     <div class="empty" id="acctEmpty" style="display:none">暂无账号，点击右上角「添加账号」纳管第一个账号</div>
   </section>
 
-  <section>
-    <h2>今日用量（自动计费估算）<span class="muted" id="usageSub"></span></h2>
-    <div style="overflow-x:auto">
+  <section style="animation-delay:.2s">
+    <h2>今日用量 · 费用估算 <span class="h2-extra" id="usageSub"></span></h2>
+    <div class="tblwrap">
     <table id="usageTable">
-      <thead><tr><th>模型</th><th>平台</th><th>请求数</th><th>输入 tokens</th><th>输出 tokens</th><th>合计 tokens</th><th>估算费用</th></tr></thead>
+      <thead><tr><th>模型</th><th>渠道</th><th>请求数</th><th>输入 tokens</th><th>输出 tokens</th><th>合计</th><th>估算费用</th></tr></thead>
       <tbody></tbody>
     </table>
     </div>
-    <h2 style="margin-top:18px">近 7 日 token 消耗</h2>
+    <h2 style="margin-top:22px">近 7 日 token 消耗</h2>
     <div class="bars" id="bars"></div>
   </section>
 
-  <section>
-    <h2>模型列表 <button class="btn sm" onclick="loadModels(true)">↻ 强制刷新</button></h2>
-    <div class="tabs" id="modelTabs"></div>
-    <div style="overflow-x:auto">
-    <table id="modelTable">
-      <thead><tr><th>模型 ID</th><th>调用名</th><th>名称</th><th>上下文</th><th>计价倍率</th></tr></thead>
-      <tbody></tbody>
-    </table>
-    </div>
+  <section id="pubSection" style="animation-delay:.25s">
+    <h2>模型发布 · 渠道归组
+      <span style="display:flex;gap:10px;align-items:center;font-weight:400;text-transform:none;letter-spacing:0">
+        <span class="h2-extra" style="display:flex;align-items:center;gap:4px">$1 = ¥<input id="usdCny" type="number" step="0.05" min="0" style="width:70px;padding:3px 8px;font-size:12px" onchange="saveUsdCny()"></span>
+        <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 新建模型</button>
+      </span>
+    </h2>
+    <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>（渠道间自动轮询 + 失败转移，渠道内多账号再轮询）。客户端写 <code>{"model":"发布模型名"}</code> 即可，单价用于费用估算。未配置发布模型时默认暴露全部内部模型。</div>
+    <div class="pub-grid" id="pubGrid"></div>
+
+    <details class="lib" id="libDetails">
+      <summary>内部模型库（各平台自动拉取，添加渠道时可选择）</summary>
+      <div class="libbody">
+        <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center"><button class="btn sm" onclick="loadModels(true)">↻ 强制刷新</button> <span class="hint" id="libHint"></span></div>
+        <div class="tabs" id="modelTabs"></div>
+        <div class="tblwrap">
+        <table id="modelTable">
+          <thead><tr><th>模型 ID</th><th>直连调用名</th><th>名称</th><th>上下文</th><th>计价倍率</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        </div>
+      </div>
+    </details>
   </section>
 </div>
 
 <!-- 添加账号弹窗 -->
 <div class="modal" id="addModal">
   <div class="box">
-    <h3>添加账号 <button class="btn sm" style="float:right" onclick="closeAdd()">✕</button></h3>
-    <div class="prov-grid" style="grid-template-columns:repeat(3,1fr)">
+    <h3>添加账号 <button class="xbtn" onclick="closeAdd()">✕</button></h3>
+    <div class="m-sub">选择平台发起授权，或直接粘贴已有凭证</div>
+    <div class="prov-grid">
       <div class="prov-card" onclick="startLogin('workbuddy')">
-        <div class="t" style="color:#4fc3f7">WorkBuddy</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
+        <div class="t" style="color:var(--blue)">WorkBuddy</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
       </div>
       <div class="prov-card" onclick="startLogin('qwen')">
-        <div class="t" style="color:#bc8cff">Qwen 通义</div><div class="d">chat.qwen.ai<br>设备码授权 2000次/天</div>
+        <div class="t" style="color:var(--purple)">Qwen 通义</div><div class="d">chat.qwen.ai<br>设备码授权 2000次/天</div>
       </div>
       <div class="prov-card" onclick="startLogin('trae')">
-        <div class="t" style="color:#ff8a65">Trae</div><div class="d">字节 SOLO 通道<br>授权回调自动纳管</div>
+        <div class="t" style="color:var(--accent)">Trae</div><div class="d">字节 SOLO 通道<br>授权回调自动纳管</div>
       </div>
       <div class="prov-card" onclick="startLogin('qoder')">
-        <div class="t" style="color:#22d3ee">Qoder 国内版</div><div class="d">qoder.com.cn<br>自动授权登录</div>
+        <div class="t" style="color:var(--teal)">Qoder 国内版</div><div class="d">qoder.com.cn<br>自动授权登录</div>
       </div>
       <div class="prov-card" onclick="startLogin('qoder-intl')">
-        <div class="t" style="color:#34d399">Qoder 国际版</div><div class="d">qoder.com<br>自动授权登录</div>
+        <div class="t" style="color:var(--green)">Qoder 国际版</div><div class="d">qoder.com<br>自动授权登录</div>
       </div>
     </div>
     <div id="loginFlow"></div>
-    <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
-      <div style="font-weight:600;margin-bottom:4px">或直接粘贴登录凭证</div>
-      <p class="hint">WorkBuddy：refreshToken / auth 文件 JSON；Qwen：refresh_token；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:，如 global:eyJ...）。</p>
-      <select id="importProv" class="btn" style="margin-right:8px">
+    <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:16px">
+      <div style="font-weight:600;margin-bottom:4px;font-size:13px">或直接粘贴登录凭证</div>
+      <p class="hint">WorkBuddy：refreshToken / auth 文件 JSON；Qwen：refresh_token；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）。</p>
+      <select id="importProv" style="margin-right:8px">
         <option value="workbuddy">WorkBuddy</option>
         <option value="qwen">Qwen</option>
         <option value="trae">Trae</option>
@@ -177,62 +349,133 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
   </div>
 </div>
 
+<!-- 模型发布编辑弹窗 -->
+<div class="modal" id="modelModal">
+  <div class="box wide">
+    <h3 id="mmTitle">新建发布模型 <button class="xbtn" onclick="closeModelEditor()">✕</button></h3>
+    <div class="m-sub">对外暴露一个模型名，实际由下方多个上游渠道轮询提供</div>
+    <label class="f">对外模型名（客户端 model 参数）</label>
+    <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / gpt-5-codex / my-claude">
+    <label class="f">备注（可选）</label>
+    <input id="mmNote" style="width:100%" placeholder="显示在面板上的备注名">
+    <label class="f">单价（$/1M tokens，用于费用估算，留空不计价）</label>
+    <div style="display:flex;gap:10px">
+      <div style="flex:1"><input id="mmIn" type="number" step="0.0001" min="0" style="width:100%" placeholder="输入单价，如 0.002"></div>
+      <div style="flex:1"><input id="mmOut" type="number" step="0.0001" min="0" style="width:100%" placeholder="输出单价，如 0.008"></div>
+    </div>
+    <label class="f">上游渠道（按优先级排列，轮询起点自动轮转 + 失败转移）</label>
+    <div id="mmChannels"></div>
+    <button class="btn sm" onclick="addEdChannel()" style="margin-top:4px">＋ 添加渠道</button>
+    <datalist id="chModels"></datalist>
+    <div id="mmStatus" class="status-line"></div>
+    <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px;border-top:1px solid var(--border);padding-top:16px">
+      <button class="btn" onclick="closeModelEditor()">取消</button>
+      <button class="btn primary" onclick="saveModelEditor()">保存并发布</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
-let OVERVIEW=null, MODELS=null, MODEL_TAB='workbuddy', POLL_TIMER=null, CB_BASE='', CUR_LOGIN=null;
+let OVERVIEW=null, MODELS=null, PUB={models:[],usd_cny:0}, MODEL_TAB='workbuddy', POLL_TIMER=null, CUR_LOGIN=null;
+let ED=null, ED_IDX=-1, TOAST_T=null;
+const PROV_NAMES={workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际'};
+const PROV_TAG={workbuddy:'p-wb',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl'};
 const $=s=>document.querySelector(s);
-const fmt=n=>{if(n==null)return'-';if(n>=1e8)return(n/1e8).toFixed(2)+'亿';if(n>=1e4)return(n/1e4).toFixed(2)+'万';return Number(n).toLocaleString()};
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-function toast(msg,ok=true){const t=$('#toast');t.textContent=msg;t.style.display='block';t.style.borderColor=ok?'var(--green)':'var(--red)';setTimeout(()=>t.style.display='none',3000)}
-async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...opts.headers}});if(r.status===401){showLogin();throw new Error('未登录')}return r.json()}
+/* token 数量：1.2K / 100M / 1.2B 风格 */
+function fmt(n){
+  if(n==null||n===''||isNaN(n))return'—';
+  n=Number(n);const a=Math.abs(n);
+  const t=x=>x.replace(/(\.\d*?)0+$/,'$1').replace(/\.$/,'');
+  if(a>=1e9)return t((n/1e9).toFixed(a>=1e10?1:2))+'B';
+  if(a>=1e6)return t((n/1e6).toFixed(a>=1e8?0:a>=1e7?1:2))+'M';
+  if(a>=1e3)return t((n/1e3).toFixed(a>=1e5?0:a>=1e4?1:2))+'K';
+  return String(n);
+}
+const fmtCNY=n=>(n==null||isNaN(n))?'—':(n>=1?'¥'+n.toFixed(2):'¥'+n.toFixed(4));
+
+/* 数字滚动动画 */
+function countUp(el,target,format){
+  const dur=650,t0=performance.now();
+  const step=t=>{
+    const p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,3);
+    el.textContent=format(target*e);
+    if(p<1)requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function toast(msg,ok=true){
+  const t=$('#toast');clearTimeout(TOAST_T);
+  t.textContent=msg;t.className='show'+(ok?'':' err');
+  TOAST_T=setTimeout(()=>{t.className='hide';setTimeout(()=>t.className='',260)},3200);
+}
+async function api(path,opts={}){
+  const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...opts.headers}});
+  if(r.status===401){showLogin();throw new Error('未登录')}
+  return r.json();
+}
 
 function showLogin(){$('#loginMask').style.display='flex';$('#main').style.display='none'}
 async function doLogin(){
   const pw=$('#pwInput').value;
   const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
-  if(r.ok){$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll()}else{toast('密码错误',false)}
+  if(r.ok){$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll(false);loadPublish()}else{toast('密码错误',false)}
 }
 
-async function refreshAll(){
+async function refreshAll(manual){
+  if(manual)toast('刷新中…');
   try{
     const [ov,us]=await Promise.all([api('/api/overview'),api('/api/usage?days=7')]);
     OVERVIEW=ov;renderOverview(ov);renderUsage(us);loadModels(false);
+    if(manual)toast('已刷新');
   }catch(e){if(e.message!=='未登录')console.warn(e)}
 }
 
 function renderOverview(o){
   const host=location.host;
-  $('#gwinfo').innerHTML=`🔌 <b>三协议接入</b>（地址均为 <code>http://${host}/v1</code>，密钥 <code>config.json api_key</code>）：
-    <br>① OpenAI SDK / 通用：<code>POST /v1/chat/completions</code>　② Codex CLI（wire_api=responses）：<code>POST /v1/responses</code>　③ Claude Code：<code>POST /v1/messages</code>
-    <br>模型调用：<code>{"model":"qwen:qwen3-coder-plus"}</code>（前缀 <code>workbuddy:</code> / <code>qwen:</code> / <code>trae:</code>，裸名自动匹配）
-    <br>Codex/Claude Code 里模型名写死不合适时，在 config.json 配 <code>model_aliases</code> 别名映射（如 gpt-5.2-codex → workbuddy:glm-5.3）`;
-  const mc=o.model_count||{};
+  const pubLine=(PUB.models&&PUB.models.length)
+    ?`模型调用：<code>{"model":"${esc(PUB.models[0].id)}"}</code> 等 ${PUB.models.length} 个已发布模型（见「模型发布」区）`
+    :`模型调用：<code>{"model":"qwen:qwen3-coder-plus"}</code>（前缀 <code>workbuddy:</code> / <code>qwen:</code> / <code>trae:</code>，裸名自动匹配）`;
+  $('#gwinfo').innerHTML=`
+    <span class="k">✳ 三协议接入</span>地址 <code>http://${host}/v1</code>，密钥 <code>config.json api_key</code>
+    <br>① OpenAI SDK / 通用：<code>POST /v1/chat/completions</code>　② Codex CLI：<code>POST /v1/responses</code>　③ Claude Code：<code>POST /v1/messages</code>
+    <br>${pubLine}；上游直连可用 <code>provider:model</code>
+    <br>Codex/Claude Code 模型名写死时，可配 config.json <code>model_aliases</code>，或在「模型发布」里建同名模型`;
   $('#acctCount').textContent=`共 ${o.account_total} 个账号`;
+  const pc=Object.entries(o.provider_count||{}).map(([k,v])=>`${PROV_NAMES[k]||k} ×${v}`).join(' · ')||'暂无';
   const cards=[
-    {l:'账号总数',v:o.account_total,s:Object.entries(o.provider_count).map(([k,v])=>`${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae'})[k]||k} ×${v}`).join(' · ')||'暂无',c:''},
-    {l:'WB 积分剩余',v:fmt(Math.round(o.total_credits)),s:'WorkBuddy 全账号积分合计',c:'green'},
-    {l:'Trae 积分剩余',v:fmt(o.total_ide_credits),s:'SOLO 通道 ide_credits 合计',c:'yellow'},
-    {l:'Qwen 今日剩余',v:fmt(o.qwen_remaining),s:'2000 次/天 · 本地自动计数',c:'purple'},
-    {l:'Qoder 剩余额度',v:fmt(o.qoder_remaining),s:'CN/国际 credits 合计',c:'green'},
-    {l:'今日请求',v:fmt(o.today?.requests),s:`输入 ${fmt(o.today?.prompt_tokens)} / 输出 ${fmt(o.today?.completion_tokens)} tokens`,c:'blue'},
-    {l:'今日费用估算',v:'¥'+(o.today?.cost_cny??0).toFixed(4),s:`按 $1=¥${o.usd_cny} 自动折算`,c:'blue'},
+    {l:'账号总数',s:pc,c:'',n:o.account_total},
+    {l:'WB 积分剩余',s:'WorkBuddy 全账号积分合计',c:'green',n:Math.round(o.total_credits)},
+    {l:'Trae 积分剩余',s:'SOLO 通道 ide_credits 合计',c:'yellow',n:o.total_ide_credits},
+    {l:'Qwen 今日剩余',s:'2000 次/天 · 本地自动计数',c:'purple',n:o.qwen_remaining},
+    {l:'Qoder 剩余额度',s:'CN/国际 credits 合计',c:'teal',n:o.qoder_remaining},
+    {l:'今日请求',s:`输入 ${fmt(o.today?.prompt_tokens)} / 输出 ${fmt(o.today?.completion_tokens)} tokens`,c:'blue',n:o.today?.requests||0},
+    {l:'今日费用估算',v:'¥'+(o.today?.cost_cny??0).toFixed(4),s:`按 $1=¥${o.usd_cny} 折算`,c:'accent'},
   ];
-  $('#cards').innerHTML=cards.map(c=>`<div class="card"><div class="label">${c.l}</div><div class="value ${c.c}">${c.v}</div><div class="sub">${esc(c.s)}</div></div>`).join('');
+  $('#cards').innerHTML=cards.map((c,i)=>`<div class="card" style="--i:${i}">
+    <div class="label"><span class="dot"></span>${c.l}</div>
+    <div class="value ${c.c}" ${c.n!=null?`data-n="${c.n}"`:''}>${c.n!=null?'0':c.v}</div>
+    <div class="sub">${esc(c.s)}</div></div>`).join('');
+  document.querySelectorAll('#cards .value[data-n]').forEach(el=>{
+    countUp(el,Number(el.dataset.n),x=>fmt(Math.round(x)));
+  });
   // 账号表
   const tb=$('#acctTable tbody');tb.innerHTML='';
-  (o.accounts||[]).forEach(a=>{
-    let quota='-',detail='-',cls='ok',txt='正常';
+  (o.accounts||[]).forEach((a,ri)=>{
+    let quota='—',detail='—',cls='ok',txt='正常';
     if(a.quota){
-      quota=fmt(a.quota.remaining)+(a.quota.unit==='requests/day'?' 次':' 积分');
-      if(a.quota.unit==='requests/day'){quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)} 次`}
-      else if(a.quota.limit>0){quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)}`}
+      if(a.quota.unit==='requests/day')quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)} 次`;
+      else if(a.quota.limit>0)quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)}`;
+      else quota=fmt(a.quota.remaining)+(a.quota.unit==='ide_credits'?' 积分':'');
       const bits=[];
       if(a.quota.used!=null)bits.push('已用 '+fmt(a.quota.used));
       if(a.provider==='qwen'&&a.quota.requests_used_today!=null)bits.push('今日已请求 '+a.quota.requests_used_today+' 次');
       if(a.quota.detail&&a.quota.detail.packs)bits.push(a.quota.detail.packs+' 个权益包');
-      detail=bits.join(' · ')||'-';
+      detail=bits.join(' · ')||'—';
       const age=(o.now-a.quota.fetched_at)/60;
       detail+=`（${age<1?'刚刚':Math.round(age)+' 分钟前'}自动刷新）`;
     }
@@ -240,15 +483,16 @@ function renderOverview(o){
     if(a.status==='disabled'){cls='disabled';txt='已禁用'}
     if(a.status==='expired'){cls='expired';txt='Token 过期'}
     let chk='<span class="muted">—</span>';
-    if(a.checkin_today){chk=a.checkin_today.ok?`<span style="color:var(--green)">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span style="color:var(--yellow)">${esc(a.checkin_today.message||'未签')}</span>`}
+    if(a.checkin_today){chk=a.checkin_today.ok?`<span class="tag ok">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span class="tag cooldown">${esc(a.checkin_today.message||'未签')}</span>`}
     const days=a.token_days_left;
-    const exp=a.expires_at>0?`${days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'}`:'长期';
-    const provTag=`<span class="tag ${a.provider}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD·国'})[a.provider]||a.provider}${a.provider==='trae'&&a.realm==='global'?'·国际':''}${a.provider==='qoder'&&a.realm==='global'?'·国际':''}</span>`;
-    tb.insertAdjacentHTML('beforeend',`<tr>
-      <td>${provTag} ${esc(a.provider_name)}</td>
+    const exp=a.expires_at>0?(days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'):'长期';
+    const intl=(a.realm==='global')?'·国际':'';
+    const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD'})[a.provider]||a.provider}${intl}</span>`;
+    tb.insertAdjacentHTML('beforeend',`<tr style="--r:${ri}">
+      <td>${provTag} <span class="mini">${esc(a.provider_name)}</span></td>
       <td>${esc(a.nickname||a.uid)}</td>
       <td><b>${quota}</b></td>
-      <td class="muted" style="white-space:normal;font-size:12px">${esc(detail)}</td>
+      <td class="mini" style="white-space:normal;max-width:280px">${esc(detail)}</td>
       <td>${chk}</td>
       <td>${exp}</td>
       <td><span class="tag ${cls}">${txt}</span></td>
@@ -262,94 +506,230 @@ function renderOverview(o){
   $('#acctEmpty').style.display=(o.accounts||[]).length?'none':'block';
 }
 
+/* 该模型是否配置了发布单价 */
+function hasPrice(model){
+  const m=(model||'').toLowerCase();
+  return (PUB.models||[]).some(x=>(x.id||'').toLowerCase()===m&&x.pricing&&(x.pricing.input>0||x.pricing.output>0));
+}
+
 function renderUsage(us){
   const tb=$('#usageTable tbody');
   if(!us.today||!us.today.length){tb.innerHTML='<tr><td colspan="7" class="empty">今日暂无调用</td></tr>'}
-  else tb.innerHTML=us.today.map(u=>`<tr>
-    <td><code>${esc(u.model)}</code></td><td>${esc(u.provider)}</td><td>${fmt(u.requests)}</td>
-    <td>${fmt(u.prompt_tokens)}</td><td>${fmt(u.completion_tokens)}</td><td>${fmt(u.total_tokens)}</td>
-    <td style="color:var(--yellow)">¥${u.cost_cny.toFixed(4)}</td></tr>`).join('');
-  $('#usageSub').textContent=`今日合计 ${fmt(us.totals?.requests)} 次请求 / ${fmt(us.totals?.total_tokens)} tokens / ¥${(us.totals?.cost_cny??0).toFixed(4)}`;
-  // 7 日柱状图
-  const hist=us.history||[];const max=Math.max(1,...hist.map(h=>h.total_tokens));
-  $('#bars').innerHTML=hist.map(h=>{
-    const hgt=Math.round(h.total_tokens/max*100);
-    const d=h.day.slice(5);
-    return `<div class="bar-col"><span class="bar-val">${h.total_tokens?fmt(h.total_tokens):''}</span><div class="bar" style="height:${Math.max(hgt,2)}%" title="${h.day}: ${fmt(h.total_tokens)} tokens / ${h.requests} 次"></div><span class="bar-label">${d}</span></div>`;
+  else tb.innerHTML=us.today.map((u,ri)=>{
+    const cost=hasPrice(u.model)?fmtCNY(u.cost_cny):(u.cost_cny>0?fmtCNY(u.cost_cny):'<span class="muted">未计价</span>');
+    return `<tr style="--r:${ri}">
+      <td><code>${esc(u.model)}</code></td>
+      <td><span class="tag ${PROV_TAG[u.provider]||'plain'}">${PROV_NAMES[u.provider]||esc(u.provider)}</span></td>
+      <td>${fmt(u.requests)}</td>
+      <td>${fmt(u.prompt_tokens)}</td><td>${fmt(u.completion_tokens)}</td><td><b>${fmt(u.total_tokens)}</b></td>
+      <td style="color:var(--accent)">${cost}</td></tr>`;
   }).join('');
+  $('#usageSub').textContent=`今日合计 ${fmt(us.totals?.requests)} 次请求 / ${fmt(us.totals?.total_tokens)} tokens / ${fmtCNY(us.totals?.cost_cny)}`;
+  // 7 日柱状图（生长动画）
+  const hist=us.history||[];const max=Math.max(1,...hist.map(h=>h.total_tokens));
+  $('#bars').innerHTML=hist.map((h,i)=>{
+    const hgt=Math.max(Math.round(h.total_tokens/max*100),2);
+    const d=h.day.slice(5);
+    return `<div class="bar-col"><span class="bar-val">${h.total_tokens?fmt(h.total_tokens):''}</span>
+      <div class="bar" style="height:${hgt}%;transition-delay:${i*70}ms" title="${h.day}: ${fmt(h.total_tokens)} tokens / ${h.requests} 次"></div>
+      <span class="bar-label">${d}</span></div>`;
+  }).join('');
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    document.querySelectorAll('#bars .bar').forEach(b=>b.style.transform='scaleY(1)');
+  }));
 }
 
+/* ── 模型发布 ─────────────────────────── */
+async function loadPublish(){
+  try{
+    PUB=await api('/api/publish');
+    PUB.models=PUB.models||[];
+    if(PUB.usd_cny>0)$('#usdCny').value=PUB.usd_cny;
+    renderPublish();
+    if(OVERVIEW)renderOverview(OVERVIEW); // 同步网关提示行
+  }catch(e){}
+}
+function renderPublish(){
+  const g=$('#pubGrid');
+  if(!PUB.models.length){
+    g.innerHTML=`<div class="empty-pub" style="grid-column:1/-1">
+      <div class="big">还没有发布任何模型</div>
+      <div style="margin-bottom:14px">发布后 <code>/v1/models</code> 只暴露你设置的模型，多渠道自动轮询</div>
+      <button class="btn accent" onclick="openModelEditor(-1)">＋ 新建第一个模型</button></div>`;
+    return;
+  }
+  g.innerHTML=PUB.models.map((m,i)=>`
+    <div class="pub-card" style="--i:${i}">
+      <div class="head">
+        <div><span class="name">${esc(m.id)}</span>${m.note?`<div class="note">${esc(m.note)}</div>`:''}</div>
+        <div class="ops">
+          <button class="btn sm icon" title="编辑" onclick="openModelEditor(${i})">✎</button>
+          <button class="btn sm icon danger" title="删除" onclick="delModel(${i})">✕</button>
+        </div>
+      </div>
+      <div class="price">
+        ${m.pricing&&(m.pricing.input>0||m.pricing.output>0)
+          ?`<span>输入 <b>$${m.pricing.input}</b>/1M</span><span>输出 <b>$${m.pricing.output}</b>/1M</span>`
+          :'<span class="muted">未配置单价（费用估算显示「未计价」）</span>'}
+      </div>
+      <div class="chlabel">渠道 ×${m.channels.length}</div>
+      <div class="ch-list">${m.channels.map(ch=>`
+        <div class="ch-row"><span class="tag ${PROV_TAG[ch.provider]||'plain'}">${PROV_NAMES[ch.provider]||esc(ch.provider)}</span>
+        <span class="arrow">→</span><span class="m">${esc(ch.model)}</span></div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+async function saveUsdCny(){
+  const v=parseFloat($('#usdCny').value);
+  if(!(v>0)){toast('汇率需为正数',false);return}
+  PUB.usd_cny=v;
+  await savePublish(false);
+}
+async function savePublish(tip=true){
+  try{
+    const r=await api('/api/publish',{method:'POST',body:JSON.stringify({models:PUB.models,usd_cny:PUB.usd_cny||0})});
+    if(r.error){toast(r.error,false);return false}
+    if(tip!==false)toast(`✓ 已保存 ${r.count} 个发布模型`);
+    await loadPublish();refreshAll(false);
+    return true;
+  }catch(e){toast('保存失败：'+e.message,false);return false}
+}
+async function delModel(i){
+  const m=PUB.models[i];
+  if(!confirm(`删除发布模型「${m.id}」？使用该模型名的客户端将无法调用。`))return;
+  PUB.models.splice(i,1);
+  await savePublish();
+}
+function closeModelEditor(){$('#modelModal').classList.remove('open')}
+function openModelEditor(i){
+  ED_IDX=i;
+  ED=i<0?{id:'',note:'',pricing:null,channels:[]}:JSON.parse(JSON.stringify(PUB.models[i]));
+  $('#mmTitle').innerHTML=`${i<0?'新建发布模型':'编辑模型'} <button class="xbtn" onclick="closeModelEditor()">✕</button>`;
+  $('#mmId').value=ED.id;$('#mmNote').value=ED.note||'';
+  $('#mmIn').value=ED.pricing?ED.pricing.input:'';$('#mmOut').value=ED.pricing?ED.pricing.output:'';
+  $('#mmStatus').textContent='';
+  renderEdChannels();
+  $('#modelModal').classList.add('open');
+  if(i<0&&!ED.channels.length)addEdChannel();
+  setTimeout(()=>$('#mmId').focus(),80);
+}
+function renderEdChannels(){
+  $('#mmChannels').innerHTML=ED.channels.map((ch,i)=>`
+    <div class="ed-ch">
+      <select onchange="ED.channels[${i}].provider=this.value;renderEdChannels()">
+        ${Object.entries(PROV_NAMES).map(([k,v])=>`<option value="${k}" ${ch.provider===k?'selected':''}>${v}</option>`).join('')}
+      </select>
+      <input list="chModels" value="${esc(ch.model)}" placeholder="上游模型 ID（聚焦显示候选）"
+        onfocus="fillDatalist('${esc(ch.provider)}')" oninput="ED.channels[${i}].model=this.value">
+      <span style="display:flex;gap:4px">
+        <button class="btn sm icon" title="上移" onclick="moveCh(${i},-1)" ${i===0?'disabled':''}>↑</button>
+        <button class="btn sm icon danger" title="删除" onclick="ED.channels.splice(${i},1);renderEdChannels()">✕</button>
+      </span>
+    </div>`).join('');
+}
+function fillDatalist(pid){
+  $('#chModels').innerHTML=(((MODELS||{})[pid])||[]).map(m=>`<option value="${esc(m.id)}">`).join('');
+}
+function addEdChannel(){
+  const used=ED.channels.map(c=>c.provider);
+  const pid=used.includes('qwen')?'workbuddy':'qwen';
+  ED.channels.push({provider:pid,model:''});
+  renderEdChannels();
+  const inputs=document.querySelectorAll('#mmChannels input');
+  if(inputs.length)inputs[inputs.length-1].focus();
+}
+function moveCh(i,d){
+  const j=i+d;if(j<0||j>=ED.channels.length)return;
+  [ED.channels[i],ED.channels[j]]=[ED.channels[j],ED.channels[i]];
+  renderEdChannels();
+}
+async function saveModelEditor(){
+  ED.id=$('#mmId').value.trim();
+  ED.note=$('#mmNote').value.trim();
+  const pin=parseFloat($('#mmIn').value),pout=parseFloat($('#mmOut').value);
+  ED.pricing=(pin>0||pout>0)?{input:pin||0,output:pout||0}:null;
+  const err=m=>{$('#mmStatus').className='status-line err';$('#mmStatus').textContent=m};
+  if(!ED.id)return err('请填写对外模型名');
+  if(PUB.models.some((m,i)=>i!==ED_IDX&&m.id.toLowerCase()===ED.id.toLowerCase()))return err('模型名已存在');
+  if(!ED.channels.length)return err('至少添加一个渠道');
+  if(ED.channels.some(c=>!c.model.trim()))return err('有渠道未填上游模型 ID');
+  if(ED_IDX<0)PUB.models.push(ED);else PUB.models[ED_IDX]=ED;
+  $('#mmStatus').className='status-line wait';$('#mmStatus').innerHTML='<span class="spin"></span> 保存中…';
+  if(await savePublish())closeModelEditor();
+}
+
+/* ── 内部模型库 ───────────────────────── */
 async function loadModels(force){
   try{
     MODELS=await api('/api/models'+(force?'?refresh=1':''));
-    const provs=Object.keys(MODELS);
+    const provs=Object.keys(MODELS).filter(p=>MODELS[p]&&MODELS[p].length);
+    const total=provs.reduce((s,p)=>s+MODELS[p].length,0);
+    $('#libHint').textContent=`共 ${total} 个内部模型 · 添加渠道时可直接选择`;
     if(!provs.includes(MODEL_TAB))MODEL_TAB=provs[0]||'workbuddy';
-    $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
+    $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${PROV_NAMES[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
     renderModels();
   }catch(e){}
 }
 function renderModels(){
-  document.querySelectorAll('#modelTabs .tab').forEach(t=>t.classList.toggle('active',t.textContent.startsWith(({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[MODEL_TAB])));
-  const list=MODELS[MODEL_TAB]||[];
+  document.querySelectorAll('#modelTabs .tab').forEach(t=>{
+    t.classList.toggle('active',t.textContent.startsWith(PROV_NAMES[MODEL_TAB]||MODEL_TAB));
+  });
+  const list=(MODELS&&MODELS[MODEL_TAB])||[];
   const tb=$('#modelTable tbody');
-  if(!list.length){tb.innerHTML=`<tr><td colspan="5" class="empty">该平台暂无账号或模型列表获取失败（纳管账号后自动拉取）</td></tr>`;return}
-  tb.innerHTML=list.map(m=>`<tr><td><code>${esc(m.id)}</code></td><td><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)}</code></td><td>${esc(m.name||'-')}</td><td>${m.context_window?fmt(m.context_window):'-'}</td><td>${esc(m.credits||'-')}</td></tr>`).join('');
+  if(!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">该平台暂无账号或模型列表获取失败（纳管账号后自动拉取）</td></tr>';return}
+  tb.innerHTML=list.map((m,i)=>`<tr style="--r:${i}"><td><code>${esc(m.id)}</code></td><td><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)}</code></td><td class="mini">${esc(m.name||'—')}</td><td>${m.context_window?fmt(m.context_window):'—'}</td><td class="mini">${esc(m.credits||'—')}</td></tr>`).join('');
 }
 
+/* ── 账号操作 ─────────────────────────── */
 async function act(provider,uid,action){
-  toast('执行中...');
+  toast('执行中…');
   const r=await api('/api/accounts/action',{method:'POST',body:JSON.stringify({provider,uid,action})});
-  if(action==='checkin')toast(r.message||r.ok&&'签到成功'||JSON.stringify(r),!!(r.ok));
+  if(action==='checkin')toast(r.message||(r.ok?'签到成功':'签到失败'),!!r.ok);
   else toast(action==='quota'?`剩余 ${fmt(r.remaining)}`:'操作成功',true);
-  setTimeout(refreshAll,800);
+  setTimeout(()=>refreshAll(false),800);
 }
 async function delAcct(provider,uid){
   if(!confirm('确认删除该账号凭证？'))return;
   await api('/api/accounts?provider='+provider+'&uid='+encodeURIComponent(uid),{method:'DELETE',body:JSON.stringify({provider,uid})});
-  toast('已删除');setTimeout(refreshAll,500);
+  toast('已删除');setTimeout(()=>refreshAll(false),500);
 }
-async function checkinAll(){toast('已发起全部签到');await api('/api/checkin_all',{method:'POST'});setTimeout(refreshAll,2500)}
+async function checkinAll(){toast('已发起全部签到');await api('/api/checkin_all',{method:'POST'});setTimeout(()=>refreshAll(false),2500)}
 
+/* ── 登录 / 导入 ──────────────────────── */
 function openAdd(){$('#addModal').classList.add('open');$('#loginFlow').innerHTML='';$('#importStatus').textContent=''}
 function closeAdd(){$('#addModal').classList.remove('open');if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}}
-function qoderGuide(){ // PAT 兜底导入说明（自动授权失败时用）
-  $('#loginFlow').innerHTML=`<h3 style="margin-top:8px">Qoder PAT 导入</h3>
-    <p class="hint">Qoder 无网页授权流，使用控制台 PAT（个人访问令牌）纳管：</p>
-    <p class="hint">① 打开 <a href="https://qoder.com.cn" target="_blank">qoder.com.cn（国内版）</a> 或 <a href="https://qoder.sh" target="_blank">qoder.sh（国际版）</a> 登录<br>② 进入 设置 → Personal Access Token / API Token → 创建并复制<br>③ 粘贴到下方导入框（国际版前缀 <code>global:</code>）</p>`;
-  $('#importCred').focus();
-}
 async function startLogin(prov){
-  $('#loginFlow').innerHTML='<div class="status-line wait">正在发起授权...</div>';
+  $('#loginFlow').innerHTML='<div class="status-line wait"><span class="spin"></span> 正在发起授权…</div>';
   const r=await api('/api/login/start',{method:'POST',body:JSON.stringify({provider:prov,callback_base:location.origin})});
   if(r.error){$('#loginFlow').innerHTML=`<div class="status-line err">发起失败：${esc(r.error)}</div>`;return}
   savePending(prov,r.id);
   CUR_LOGIN={prov,id:r.id};
-  const html=`<h3 style="margin-top:8px">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[prov]} 授权登录</h3>
+  const html=`<h3 style="margin-top:8px;font-size:15px">${PROV_NAMES[prov]||prov} 授权登录</h3>
     <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':'在浏览器打开链接完成腾讯账号登录：'}</p>
     ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
     <div class="urlbox">${esc(r.url)}</div>
     <button class="btn" onclick="navigator.clipboard.writeText('${esc(r.url)}').then(()=>toast('已复制'))">复制链接</button>
     <a class="btn" style="margin-left:8px" href="${esc(r.url)}" target="_blank">在新窗口打开</a>
-    <div class="status-line wait" id="loginStatus">等待授权完成...（完成后自动纳管并签到）</div>`;
+    <div class="status-line wait" id="loginStatus"><span class="spin"></span> 等待授权完成…（完成后自动纳管并签到）</div>`;
   $('#loginFlow').innerHTML=html;
   if(POLL_TIMER)clearInterval(POLL_TIMER);
   POLL_TIMER=setInterval(()=>pollLogin(prov,r.id),3000);
 }
-async function pollLogin(prov,id){  try{
+async function pollLogin(prov,id){
+  try{
     const r=await api(`/api/login/poll?provider=${prov}&id=${encodeURIComponent(id)}`);
     const el=$('#loginStatus');
     if(r.status==='success'){
       clearPending();
       if(el){el.className='status-line ok';el.innerHTML=`✅ 纳管成功：${esc(r.account?.nickname||r.account?.uid||'')}，已自动签到并拉取额度`}
-      clearInterval(POLL_TIMER);POLL_TIMER=null;setTimeout(refreshAll,1000);
+      clearInterval(POLL_TIMER);POLL_TIMER=null;setTimeout(()=>refreshAll(false),1000);
     }else if(r.status==='failed'){
       clearPending();
       if(el){el.className='status-line err';el.textContent='❌ '+(r.message||'失败')}
       clearInterval(POLL_TIMER);POLL_TIMER=null;
-    }else if(el){el.className='status-line wait';el.textContent=r.message||'等待授权完成...'}
+    }else if(el){el.className='status-line wait';el.innerHTML=`<span class="spin"></span> ${esc(r.message||'等待授权完成…')}`}
   }catch(e){}
 }
-// 登录票据持久化：面板页被跳走/刷新后，回来仍能自动检测纳管结果
 function savePending(prov,id){localStorage.setItem('ccpa_pending_login',JSON.stringify({provider:prov,id,ts:Date.now()}))}
 function clearPending(){localStorage.removeItem('ccpa_pending_login')}
 // 授权标签页回调成功后 postMessage 通知本页：弹窗立即变绿（轮询只是兜底）
@@ -360,7 +740,7 @@ window.addEventListener('message',e=>{
   const el=$('#loginStatus');
   if(el){el.className='status-line ok';el.innerHTML='✅ 纳管成功，已自动签到并拉取额度'}
   toast('✅ 授权登录成功，账号已纳管');
-  setTimeout(refreshAll,800);
+  setTimeout(()=>refreshAll(false),800);
 });
 function resumePending(){
   let p=null;try{p=JSON.parse(localStorage.getItem('ccpa_pending_login'))}catch(e){}
@@ -370,27 +750,27 @@ function resumePending(){
   POLL_TIMER=setInterval(async()=>{
     let r=null;
     try{r=await api(`/api/login/poll?provider=${p.provider}&id=${encodeURIComponent(p.id)}`)}catch(e){r=null}
-    if(!r||r.error){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;refreshAll();return}
-    if(r.status==='success'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;toast(`✅ 纳管成功：${r.account?.nickname||r.account?.uid||''}（已自动签到）`);refreshAll()}
+    if(!r||r.error){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;refreshAll(false);return}
+    if(r.status==='success'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;toast(`✅ 纳管成功：${r.account?.nickname||r.account?.uid||''}（已自动签到）`);refreshAll(false)}
     else if(r.status==='failed'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null}
   },3000);
 }
 async function doImport(){
   const prov=$('#importProv').value,cred=$('#importCred').value.trim();
   if(!cred){toast('请粘贴凭证',false);return}
-  $('#importStatus').className='status-line wait';$('#importStatus').textContent='导入中（验证凭证）...';
+  $('#importStatus').className='status-line wait';$('#importStatus').innerHTML='<span class="spin"></span> 导入中（验证凭证）…';
   const r=await api('/api/import',{method:'POST',body:JSON.stringify({provider:prov,credential:cred})});
   if(r.error){$('#importStatus').className='status-line err';$('#importStatus').textContent='❌ '+r.error}
-  else{$('#importStatus').className='status-line ok';$('#importStatus').textContent=`✅ 导入成功：${r.nickname||r.uid}，已自动签到`;setTimeout(refreshAll,1200)}
+  else{$('#importStatus').className='status-line ok';$('#importStatus').textContent=`✅ 导入成功：${r.nickname||r.uid}，已自动签到`;setTimeout(()=>refreshAll(false),1200)}
 }
 
 // init
 (async()=>{
   const r=await fetch('/api/overview');
   if(r.status===401){showLogin()}
-  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll();resumePending()}).catch(showLogin)}
+  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll(false);loadPublish();resumePending()}).catch(showLogin)}
 })();
-setInterval(()=>{if($('#main').style.display!=='none')refreshAll()},30000);
+setInterval(()=>{if($('#main').style.display!=='none'){refreshAll(false);loadPublish()}},30000);
 </script>
 </body>
 </html>

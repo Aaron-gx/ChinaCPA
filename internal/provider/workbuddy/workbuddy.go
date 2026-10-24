@@ -797,7 +797,150 @@ func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelI
 	if len(out) == 0 {
 		return nil, fmt.Errorf("模型列表为空")
 	}
+	// 倍率牌价 + 限时优惠来自 /v3/config（企业端点新版只回模型名字符串数组）
+	for id, c := range p.fetchV3Credits(ctx, a) {
+		for i := range out {
+			if out[i].ID == id {
+				out[i].Credits = c
+			}
+		}
+	}
 	return out, nil
+}
+
+// wbPromoZone 优惠时区：上游恒 Asia/Shanghai（UTC+8 无夏令时）。
+var wbPromoZone = time.FixedZone("CST", 8*3600)
+
+// wbPromotion /v3/config data.modelPromotions 单条限时优惠。
+type wbPromotion struct {
+	Enabled  bool     `json:"enabled"`
+	ModelIDs []string `json:"modelIds"`
+	Badge    *struct {
+		Label string `json:"label"`
+	} `json:"badge"`
+	Discount *struct {
+		DiscountedCredits string  `json:"discountedCredits"`
+		Factor            float64 `json:"factor"`
+	} `json:"discount"`
+	Schedule *struct {
+		Daily []struct {
+			Start string `json:"start"`
+			End   string `json:"end"`
+		} `json:"daily"`
+		ValidFrom  string `json:"validFrom"`
+		ValidUntil string `json:"validUntil"`
+	} `json:"schedule"`
+}
+
+// activeNow 优惠当前是否生效（validFrom/Until + 每日时段，时段可跨午夜）。
+func (pr wbPromotion) activeNow() bool {
+	now := time.Now().In(wbPromoZone)
+	s := pr.Schedule
+	if s == nil {
+		return true
+	}
+	if s.ValidFrom != "" {
+		if t, err := time.Parse(time.RFC3339, s.ValidFrom); err == nil && now.Before(t.In(wbPromoZone)) {
+			return false
+		}
+	}
+	if s.ValidUntil != "" {
+		if t, err := time.Parse(time.RFC3339, s.ValidUntil); err == nil && now.After(t.In(wbPromoZone)) {
+			return false
+		}
+	}
+	if len(s.Daily) == 0 {
+		return true
+	}
+	cur := now.Hour()*60 + now.Minute()
+	for _, d := range s.Daily {
+		st, ok1 := wbPromoMinute(d.Start)
+		en, ok2 := wbPromoMinute(d.End)
+		if !ok1 || !ok2 {
+			continue
+		}
+		if st <= en {
+			if cur >= st && cur < en {
+				return true
+			}
+		} else if cur >= st || cur < en { // 跨午夜（23:00→07:50）
+			return true
+		}
+	}
+	return false
+}
+
+func wbPromoMinute(hhmm string) (int, bool) {
+	parts := strings.Split(hhmm, ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	h, err1 := strconv.Atoi(parts[0])
+	m, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || h < 0 || h > 24 || m < 0 || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// fetchV3Credits 拉模型倍率牌价（data.models[].credits，"x0.29"）并叠加当前
+// 生效的限时优惠（如 夜间五折 → "x0.29（夜间折扣 0.50x）"）。失败返回空表降级。
+func (p *Provider) fetchV3Credits(ctx context.Context, a *model.Account) map[string]string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chatBase(a)+"/v3/config", nil)
+	if err != nil {
+		return nil
+	}
+	p.commonHeaders(req, a)
+	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("User-Agent", "CodeBuddyIDE/4.12.0 CodeBuddy/4.12.0")
+	req.Header.Set("X-Product", "SaaS")
+	data, err := p.doJSON(req)
+	if err != nil {
+		return nil
+	}
+	// doJSON 已剥 {code,msg,data} 信封，这里直接解析内层 data
+	var cfg struct {
+		Models []struct {
+			ID      string `json:"id"`
+			Credits string `json:"credits"`
+		} `json:"models"`
+		ModelPromotions []wbPromotion `json:"modelPromotions"`
+	}
+	if json.Unmarshal(data, &cfg) != nil {
+		return nil
+	}
+	out := map[string]string{}
+	for _, m := range cfg.Models {
+		if m.ID != "" && m.Credits != "" {
+			out[m.ID] = m.Credits
+		}
+	}
+	for _, pr := range cfg.ModelPromotions {
+		if !pr.Enabled || !pr.activeNow() {
+			continue
+		}
+		label := ""
+		if pr.Badge != nil {
+			label = pr.Badge.Label
+		}
+		eff := ""
+		if pr.Discount != nil {
+			eff = pr.Discount.DiscountedCredits
+		}
+		for _, id := range pr.ModelIDs {
+			base := out[id]
+			switch {
+			case base != "" && eff != "" && label != "":
+				out[id] = base + "（" + label + " " + eff + "）"
+			case base != "" && label != "":
+				out[id] = base + "（" + label + "）"
+			case eff != "":
+				out[id] = eff
+			}
+		}
+	}
+	return out
 }
 
 // parseModelList 解析 models 数组：字符串形态（新版上游）与对象形态（旧版）。

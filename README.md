@@ -19,9 +19,9 @@
 - **四大平台**：WorkBuddy、Qwen、Trae（CN/国际）、Qoder（CN/国际），模型前缀 `workbuddy:` `qwen:` `trae:` `qoder:`
 - **自动签到积分**：每日 9 点、21 点自动签到（可配），WorkBuddy 任务中心自动接受任务+领取奖励
 - **额度自动获取**：每 10 分钟自动刷新各账号剩余额度（WorkBuddy 积分 / Trae ide_credits / Qwen 今日剩余次数）
-- **全量模型列表**：自动拉取各平台全部可用模型，统一暴露
+- **模型发布 · 渠道归组**：面板自定义对外模型 → 多个上游渠道（跨平台），渠道间轮询 + 失败转移，渠道内多账号再轮询；`/v1/models` 只暴露已发布模型（未配置时默认暴露全部内部模型），配置落盘 `data/models.json`
 - **OpenAI 兼容网关**：`/v1/models` + `/v1/chat/completions`（SSE 流式），多账号自动轮询 + 失败转移 + 限流冷却
-- **仪表板统计**：今日/7 日 token 消耗、请求数、按模型费用估算（$/1M → ¥ 自动折算）、剩余额度自动计算
+- **仪表板统计**：今日/7 日 token 消耗（100M/1B 风格）、请求数、按模型费用估算（发布模型单价优先，$/1M → ¥ 自动折算）、剩余额度自动计算
 - **单二进制**：纯 Go 标准库，零第三方依赖，下载即用
 
 ## 🚀 快速开始
@@ -64,6 +64,30 @@ go build -o chinacpa.exe ./cmd/chinacpa
   }
 }
 ```
+
+**模型发布（推荐）**：面板「模型发布」区可视化配置对外模型，一个名字挂多个上游渠道，
+渠道自动轮询 + 失败转移，并附带单价（$/1M 输入/输出）用于费用估算。
+配置保存在 `data/models.json`，也可手写：
+
+```json
+{
+  "usd_cny": 7.2,
+  "models": [
+    {
+      "id": "gpt-5",
+      "note": "主力",
+      "pricing": { "input": 0.002, "output": 0.008 },
+      "channels": [
+        { "provider": "qwen", "model": "qwen3-coder-plus" },
+        { "provider": "workbuddy", "model": "glm-5.3" }
+      ]
+    }
+  ]
+}
+```
+
+客户端直接 `{"model":"gpt-5"}` 调用即可；配置了发布模型后 `/v1/models` 只返回已发布模型。
+各平台原始模型仍可 `平台:模型` 直连（内部模型库在面板中折叠展示）。
 
 **Codex CLI 接入**（`~/.codex/config.toml`）：
 
@@ -147,6 +171,7 @@ data/
 ├── accounts/            # 账号凭证（workbuddy-*.json / qwen-*.json / trae-*.json）
 ├── usage/               # 每日用量日志（usage-YYYYMMDD.jsonl）
 ├── state.json           # 额度快照 + 签到历史
+├── models.json          # 发布模型配置（对外模型 → 多渠道 + 单价）
 └── pricing.json         # 可选自定义单价表
 ```
 
@@ -156,7 +181,7 @@ data/
 
 | 路由 | 说明 |
 |---|---|
-| `GET /v1/models` | 全平台模型列表（前缀形态 + 裸名别名） |
+| `GET /v1/models` | 模型列表（配置发布模型后只返回已发布模型） |
 | `POST /v1/chat/completions` | 对话（流式/非流式） |
 
 **面板（cookie 会话）**
@@ -173,6 +198,7 @@ data/
 | `POST /api/accounts/action` | 账号操作（checkin/quota/refresh_token/toggle） |
 | `DELETE /api/accounts` | 删除账号 |
 | `POST /api/checkin_all` | 全账号立即签到 |
+| `GET/POST /api/publish` | 发布模型配置读写（对外模型 → 多渠道 + 单价） |
 | `GET /trae/callback` | Trae 登录回调（浏览器自动跳转） |
 
 ## 🧩 架构
@@ -187,9 +213,10 @@ internal/
 │   ├── workbuddy/      腾讯：OAuth、积分、签到、任务中心、模型、对话
 │   ├── qwen/           通义：设备码 OAuth、2000次/天计数、模型、对话直通
 │   └── trae/           字节：授权回调、ExchangeToken、签到、额度、SOLO SSE→OpenAI
-├── pool/               多账号池：轮询、冷却、模型路由（前缀/裸名）
+├── pool/               多账号池：轮询、冷却、模型路由（发布模型多渠道 / 前缀 / 裸名）
+├── pubmodel/           发布模型配置（对外模型 → 多渠道 + 单价）
 ├── scheduler/          定时：签到、任务、额度刷新、保活
-├── usage/              用量 JSONL + 聚合 + 计价估算
+├── usage/              用量 JSONL + 聚合 + 计价估算（发布单价优先）
 ├── gateway/            OpenAI 兼容网关（SSE 透传、流内 usage 提取）
 └── panel/              管理 API + 内嵌仪表板（embed 单文件 HTML）
 ```
