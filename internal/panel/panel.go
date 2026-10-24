@@ -3,7 +3,7 @@ package panel
 
 import (
 	"context"
-	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -37,7 +37,6 @@ type Panel struct {
 
 	mu       sync.Mutex
 	sessions map[string]*model.LoginSession // login session id -> session
-	webSess  map[string]time.Time           // 面板会话 token -> 过期时刻
 	tokens   map[string]*loginTicket        // 登录票据（轮询用）
 }
 
@@ -57,7 +56,6 @@ func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sc
 		usage:   u,
 		sched:   sched,
 		sessions: map[string]*model.LoginSession{},
-		webSess:  map[string]time.Time{},
 		tokens:   map[string]*loginTicket{},
 	}
 }
@@ -82,6 +80,13 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 
 // ── 面板鉴权 ─────────────────────────────────────────────
 
+// sessionToken 无状态会话令牌：sha256(密码 + 固定盐)。
+// 服务重启不掉线（不依赖内存会话表）；改密码即全部失效。
+func (p *Panel) sessionToken() string {
+	sum := sha256.Sum256([]byte("ccpa-panel-session:" + p.cfg.PanelPassword))
+	return hex.EncodeToString(sum[:])
+}
+
 func (p *Panel) handleAuth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -95,25 +100,16 @@ func (p *Panel) handleAuth(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "密码错误"})
 		return
 	}
-	tok := randToken()
-	p.mu.Lock()
-	p.webSess[tok] = time.Now().Add(7 * 24 * time.Hour)
-	p.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "ccpa_session", Value: tok, Path: "/", HttpOnly: true, MaxAge: 7 * 24 * 3600})
+	http.SetCookie(w, &http.Cookie{Name: "ccpa_session", Value: p.sessionToken(), Path: "/", HttpOnly: true, MaxAge: 7 * 24 * 3600})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (p *Panel) authed(next http.HandlerFunc) http.HandlerFunc {
+	want := p.sessionToken()
 	return func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie("ccpa_session")
-		if err == nil {
-			p.mu.Lock()
-			exp, ok := p.webSess[c.Value]
-			p.mu.Unlock()
-			if ok && time.Now().Before(exp) {
-				next(w, r)
-				return
-			}
+		if c, err := r.Cookie("ccpa_session"); err == nil && c.Value == want {
+			next(w, r)
+			return
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "未登录"})
 	}
@@ -540,8 +536,3 @@ func writeJSON(w http.ResponseWriter, status int, obj any) {
 	_ = json.NewEncoder(w).Encode(obj)
 }
 
-func randToken() string {
-	b := make([]byte, 24)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
