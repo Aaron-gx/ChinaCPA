@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChinaCPA · 国产反代管理面板</title>
+<style>
+:root{
+  --bg:#0d1117;--panel:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;
+  --accent:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d29922;--purple:#bc8cff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px}
+a{color:var(--accent);text-decoration:none}
+.container{max-width:1200px;margin:0 auto;padding:20px}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-bottom:1px solid var(--border);margin-bottom:20px;flex-wrap:wrap;gap:10px}
+header h1{font-size:20px}
+header h1 span{color:var(--accent)}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;border:1px solid var(--border);color:var(--muted)}
+.btn{background:#21262d;border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:13px}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.btn.sm{padding:3px 8px;font-size:12px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-bottom:22px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+.card .label{color:var(--muted);font-size:12px;margin-bottom:6px}
+.card .value{font-size:22px;font-weight:600}
+.card .sub{color:var(--muted);font-size:12px;margin-top:4px}
+.card .value.green{color:var(--green)}.card .value.blue{color:var(--accent)}.card .value.purple{color:var(--purple)}.card .value.yellow{color:var(--yellow)}
+section{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:20px}
+section h2{font-size:15px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border);font-size:13px;white-space:nowrap}
+th{color:var(--muted);font-weight:500;font-size:12px}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px}
+.tag.ok{color:var(--green);border:1px solid var(--green)}
+.tag.cooldown{color:var(--yellow);border:1px solid var(--yellow)}
+.tag.disabled{color:var(--muted);border:1px solid var(--muted)}
+.tag.expired{color:var(--red);border:1px solid var(--red)}
+.tag.wb{color:#4fc3f7;border:1px solid #4fc3f7}
+.tag.qwen{color:var(--purple);border:1px solid var(--purple)}
+.tag.trae{color:#ff8a65;border:1px solid #ff8a65}
+.bars{display:flex;align-items:flex-end;gap:6px;height:120px;padding-top:10px}
+.bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px}
+.bar{width:100%;background:linear-gradient(180deg,#1f6feb,#388bfd55);border-radius:3px 3px 0 0;min-height:2px}
+.bar-label{font-size:10px;color:var(--muted)}
+.bar-val{font-size:10px;color:var(--muted)}
+/* 登录遮罩 */
+#loginMask{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:99}
+#loginMask .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:30px;width:340px}
+#loginMask h2{margin-bottom:16px;font-size:18px}
+#loginMask input{width:100%;padding:9px 12px;border-radius:6px;border:1px solid var(--border);background:var(--bg);color:var(--text);margin-bottom:12px}
+/* 弹窗 */
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+.modal.open{display:flex}
+.modal .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:22px;width:min(560px,92vw);max-height:86vh;overflow:auto}
+.modal h3{margin-bottom:14px;font-size:16px}
+.prov-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.prov-card{border:1px solid var(--border);border-radius:10px;padding:14px;cursor:pointer;text-align:center}
+.prov-card:hover{border-color:var(--accent)}
+.prov-card .t{font-size:14px;font-weight:600;margin-bottom:4px}
+.prov-card .d{font-size:11px;color:var(--muted)}
+.urlbox{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:12px;word-break:break-all;margin:10px 0;font-family:monospace}
+.hint{color:var(--muted);font-size:12px;line-height:1.7}
+textarea{width:100%;height:90px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:10px;font-family:monospace;font-size:12px;margin:8px 0}
+.status-line{margin-top:10px;font-size:13px}
+.status-line.ok{color:var(--green)}.status-line.err{color:var(--red)}.status-line.wait{color:var(--yellow)}
+.muted{color:var(--muted)}
+.gwinfo{background:var(--bg);border:1px dashed var(--border);border-radius:8px;padding:12px;margin-bottom:18px;font-size:13px;line-height:1.9}
+code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#79c0ff}
+#toast{position:fixed;bottom:24px;right:24px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px 18px;display:none;z-index:100;font-size:13px}
+.tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.tabs .tab{padding:4px 12px;border:1px solid var(--border);border-radius:14px;cursor:pointer;font-size:12px;color:var(--muted)}
+.tabs .tab.active{color:var(--accent);border-color:var(--accent)}
+.empty{text-align:center;color:var(--muted);padding:26px}
+</style>
+</head>
+<body>
+<div id="loginMask">
+  <div class="box">
+    <h2>🇨🇳 ChinaCPA 管理面板</h2>
+    <input type="password" id="pwInput" placeholder="面板密码（config.json panel_password）" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn primary" style="width:100%" onclick="doLogin()">登 录</button>
+    <p class="hint" style="margin-top:12px">默认密码 123456，登录后可在 config.json 修改。</p>
+  </div>
+</div>
+
+<div class="container" id="main" style="display:none">
+  <header>
+    <h1>🇨🇳 ChinaCPA <span>国产反代</span> <span class="badge">workbuddy · qwen · trae</span></h1>
+    <div>
+      <button class="btn sm" onclick="refreshAll()">↻ 刷新</button>
+      <button class="btn sm" onclick="checkinAll()">⚡ 全部签到</button>
+      <button class="btn sm" onclick="openAdd()">＋ 添加账号</button>
+    </div>
+  </header>
+
+  <div class="gwinfo" id="gwinfo"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>账号池 <span class="muted" id="acctCount"></span></h2>
+    <div style="overflow-x:auto">
+    <table id="acctTable">
+      <thead><tr>
+        <th>平台</th><th>账号</th><th>剩余额度</th><th>额度明细</th><th>今日签到</th><th>Token 有效期</th><th>状态</th><th>操作</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <div class="empty" id="acctEmpty" style="display:none">暂无账号，点击右上角「添加账号」纳管第一个账号</div>
+  </section>
+
+  <section>
+    <h2>今日用量（自动计费估算）<span class="muted" id="usageSub"></span></h2>
+    <div style="overflow-x:auto">
+    <table id="usageTable">
+      <thead><tr><th>模型</th><th>平台</th><th>请求数</th><th>输入 tokens</th><th>输出 tokens</th><th>合计 tokens</th><th>估算费用</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+    <h2 style="margin-top:18px">近 7 日 token 消耗</h2>
+    <div class="bars" id="bars"></div>
+  </section>
+
+  <section>
+    <h2>模型列表 <button class="btn sm" onclick="loadModels(true)">↻ 强制刷新</button></h2>
+    <div class="tabs" id="modelTabs"></div>
+    <div style="overflow-x:auto">
+    <table id="modelTable">
+      <thead><tr><th>模型 ID</th><th>调用名</th><th>名称</th><th>上下文</th><th>计价倍率</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    </div>
+  </section>
+</div>
+
+<!-- 添加账号弹窗 -->
+<div class="modal" id="addModal">
+  <div class="box">
+    <h3>添加账号 <button class="btn sm" style="float:right" onclick="closeAdd()">✕</button></h3>
+    <div class="prov-grid">
+      <div class="prov-card" onclick="startLogin('workbuddy')">
+        <div class="t" style="color:#4fc3f7">WorkBuddy</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
+      </div>
+      <div class="prov-card" onclick="startLogin('qwen')">
+        <div class="t" style="color:#bc8cff">Qwen 通义</div><div class="d">chat.qwen.ai<br>设备码授权 2000次/天</div>
+      </div>
+      <div class="prov-card" onclick="startLogin('trae')">
+        <div class="t" style="color:#ff8a65">Trae</div><div class="d">字节 SOLO 通道<br>授权回调自动纳管</div>
+      </div>
+    </div>
+    <div id="loginFlow"></div>
+    <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:14px">
+      <div style="font-weight:600;margin-bottom:4px">或直接粘贴登录凭证</div>
+      <p class="hint">WorkBuddy：refreshToken 或 auth 文件 JSON；Qwen：refresh_token；Trae：refreshToken。</p>
+      <select id="importProv" class="btn" style="margin-right:8px">
+        <option value="workbuddy">WorkBuddy</option>
+        <option value="qwen">Qwen</option>
+        <option value="trae">Trae</option>
+      </select>
+      <textarea id="importCred" placeholder="粘贴凭证..."></textarea>
+      <button class="btn primary" onclick="doImport()">导入凭证</button>
+      <div class="status-line" id="importStatus"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+let OVERVIEW=null, MODELS=null, MODEL_TAB='workbuddy', POLL_TIMER=null, CB_BASE='';
+const $=s=>document.querySelector(s);
+const fmt=n=>{if(n==null)return'-';if(n>=1e8)return(n/1e8).toFixed(2)+'亿';if(n>=1e4)return(n/1e4).toFixed(2)+'万';return Number(n).toLocaleString()};
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function toast(msg,ok=true){const t=$('#toast');t.textContent=msg;t.style.display='block';t.style.borderColor=ok?'var(--green)':'var(--red)';setTimeout(()=>t.style.display='none',3000)}
+async function api(path,opts={}){const r=await fetch(path,{...opts,headers:{'Content-Type':'application/json',...opts.headers}});if(r.status===401){showLogin();throw new Error('未登录')}return r.json()}
+
+function showLogin(){$('#loginMask').style.display='flex';$('#main').style.display='none'}
+async function doLogin(){
+  const pw=$('#pwInput').value;
+  const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
+  if(r.ok){$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll()}else{toast('密码错误',false)}
+}
+
+async function refreshAll(){
+  try{
+    const [ov,us]=await Promise.all([api('/api/overview'),api('/api/usage?days=7')]);
+    OVERVIEW=ov;renderOverview(ov);renderUsage(us);loadModels(false);
+  }catch(e){if(e.message!=='未登录')console.warn(e)}
+}
+
+function renderOverview(o){
+  const host=location.host;
+  $('#gwinfo').innerHTML=`🔌 <b>OpenAI 兼容接口</b>：<code>http://${host}/v1</code>
+    &nbsp;密钥：<code>${esc(localStorage.getItem('showKey')==='1'?o.api_key_hint||'config.json api_key':'••••••••（config.json api_key）')}</code>
+    &nbsp;<a href="javascript:void 0" onclick="localStorage.setItem('showKey',localStorage.getItem('showKey')==='1'?'0':'1');refreshAll()">显示/隐藏</a>
+    <br>模型调用：<code>{"model":"qwen:qwen3-coder-plus"}</code>（支持前缀 <code>workbuddy:</code> / <code>qwen:</code> / <code>trae:</code>，裸模型名自动匹配唯一平台）`;
+  const mc=o.model_count||{};
+  $('#acctCount').textContent=`共 ${o.account_total} 个账号`;
+  const cards=[
+    {l:'账号总数',v:o.account_total,s:Object.entries(o.provider_count).map(([k,v])=>`${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae'})[k]||k} ×${v}`).join(' · ')||'暂无',c:''},
+    {l:'WB 积分剩余',v:fmt(Math.round(o.total_credits)),s:'WorkBuddy 全账号积分合计',c:'green'},
+    {l:'Trae 积分剩余',v:fmt(o.total_ide_credits),s:'SOLO 通道 ide_credits 合计',c:'yellow'},
+    {l:'Qwen 今日剩余',v:fmt(o.qwen_remaining),s:'2000 次/天 · 本地自动计数',c:'purple'},
+    {l:'今日请求',v:fmt(o.today?.requests),s:`输入 ${fmt(o.today?.prompt_tokens)} / 输出 ${fmt(o.today?.completion_tokens)} tokens`,c:'blue'},
+    {l:'今日费用估算',v:'¥'+(o.today?.cost_cny??0).toFixed(4),s:`按 $1=¥${o.usd_cny} 自动折算`,c:'blue'},
+  ];
+  $('#cards').innerHTML=cards.map(c=>`<div class="card"><div class="label">${c.l}</div><div class="value ${c.c}">${c.v}</div><div class="sub">${esc(c.s)}</div></div>`).join('');
+  // 账号表
+  const tb=$('#acctTable tbody');tb.innerHTML='';
+  (o.accounts||[]).forEach(a=>{
+    let quota='-',detail='-',cls='ok',txt='正常';
+    if(a.quota){
+      quota=fmt(a.quota.remaining)+(a.quota.unit==='requests/day'?' 次':' 积分');
+      if(a.quota.unit==='requests/day'){quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)} 次`}
+      else if(a.quota.limit>0){quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)}`}
+      const bits=[];
+      if(a.quota.used!=null)bits.push('已用 '+fmt(a.quota.used));
+      if(a.provider==='qwen'&&a.quota.requests_used_today!=null)bits.push('今日已请求 '+a.quota.requests_used_today+' 次');
+      if(a.quota.detail&&a.quota.detail.packs)bits.push(a.quota.detail.packs+' 个权益包');
+      detail=bits.join(' · ')||'-';
+      const age=(o.now-a.quota.fetched_at)/60;
+      detail+=`（${age<1?'刚刚':Math.round(age)+' 分钟前'}自动刷新）`;
+    }
+    if(a.status==='cooldown'){cls='cooldown';txt='冷却中'}
+    if(a.status==='disabled'){cls='disabled';txt='已禁用'}
+    if(a.status==='expired'){cls='expired';txt='Token 过期'}
+    let chk='<span class="muted">—</span>';
+    if(a.checkin_today){chk=a.checkin_today.ok?`<span style="color:var(--green)">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span style="color:var(--yellow)">${esc(a.checkin_today.message||'未签')}</span>`}
+    const days=a.token_days_left;
+    const exp=a.expires_at>0?`${days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'}`:'长期';
+    const provTag={`<span class="tag ${a.provider}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE'})[a.provider]||a.provider}</span>`};
+    tb.insertAdjacentHTML('beforeend',`<tr>
+      <td>${provTag} ${esc(a.provider_name)}</td>
+      <td>${esc(a.nickname||a.uid)}</td>
+      <td><b>${quota}</b></td>
+      <td class="muted" style="white-space:normal;font-size:12px">${esc(detail)}</td>
+      <td>${chk}</td>
+      <td>${exp}</td>
+      <td><span class="tag ${cls}">${txt}</span></td>
+      <td>
+        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','checkin')">签到</button>
+        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','quota')">刷额度</button>
+        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','toggle')">${a.disabled?'启用':'禁用'}</button>
+        <button class="btn sm danger" onclick="delAcct('${a.provider}','${a.uid}')">删除</button>
+      </td></tr>`);
+  });
+  $('#acctEmpty').style.display=(o.accounts||[]).length?'none':'block';
+}
+
+function renderUsage(us){
+  const tb=$('#usageTable tbody');
+  if(!us.today||!us.today.length){tb.innerHTML='<tr><td colspan="7" class="empty">今日暂无调用</td></tr>'}
+  else tb.innerHTML=us.today.map(u=>`<tr>
+    <td><code>${esc(u.model)}</code></td><td>${esc(u.provider)}</td><td>${fmt(u.requests)}</td>
+    <td>${fmt(u.prompt_tokens)}</td><td>${fmt(u.completion_tokens)}</td><td>${fmt(u.total_tokens)}</td>
+    <td style="color:var(--yellow)">¥${u.cost_cny.toFixed(4)}</td></tr>`).join('');
+  $('#usageSub').textContent=`今日合计 ${fmt(us.totals?.requests)} 次请求 / ${fmt(us.totals?.total_tokens)} tokens / ¥${(us.totals?.cost_cny??0).toFixed(4)}`;
+  // 7 日柱状图
+  const hist=us.history||[];const max=Math.max(1,...hist.map(h=>h.total_tokens));
+  $('#bars').innerHTML=hist.map(h=>{
+    const hgt=Math.round(h.total_tokens/max*100);
+    const d=h.day.slice(5);
+    return `<div class="bar-col"><span class="bar-val">${h.total_tokens?fmt(h.total_tokens):''}</span><div class="bar" style="height:${Math.max(hgt,2)}%" title="${h.day}: ${fmt(h.total_tokens)} tokens / ${h.requests} 次"></div><span class="bar-label">${d}</span></div>`;
+  }).join('');
+}
+
+async function loadModels(force){
+  try{
+    MODELS=await api('/api/models'+(force?'?refresh=1':''));
+    const provs=Object.keys(MODELS);
+    if(!provs.includes(MODEL_TAB))MODEL_TAB=provs[0]||'workbuddy';
+    $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae'})[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
+    renderModels();
+  }catch(e){}
+}
+function renderModels(){
+  document.querySelectorAll('#modelTabs .tab').forEach(t=>t.classList.toggle('active',t.textContent.startsWith(({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae'})[MODEL_TAB])));
+  const list=MODELS[MODEL_TAB]||[];
+  const tb=$('#modelTable tbody');
+  if(!list.length){tb.innerHTML=`<tr><td colspan="5" class="empty">该平台暂无账号或模型列表获取失败（纳管账号后自动拉取）</td></tr>`;return}
+  tb.innerHTML=list.map(m=>`<tr><td><code>${esc(m.id)}</code></td><td><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)}</code></td><td>${esc(m.name||'-')}</td><td>${m.context_window?fmt(m.context_window):'-'}</td><td>${esc(m.credits||'-')}</td></tr>`).join('');
+}
+
+async function act(provider,uid,action){
+  toast('执行中...');
+  const r=await api('/api/accounts/action',{method:'POST',body:JSON.stringify({provider,uid,action})});
+  if(action==='checkin')toast(r.message||r.ok&&'签到成功'||JSON.stringify(r),!!(r.ok));
+  else toast(action==='quota'?`剩余 ${fmt(r.remaining)}`:'操作成功',true);
+  setTimeout(refreshAll,800);
+}
+async function delAcct(provider,uid){
+  if(!confirm('确认删除该账号凭证？'))return;
+  await api('/api/accounts?provider='+provider+'&uid='+encodeURIComponent(uid),{method:'DELETE',body:JSON.stringify({provider,uid})});
+  toast('已删除');setTimeout(refreshAll,500);
+}
+async function checkinAll(){toast('已发起全部签到');await api('/api/checkin_all',{method:'POST'});setTimeout(refreshAll,2500)}
+
+function openAdd(){$('#addModal').classList.add('open');$('#loginFlow').innerHTML='';$('#importStatus').textContent=''}
+function closeAdd(){$('#addModal').classList.remove('open');if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}}
+async function startLogin(prov){
+  $('#loginFlow').innerHTML='<div class="status-line wait">正在发起授权...</div>';
+  const r=await api('/api/login/start',{method:'POST',body:JSON.stringify({provider:prov,callback_base:location.origin})});
+  if(r.error){$('#loginFlow').innerHTML=`<div class="status-line err">发起失败：${esc(r.error)}</div>`;return}
+  const html=`<h3 style="margin-top:8px">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae'})[prov]} 授权登录</h3>
+    <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':'在浏览器打开链接完成腾讯账号登录：'}</p>
+    ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
+    <div class="urlbox">${esc(r.url)}</div>
+    <button class="btn" onclick="navigator.clipboard.writeText('${esc(r.url)}').then(()=>toast('已复制'))">复制链接</button>
+    <a class="btn" style="margin-left:8px" href="${esc(r.url)}" target="_blank">在新窗口打开</a>
+    <div class="status-line wait" id="loginStatus">等待授权完成...（完成后自动纳管并签到）</div>`;
+  $('#loginFlow').innerHTML=html;
+  if(POLL_TIMER)clearInterval(POLL_TIMER);
+  POLL_TIMER=setInterval(()=>pollLogin(prov,r.id),3000);
+}
+async function pollLogin(prov,id){
+  try{
+    const r=await api(`/api/login/poll?provider=${prov}&id=${encodeURIComponent(id)}`);
+    const el=$('#loginStatus');if(!el){clearInterval(POLL_TIMER);POLL_TIMER=null;return}
+    if(r.status==='success'){el.className='status-line ok';el.innerHTML=`✅ 纳管成功：${esc(r.account?.nickname||r.account?.uid||'')}，已自动签到并拉取额度`;clearInterval(POLL_TIMER);POLL_TIMER=null;setTimeout(refreshAll,1000)}
+    else if(r.status==='failed'){el.className='status-line err';el.textContent='❌ '+(r.message||'失败');clearInterval(POLL_TIMER);POLL_TIMER=null}
+    else{el.className='status-line wait';el.textContent=r.message||'等待授权完成...'}
+  }catch(e){}
+}
+async function doImport(){
+  const prov=$('#importProv').value,cred=$('#importCred').value.trim();
+  if(!cred){toast('请粘贴凭证',false);return}
+  $('#importStatus').className='status-line wait';$('#importStatus').textContent='导入中（验证凭证）...';
+  const r=await api('/api/import',{method:'POST',body:JSON.stringify({provider:prov,credential:cred})});
+  if(r.error){$('#importStatus').className='status-line err';$('#importStatus').textContent='❌ '+r.error}
+  else{$('#importStatus').className='status-line ok';$('#importStatus').textContent=`✅ 导入成功：${r.nickname||r.uid}，已自动签到`;setTimeout(refreshAll,1200)}
+}
+
+// init
+(async()=>{
+  const r=await fetch('/api/overview');
+  if(r.status===401){showLogin()}
+  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll()}).catch(showLogin)}
+})();
+setInterval(()=>{if($('#main').style.display!=='none')refreshAll()},30000);
+</script>
+</body>
+</html>
