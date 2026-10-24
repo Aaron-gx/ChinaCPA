@@ -30,6 +30,9 @@ type Account struct {
 	RefreshClientID  string `json:"refresh_client_id,omitempty"`
 	AuthHost         string `json:"auth_host,omitempty"` // OAuth host 覆盖（回调 host 参数）
 
+	// Source 凭证类型（qoder：pat / oauth），影响会话构建方式
+	Source string `json:"source,omitempty"`
+
 	Disabled bool  `json:"disabled,omitempty"`
 	CreatedAt int64 `json:"created_at,omitempty"`
 	LastUsedAt int64 `json:"last_used_at,omitempty"`

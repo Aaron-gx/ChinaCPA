@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -66,6 +68,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 
 	mux.HandleFunc("/", p.handleIndex)
 	mux.HandleFunc("/trae/callback", p.handleTraeCallback)
+	mux.HandleFunc("/authorize", p.handleTraeCallback) // Trae 官方回调路径
 	mux.HandleFunc("/api/auth", p.handleAuth)
 	mux.HandleFunc("/api/overview", p.authed(p.handleOverview))
 	mux.HandleFunc("/api/accounts", p.authed(p.handleAccounts))
@@ -195,7 +198,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 				totalIdeCredits += q.Remaining
 			case "qwen":
 				qwenRemaining += q.Remaining
-			case "qoder":
+			case "qoder", "qoder-intl":
 				totalQoderCredits += q.Remaining
 			}
 		}
@@ -367,6 +370,39 @@ func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // ── 登录（OAuth 发起 + 轮询） ───────────────────────────
 
+// deriveCallbackBase 推导回调基地址：显式指定且非回环（远程部署）时尊重用户；
+// 否则用「请求 Host 的主机名 + 服务端真实监听端口」——浏览器地址栏端口可能
+// 是代理或手误，回调必须指回真实服务端口（Trae 授权页会校验回调可达性）。
+func (p *Panel) deriveCallbackBase(r *http.Request, explicit string) string {
+	if explicit != "" && p.looksExternal(explicit) {
+		return explicit
+	}
+	host := "127.0.0.1"
+	if h := r.Host; h != "" {
+		host = hostOnly(h)
+	}
+	port := strings.TrimPrefix(p.cfg.Listen, ":")
+	return "http://" + host + ":" + port
+}
+
+// hostOnly 去掉 Host 头的端口部分（兼容 IPv6 字面量）。
+func hostOnly(hostPort string) string {
+	if h, _, err := net.SplitHostPort(hostPort); err == nil && h != "" {
+		return h
+	}
+	return hostPort
+}
+
+// looksExternal 显式指定了非本机回环地址（远程部署场景）。
+func (p *Panel) looksExternal(base string) bool {
+	u, err := url.Parse(base)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h != "127.0.0.1" && h != "localhost" && h != "::1"
+}
+
 func (p *Panel) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
@@ -382,7 +418,7 @@ func (p *Panel) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "未知平台: " + body.Provider})
 		return
 	}
-	s, err := pr.StartLogin(r.Context(), body.CallbackBase)
+	s, err := pr.StartLogin(r.Context(), p.deriveCallbackBase(r, body.CallbackBase))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return

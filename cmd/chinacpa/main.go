@@ -48,10 +48,11 @@ func main() {
 	wb := workbuddy.New()
 	qw := qwen.New(cfg.Qwen.DailyRequestLimit)
 	tr := trae.New()
-	qd := qoder.New()
+	qd := qoder.New("cn")
+	qdi := qoder.New("intl")
 
 	// pool
-	provs := []provider.Provider{wb, qw, tr, qd}
+	provs := []provider.Provider{wb, qw, tr, qd, qdi}
 	pl, err := pool.New(st, provs)
 	if err != nil {
 		log.Fatalf("加载账号失败: %v", err)

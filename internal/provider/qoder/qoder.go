@@ -7,8 +7,11 @@
 package qoder
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/hex"
@@ -17,11 +20,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"chinacpa/internal/model"
 	"chinacpa/internal/provider"
@@ -30,18 +36,61 @@ import (
 
 const campaignsPath = "/sash/api/v1/me/campaigns"
 
-// Provider Qoder 实现。
+// OAuth 设备授权端点（挂 openapi 基址，纯 Bearer，无 COSY 签名）。
+const (
+	pathDevicePoll  = "/api/v1/deviceToken/poll"
+	pathDeviceRefsh = "/api/v1/deviceToken/refresh"
+	pathUserinfo    = "/api/v1/userinfo"
+)
+
+// realmCfg 双区域 OAuth 配置（口径：qoder2api-hub REALM_CONFIGS 官方逆向）。
+type realmCfg struct {
+	website      string
+	clientID     string
+	redirectURI  string
+	sendRedirect bool
+	nonceDashed  bool
+	ua           string
+}
+
+var (
+	realmCN = realmCfg{
+		website: "https://qoder.com.cn", clientID: "1c5e33e1-364d-4ce6-b02c-acaa81274a5c",
+		redirectURI: "qoder-work-cn://", sendRedirect: true, nonceDashed: true,
+		ua: "QoderWork/1.1.75",
+	}
+	realmIntl = realmCfg{
+		website: "https://qoder.com", clientID: "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb",
+		redirectURI: "qoder://aicoding.aicoding-agent/login-success", sendRedirect: false,
+		nonceDashed: false, ua: "Qoder/1.1.75",
+	}
+)
+
+// oauthPending 一次设备授权会话。
+type oauthPending struct {
+	state    string
+	verifier string
+	nonce    string
+	created  time.Time
+}
+
+// Provider Qoder 实现（realm: "cn"/"intl" → provider id qoder / qoder-intl）。
 type Provider struct {
-	http *http.Client
+	http  *http.Client
+	realm string
+	id    string
 
 	mu      sync.Mutex
 	bridges map[string]*bridge // uid -> 会话桥
+	logins  map[string]*oauthPending
 }
 
-// bridge 单账号会话桥：PAT → jobToken 会话 + 刷新轮换。
+// bridge 单账号会话桥：PAT → jobToken 会话 + 刷新轮换；OAuth → 直连身份会话。
 type bridge struct {
 	pat    string
 	region *qauth.RegionConfig
+	source string // "pat" | "oauth"
+	acct   *model.Account
 
 	machineID, machineToken, machineType, machineCode string
 
@@ -56,16 +105,39 @@ type bridge struct {
 	openapiFetchedAt time.Time
 }
 
-// New 构造。
-func New() *Provider {
+// New 构造（realm "cn" 或 "intl"）。
+func New(realm string) *Provider {
+	if realm != "intl" {
+		realm = "cn"
+	}
+	id := "qoder"
+	if realm == "intl" {
+		id = "qoder-intl"
+	}
 	return &Provider{
 		http:    &http.Client{Timeout: 120 * time.Second},
+		realm:   realm,
+		id:      id,
 		bridges: map[string]*bridge{},
+		logins:  map[string]*oauthPending{},
 	}
 }
 
-func (p *Provider) ID() string          { return "qoder" }
-func (p *Provider) DisplayName() string { return "Qoder（阿里 · CN/国际双区）" }
+func (p *Provider) ID() string          { return p.id }
+func (p *Provider) DisplayName() string {
+	if p.realm == "intl" {
+		return "Qoder 国际版（qoder.com）"
+	}
+	return "Qoder 国内版（qoder.com.cn）"
+}
+
+// realmConfig 当前区域 OAuth 配置。
+func (p *Provider) realmConfig() realmCfg {
+	if p.realm == "intl" {
+		return realmIntl
+	}
+	return realmCN
+}
 
 // ── 设备指纹（PAT 派生，跨重启稳定） ─────────────────────
 
@@ -109,14 +181,45 @@ func machineHostnameString() string {
 func (p *Provider) bridgeOf(a *model.Account) *bridge {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	b, ok := p.bridges[a.UID]
-	if ok && b.pat == a.RefreshToken {
+	if b, ok := p.bridges[a.UID]; ok {
+		if a.Source == "oauth" && b.source == "oauth" && b.acct == a {
+			return b
+		}
+		if a.Source != "oauth" && b.source != "oauth" && b.pat == a.RefreshToken {
+			return b
+		}
+	}
+	region := qauth.RegionByName(a.Realm)
+	if region.Name == "global" {
+		// 官方推理主机候选：api3 主选（qoder2api-hub 实测）
+		cp := *region
+		cp.ChatBase = "https://api3.qoder.sh"
+		region = &cp
+	}
+	if a.Source == "oauth" {
+		id, token, typ := uidMachineIdentity(a.UID)
+		codeSum := md5.Sum([]byte("machinecode:" + a.UID))
+		identity := qauth.AuthIdentity{
+			Name: a.Nickname, Aid: a.UID, UID: a.UID,
+			UserType: "personal_professional_trial",
+			SecurityOauthToken: a.AccessToken,
+			RefreshToken:       a.RefreshToken,
+		}
+		b := &bridge{
+			region: region, source: "oauth", acct: a,
+			machineID: id, machineToken: token, machineType: typ,
+			machineCode: hex.EncodeToString(codeSum[:]),
+			identity: &identity,
+			securityOauth: a.AccessToken, refreshToken: a.RefreshToken,
+			expireMs: a.ExpiresAt * 1000,
+		}
+		b.sess = qauth.NewSession(identity, id, token, typ)
+		p.bridges[a.UID] = b
 		return b
 	}
 	id, token, typ, code := deriveMachineIdentity(a.RefreshToken)
-	region := qauth.RegionByName(a.Realm)
-	b = &bridge{
-		pat: a.RefreshToken, region: region,
+	b := &bridge{
+		pat: a.RefreshToken, region: region, source: "pat", acct: a,
 		machineID: id, machineToken: token, machineType: typ, machineCode: code,
 	}
 	p.bridges[a.UID] = b
@@ -127,6 +230,10 @@ func (p *Provider) bridgeOf(a *model.Account) *bridge {
 func (p *Provider) ensureFresh(ctx context.Context, b *bridge) error {
 	nowMs := time.Now().UnixMilli()
 	if b.sess != nil && b.expireMs > 0 && nowMs < b.expireMs-5*60*1000 {
+		return nil
+	}
+	if b.source == "oauth" {
+		// OAuth 账号：deviceToken/refresh 轮换（在 RefreshToken() 中处理）
 		return nil
 	}
 	var jt map[string]interface{}
@@ -182,14 +289,166 @@ func toInt64Any(v interface{}) int64 {
 
 // ── 登录 / 凭证导入 ──────────────────────────────────────
 
-// StartLogin Qoder 无 OAuth 授权页：引导到控制台 PAT 页 + 粘贴导入。
+// StartLogin 发起 OAuth 设备授权（PKCE S256 + nonce，浏览器打开授权页）。
+// 双区 URL 差异（官方逆向）：CN 带 redirect_uri + 带横线 nonce；国际版不带
+// redirect_uri + 32-hex nonce；两区都带 client_id + machine_id。
 func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.LoginSession, error) {
-	return nil, provider.ErrNotSupported
+	cfg := p.realmConfig()
+	verifier := pkceVerifierB64()
+	nonce := pkceNonce(cfg.nonceDashed)
+	q := url.Values{}
+	q.Set("challenge", pkceChallengeB64(verifier))
+	q.Set("challenge_method", "S256")
+	q.Set("nonce", nonce)
+	if cfg.sendRedirect {
+		q.Set("redirect_uri", cfg.redirectURI)
+	}
+	q.Set("client_id", cfg.clientID)
+	q.Set("machine_id", stableMachineID(p.realm))
+	state := "qd-" + fmt.Sprintf("%d", time.Now().UnixNano())
+	p.mu.Lock()
+	p.logins[state] = &oauthPending{state: state, verifier: verifier, nonce: nonce, created: time.Now()}
+	p.mu.Unlock()
+	return &model.LoginSession{
+		Provider: p.ID(),
+		ID:       state,
+		URL:      cfg.website + "/device/selectAccounts?" + q.Encode(),
+	}, nil
 }
 
-// PollLogin 不适用（PAT 导入即完成）。
+// PollLogin 轮询设备授权（404/202 = 等待用户授权）。
 func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model.PollResult, error) {
-	return nil, provider.ErrNotSupported
+	p.mu.Lock()
+	pend := p.logins[s.ID]
+	p.mu.Unlock()
+	if pend == nil {
+		return &model.PollResult{Status: model.LoginFailed, Message: "登录会话不存在或已过期，请重新发起"}, nil
+	}
+	if time.Since(pend.created) > 10*time.Minute {
+		p.mu.Lock()
+		delete(p.logins, s.ID)
+		p.mu.Unlock()
+		return &model.PollResult{Status: model.LoginFailed, Message: "授权窗口已过期，请重新发起"}, nil
+	}
+	region := qauth.RegionByName(p.realm)
+	cfg := p.realmConfig()
+	pollQ := url.Values{}
+	pollQ.Set("nonce", pend.nonce)
+	pollQ.Set("verifier", pend.verifier)
+	pollQ.Set("challenge_method", "S256")
+	pollURL := region.OpenAPIBase + pathDevicePoll + "?" + pollQ.Encode()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pollURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "QoderWork")
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return &model.PollResult{Status: model.LoginPending, Message: "网络波动，继续等待授权…"}, nil
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == 404 || resp.StatusCode == 202 {
+		return &model.PollResult{Status: model.LoginPending, Message: "等待浏览器完成 Qoder 设备授权"}, nil
+	}
+	if resp.StatusCode >= 400 {
+		return &model.PollResult{Status: model.LoginFailed, Message: fmt.Sprintf("授权轮询失败 HTTP %d", resp.StatusCode)}, nil
+	}
+	var data struct {
+		Token        string `json:"token"`
+		DeviceToken  string `json:"device_token"`
+		RefreshToken string `json:"refresh_token"`
+		UserID       string `json:"user_id"`
+		ExpiresIn    int64  `json:"expires_in"`
+		ExpiresAt    string `json:"expires_at"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil || (data.Token == "" && data.DeviceToken == "") {
+		return &model.PollResult{Status: model.LoginPending, Message: "等待授权完成"}, nil
+	}
+	token := data.Token
+	if token == "" {
+		token = data.DeviceToken
+	}
+	// userinfo 补全昵称（尽力而为）
+	uid, nickname := data.UserID, ""
+	if uireq, err := http.NewRequestWithContext(ctx, http.MethodGet, region.OpenAPIBase+pathUserinfo, nil); err == nil {
+		uireq.Header.Set("Accept", "application/json")
+		uireq.Header.Set("User-Agent", cfg.ua)
+		uireq.Header.Set("Authorization", "Bearer "+token)
+		if uiresp, err := p.http.Do(uireq); err == nil {
+			uiraw, _ := io.ReadAll(io.LimitReader(uiresp.Body, 1<<20))
+			uiresp.Body.Close()
+			var ui struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			}
+			if json.Unmarshal(uiraw, &ui) == nil {
+				if ui.ID != "" {
+					uid = ui.ID
+				}
+				nickname = ui.Name
+			}
+		}
+	}
+	if uid == "" {
+		uid = "q-" + pend.nonce[:16]
+	}
+	expiresAt := time.Now().Add(30 * 24 * time.Hour).Unix()
+	if data.ExpiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(data.ExpiresIn) * time.Millisecond).Unix()
+	} else if data.ExpiresAt != "" {
+		if t, err := time.Parse("2006-01-02T15:04:05", data.ExpiresAt[:min19(data.ExpiresAt)]); err == nil {
+			expiresAt = t.Unix()
+		}
+	}
+	a := &model.Account{
+		Provider:      p.ID(),
+		UID:           uid,
+		Nickname:      nickname,
+		Realm:         p.realm,
+		Source:        "oauth",
+		AccessToken:   token,
+		RefreshToken:  data.RefreshToken,
+		ExpiresAt:     expiresAt,
+	}
+	p.mu.Lock()
+	delete(p.logins, s.ID)
+	p.mu.Unlock()
+	return &model.PollResult{Status: model.LoginDone, Account: a}, nil
+}
+
+func min19(s string) int {
+	if len(s) >= 19 {
+		return 19
+	}
+	return len(s)
+}
+
+// ── PKCE / 设备指纹小工具 ──
+
+func pkceVerifierB64() string {
+	b := make([]byte, 32)
+	_, _ = randRead(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func pkceChallengeB64(verifier string) string {
+	sum := sha256Sum([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum)
+}
+
+func pkceNonce(dashed bool) string {
+	if dashed {
+		return uuidNewString()
+	}
+	return uuidNewHexString()
+}
+
+// stableMachineID 区域内稳定的虚拟设备 ID（OAuth 授权 URL 用）。
+func stableMachineID(realm string) string {
+	sum := md5.Sum([]byte("qoder-machine:" + realm))
+	return hex.EncodeToString(sum[:16])
 }
 
 // ImportCredential 粘贴 PAT 导入。支持：
@@ -255,9 +514,56 @@ func (p *Provider) ImportCredential(ctx context.Context, raw string) (*model.Acc
 	return a, nil
 }
 
-// RefreshToken PAT 长期有效；会话刷新在 ensureFresh 内按需完成。
+// RefreshToken：OAuth 账号临期时走 deviceToken/refresh；PAT 长期有效不刷新。
 func (p *Provider) RefreshToken(ctx context.Context, a *model.Account) (bool, error) {
-	return false, nil
+	if a.Source != "oauth" {
+		return false, nil
+	}
+	if a.ExpiresAt > 0 && time.Now().Add(30*time.Minute).Unix() < a.ExpiresAt {
+		return false, nil
+	}
+	if a.RefreshToken == "" {
+		return false, nil
+	}
+	region := qauth.RegionByName(a.Realm)
+	body, _ := json.Marshal(map[string]any{"refresh_token": a.RefreshToken})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, region.OpenAPIBase+pathDeviceRefsh, bytes.NewReader(body))
+	if err != nil {
+		return false, err
+	}
+	cfg := p.realmConfig()
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", cfg.ua)
+	resp, err := p.http.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		return false, fmt.Errorf("deviceToken 刷新失败 HTTP %d", resp.StatusCode)
+	}
+	var data struct {
+		Token        string `json:"token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(raw, &data); err != nil || data.Token == "" {
+		return false, fmt.Errorf("deviceToken 刷新响应异常")
+	}
+	a.AccessToken = data.Token
+	if data.RefreshToken != "" {
+		a.RefreshToken = data.RefreshToken
+	}
+	if data.ExpiresIn > 0 {
+		a.ExpiresAt = time.Now().Add(time.Duration(data.ExpiresIn) * time.Millisecond).Unix()
+	}
+	// 重建会话桥（旧 COSY 会话带旧 token）
+	p.mu.Lock()
+	delete(p.bridges, a.UID)
+	p.mu.Unlock()
+	return true, nil
 }
 
 // ── 额度 ─────────────────────────────────────────────────
@@ -783,6 +1089,31 @@ func contentToText(raw json.RawMessage) string {
 		return strings.Join(parts, "\n")
 	}
 	return ""
+}
+
+func randRead(b []byte) (int, error) { return rand.Read(b) }
+
+func sha256Sum(b []byte) []byte {
+	sum := sha256.Sum256(b)
+	return sum[:]
+}
+
+func uuidNewString() string { return uuid.New().String() }
+
+func uuidNewHexString() string { return uuid.New().String()[:32] }
+
+// uidMachineIdentity OAuth 账号的设备指纹（按 UID 派生，同账号跨重启稳定）。
+func uidMachineIdentity(uid string) (id, token, typ string) {
+	idSum := md5.Sum([]byte("machine:" + uid))
+	id = hex.EncodeToString(idSum[:])
+	tokSum := sha512.Sum512([]byte("machinetoken:" + uid))
+	token = base64.RawURLEncoding.EncodeToString(tokSum[:])[:43]
+	typeSum := md5.Sum([]byte("machinetype:" + uid))
+	typ = strings.ReplaceAll(hex.EncodeToString(typeSum[:]), "-", "")
+	if len(typ) > 18 {
+		typ = typ[:18]
+	}
+	return
 }
 
 func newQoderID() string {

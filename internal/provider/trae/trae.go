@@ -207,7 +207,7 @@ func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.
 	if callbackBase == "" {
 		callbackBase = "http://127.0.0.1:8318"
 	}
-	callbackURL := strings.TrimSuffix(callbackBase, "/") + "/trae/callback"
+	callbackURL := strings.TrimSuffix(callbackBase, "/") + "/authorize"
 	trace := hex16()
 	verifier := ""
 	if v, _, err := pkcePair(); err == nil {

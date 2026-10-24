@@ -142,7 +142,7 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
 <div class="modal" id="addModal">
   <div class="box">
     <h3>添加账号 <button class="btn sm" style="float:right" onclick="closeAdd()">✕</button></h3>
-    <div class="prov-grid" style="grid-template-columns:repeat(4,1fr)">
+    <div class="prov-grid" style="grid-template-columns:repeat(3,1fr)">
       <div class="prov-card" onclick="startLogin('workbuddy')">
         <div class="t" style="color:#4fc3f7">WorkBuddy</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
       </div>
@@ -152,8 +152,11 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
       <div class="prov-card" onclick="startLogin('trae')">
         <div class="t" style="color:#ff8a65">Trae</div><div class="d">字节 SOLO 通道<br>授权回调自动纳管</div>
       </div>
-      <div class="prov-card" onclick="qoderGuide()">
-        <div class="t" style="color:#22d3ee">Qoder</div><div class="d">阿里 CN/国际<br>控制台 PAT 导入</div>
+      <div class="prov-card" onclick="startLogin('qoder')">
+        <div class="t" style="color:#22d3ee">Qoder 国内版</div><div class="d">qoder.com.cn<br>自动授权登录</div>
+      </div>
+      <div class="prov-card" onclick="startLogin('qoder-intl')">
+        <div class="t" style="color:#34d399">Qoder 国际版</div><div class="d">qoder.com<br>自动授权登录</div>
       </div>
     </div>
     <div id="loginFlow"></div>
@@ -164,7 +167,8 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
         <option value="workbuddy">WorkBuddy</option>
         <option value="qwen">Qwen</option>
         <option value="trae">Trae</option>
-        <option value="qoder">Qoder</option>
+        <option value="qoder">Qoder 国内</option>
+        <option value="qoder-intl">Qoder 国际</option>
       </select>
       <textarea id="importCred" placeholder="粘贴凭证..."></textarea>
       <button class="btn primary" onclick="doImport()">导入凭证</button>
@@ -239,7 +243,7 @@ function renderOverview(o){
     if(a.checkin_today){chk=a.checkin_today.ok?`<span style="color:var(--green)">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span style="color:var(--yellow)">${esc(a.checkin_today.message||'未签')}</span>`}
     const days=a.token_days_left;
     const exp=a.expires_at>0?`${days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'}`:'长期';
-    const provTag=`<span class="tag ${a.provider}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD'})[a.provider]||a.provider}${a.provider==='trae'&&a.realm==='global'?'·国际':''}${a.provider==='qoder'&&a.realm==='global'?'·国际':''}</span>`;
+    const provTag=`<span class="tag ${a.provider}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD·国'})[a.provider]||a.provider}${a.provider==='trae'&&a.realm==='global'?'·国际':''}${a.provider==='qoder'&&a.realm==='global'?'·国际':''}</span>`;
     tb.insertAdjacentHTML('beforeend',`<tr>
       <td>${provTag} ${esc(a.provider_name)}</td>
       <td>${esc(a.nickname||a.uid)}</td>
@@ -280,12 +284,12 @@ async function loadModels(force){
     MODELS=await api('/api/models'+(force?'?refresh=1':''));
     const provs=Object.keys(MODELS);
     if(!provs.includes(MODEL_TAB))MODEL_TAB=provs[0]||'workbuddy';
-    $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder'})[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
+    $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
     renderModels();
   }catch(e){}
 }
 function renderModels(){
-  document.querySelectorAll('#modelTabs .tab').forEach(t=>t.classList.toggle('active',t.textContent.startsWith(({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder'})[MODEL_TAB])));
+  document.querySelectorAll('#modelTabs .tab').forEach(t=>t.classList.toggle('active',t.textContent.startsWith(({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[MODEL_TAB])));
   const list=MODELS[MODEL_TAB]||[];
   const tb=$('#modelTable tbody');
   if(!list.length){tb.innerHTML=`<tr><td colspan="5" class="empty">该平台暂无账号或模型列表获取失败（纳管账号后自动拉取）</td></tr>`;return}
@@ -308,7 +312,7 @@ async function checkinAll(){toast('已发起全部签到');await api('/api/check
 
 function openAdd(){$('#addModal').classList.add('open');$('#loginFlow').innerHTML='';$('#importStatus').textContent=''}
 function closeAdd(){$('#addModal').classList.remove('open');if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}}
-function qoderGuide(){
+function qoderGuide(){ // PAT 兜底导入说明（自动授权失败时用）
   $('#loginFlow').innerHTML=`<h3 style="margin-top:8px">Qoder PAT 导入</h3>
     <p class="hint">Qoder 无网页授权流，使用控制台 PAT（个人访问令牌）纳管：</p>
     <p class="hint">① 打开 <a href="https://qoder.com.cn" target="_blank">qoder.com.cn（国内版）</a> 或 <a href="https://qoder.sh" target="_blank">qoder.sh（国际版）</a> 登录<br>② 进入 设置 → Personal Access Token / API Token → 创建并复制<br>③ 粘贴到下方导入框（国际版前缀 <code>global:</code>）</p>`;
@@ -319,7 +323,7 @@ async function startLogin(prov){
   const r=await api('/api/login/start',{method:'POST',body:JSON.stringify({provider:prov,callback_base:location.origin})});
   if(r.error){$('#loginFlow').innerHTML=`<div class="status-line err">发起失败：${esc(r.error)}</div>`;return}
   savePending(prov,r.id);
-  const html=`<h3 style="margin-top:8px">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder'})[prov]} 授权登录</h3>
+  const html=`<h3 style="margin-top:8px">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[prov]} 授权登录</h3>
     <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':'在浏览器打开链接完成腾讯账号登录：'}</p>
     ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
     <div class="urlbox">${esc(r.url)}</div>
