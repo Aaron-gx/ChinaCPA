@@ -69,16 +69,36 @@ type Provider struct {
 }
 
 type loginPending struct {
-	session  *model.LoginSession
-	trace    string
-	machine  string
-	device   string
-	deviceKey string
-	verifier string
-	done     bool
-	failed   bool
-	message  string
-	acct     *model.Account
+	session    *model.LoginSession
+	trace      string
+	machine    string
+	device     string
+	deviceKey  string
+	verifier   string
+	done       bool
+	failed     bool
+	message    string
+	acct       *model.Account
+	createdAt  time.Time
+	finishedAt time.Time
+}
+
+// purgeStaleLocked 清理过期登录会话（调用方持锁）：未完成 >30 分钟、
+// 已完成/失败 >10 分钟。完成态会话必须保留一段时间——回调先到、面板轮询
+// 后到，立即删除会让轮询永远读不到「成功」，误报会话过期。
+func (p *Provider) purgeStaleLocked() {
+	now := time.Now()
+	for k, v := range p.sessions {
+		if v.finishedAt.IsZero() {
+			if now.Sub(v.createdAt) > 30*time.Minute {
+				delete(p.sessions, k)
+			}
+			continue
+		}
+		if now.Sub(v.finishedAt) > 10*time.Minute {
+			delete(p.sessions, k)
+		}
+	}
 }
 
 // New 构造。
@@ -222,9 +242,10 @@ func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.
 		State:       trace,
 	}
 	p.mu.Lock()
+	p.purgeStaleLocked()
 	p.sessions[trace] = &loginPending{
 		session: s, trace: trace, machine: machineID, device: deviceID,
-		deviceKey: deviceKey, verifier: verifier,
+		deviceKey: deviceKey, verifier: verifier, createdAt: time.Now(),
 	}
 	p.mu.Unlock()
 	return s, nil
@@ -233,10 +254,11 @@ func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.
 // PollLogin 轮询登录（回调侧完成后这里返回成功）。
 func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model.PollResult, error) {
 	p.mu.Lock()
+	p.purgeStaleLocked()
 	pend := p.sessions[s.State]
 	p.mu.Unlock()
 	if pend == nil {
-		return &model.PollResult{Status: model.LoginFailed, Message: "登录会话不存在或已过期，请重新发起"}, nil
+		return &model.PollResult{Status: model.LoginFailed, Message: "登录会话已过期（若账号已出现在列表中即纳管成功），请重新发起"}, nil
 	}
 	if pend.failed {
 		return &model.PollResult{Status: model.LoginFailed, Message: pend.message}, nil
@@ -400,8 +422,7 @@ func (p *Provider) HandleCallback(q url.Values) (*model.PollResult, error) {
 	}
 	if pend != nil {
 		p.mu.Lock()
-		pend.done, pend.acct = true, a
-		delete(p.sessions, pend.trace)
+		pend.done, pend.acct, pend.finishedAt = true, a, time.Now()
 		p.mu.Unlock()
 	}
 	return &model.PollResult{Status: model.LoginDone, Account: a}, nil
@@ -419,8 +440,7 @@ func (p *Provider) failPending(pend *loginPending, msg string) {
 		return
 	}
 	p.mu.Lock()
-	pend.failed, pend.message = true, msg
-	delete(p.sessions, pend.trace)
+	pend.failed, pend.message, pend.finishedAt = true, msg, time.Now()
 	p.mu.Unlock()
 }
 

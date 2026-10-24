@@ -10,6 +10,7 @@ import (
 
 	"chinacpa/internal/model"
 	"chinacpa/internal/provider"
+	"chinacpa/internal/pubmodel"
 	"chinacpa/internal/store"
 )
 
@@ -32,6 +33,11 @@ type Pool struct {
 	rr map[string]int
 	// modelAliases 模型别名表（config.model_aliases）
 	modelAliases map[string]string
+	// published 发布模型（对外名 → 多渠道）；nil = 未启用
+	published *pubmodel.Manager
+	// pubRR 发布模型渠道轮询游标：对外模型名（小写）→ 游标
+	pubRR map[string]int
+	pubMu sync.Mutex
 	// 模型缓存：provider -> models（带过期）
 	modelsMu sync.Mutex
 	models   map[string]*modelCache
@@ -52,6 +58,7 @@ func New(st *store.Store, provs []provider.Provider) (*Pool, error) {
 		cooldown: map[string]time.Time{},
 		rr:           map[string]int{},
 		modelAliases: map[string]string{},
+		pubRR:        map[string]int{},
 		models:   map[string]*modelCache{},
 	}
 	for _, pr := range provs {
@@ -314,6 +321,72 @@ func (p *Pool) AllModels(ctx context.Context) (map[string][]model.ModelInfo, err
 // SetModelAliases 注入模型别名表（客户端固定模型名 → ChinaCPA 模型名）。
 func (p *Pool) SetModelAliases(m map[string]string) {
 	p.modelAliases = m
+}
+
+// SetPublished 注入发布模型管理器（对外名 → 多渠道路由）。
+func (p *Pool) SetPublished(m *pubmodel.Manager) {
+	p.published = m
+}
+
+// Published 返回发布模型管理器（未启用返回 nil）。
+func (p *Pool) Published() *pubmodel.Manager {
+	return p.published
+}
+
+// ChannelTarget 一个候选上游渠道。
+type ChannelTarget struct {
+	PID   string // provider ID
+	Model string // 上游模型裸名
+}
+
+// Route 一次请求的完整路由：对外名（记账/计价用）+ 有序渠道列表。
+type Route struct {
+	Public   string
+	Channels []ChannelTarget
+}
+
+// ResolveRoute 解析请求模型名为路由：
+//   - 发布模型命中 → 渠道列表（轮询起点轮转，实现渠道间负载均衡）
+//   - 别名表命中 → 替换后继续
+//   - "provider:model" → 单渠道
+//   - 裸名 → 全平台模型表唯一命中
+func (p *Pool) ResolveRoute(ctx context.Context, name string) (*Route, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("缺少 model 参数")
+	}
+	public := name
+	if p.published != nil {
+		if mo, ok := p.published.Lookup(name); ok {
+			var chs []ChannelTarget
+			for _, ch := range mo.Channels {
+				if _, ok := p.provs[ch.Provider]; ok {
+					chs = append(chs, ChannelTarget{PID: ch.Provider, Model: ch.Model})
+				}
+			}
+			if len(chs) == 0 {
+				return nil, fmt.Errorf("模型 %q 的渠道均不可用（平台未注册）", name)
+			}
+			// 轮询起点轮转：每次请求从下一渠道开始尝试
+			p.pubMu.Lock()
+			p.pubRR[strings.ToLower(mo.ID)]++
+			start := p.pubRR[strings.ToLower(mo.ID)] % len(chs)
+			p.pubMu.Unlock()
+			ordered := make([]ChannelTarget, 0, len(chs))
+			ordered = append(ordered, chs[start:]...)
+			ordered = append(ordered, chs[:start]...)
+			return &Route{Public: mo.ID, Channels: ordered}, nil
+		}
+	}
+	pid, mname, err := p.ResolveModel(ctx, name)
+	if err != nil {
+		// 未命中发布模型时给出更贴合的提示
+		if p.published != nil && !p.published.Empty() {
+			return nil, fmt.Errorf("模型 %q 未发布；可用模型见 GET /v1/models（或用 provider:model 直连）", name)
+		}
+		return nil, err
+	}
+	return &Route{Public: public, Channels: []ChannelTarget{{PID: pid, Model: mname}}}, nil
 }
 
 // ResolveModel 模型名解析：

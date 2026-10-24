@@ -54,7 +54,7 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "translate_error", err.Error())
 		return
 	}
-	pid, mname, rerr := g.pool.ResolveModel(r.Context(), probe.Model)
+	route, rerr := g.pool.ResolveRoute(r.Context(), probe.Model)
 	if rerr != nil {
 		writeErr(w, http.StatusBadRequest, "model_not_found", rerr.Error())
 		return
@@ -64,22 +64,23 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_json", ferr.Error())
 		return
 	}
-	st := g.callOpenAIStream(r.Context(), w, pid, mname, streamBody)
+	st := g.callRoutedStream(r.Context(), w, route, streamBody)
 	if st == nil {
 		return
 	}
+	pub := route.Public
 	var param any
 	if probe.Stream {
 		writeSSEHeaders(w)
-		rc := newProtocolStream(st, pid, probe.Model, g, func(line []byte) [][]byte {
+		rc := newProtocolStream(st, st.pid, pub, g, func(line []byte) [][]byte {
 			return responsestl.ConvertOpenAIChatCompletionsResponseToOpenAIResponses(
-				context.Background(), mname, inbound, openAIBody, line, &param)
+				context.Background(), pub, inbound, openAIBody, line, &param)
 		})
 		defer rc.Close()
 		pumpStream(w, rc)
 		return
 	}
-	full, aerr := aggregateOpenAIJSON(st.body, mname)
+	full, aerr := aggregateOpenAIJSON(st.body, pub)
 	st.body.Close()
 	if aerr != nil {
 		writeErr(w, http.StatusBadGateway, "upstream_error", aerr.Error())
@@ -87,7 +88,7 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
 	out := responsestl.ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(
-		context.Background(), mname, inbound, openAIBody, full, &param)
+		context.Background(), pub, inbound, openAIBody, full, &param)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
@@ -118,32 +119,33 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicErr(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	pid, mname, rerr := g.pool.ResolveModel(r.Context(), probe.Model)
+	route, rerr := g.pool.ResolveRoute(r.Context(), probe.Model)
 	if rerr != nil {
 		writeAnthropicErr(w, http.StatusBadRequest, "invalid_request_error", rerr.Error())
 		return
 	}
 	streamBody, ferr := forceStream(openAIBody)
 	if ferr != nil {
-		writeAnthropicErr(w, http.StatusBadRequest, "invalid_request_error", ferr.Error())
+		writeAnthropicErr(w, http.StatusBadRequest, "invalid_json", ferr.Error())
 		return
 	}
-	st := g.callOpenAIStream(r.Context(), w, pid, mname, streamBody)
+	st := g.callRoutedStream(r.Context(), w, route, streamBody)
 	if st == nil {
 		return
 	}
+	pub := route.Public
 	var param any
 	if probe.Stream {
 		writeSSEHeaders(w)
-		rc := newProtocolStream(st, pid, probe.Model, g, func(line []byte) [][]byte {
+		rc := newProtocolStream(st, st.pid, pub, g, func(line []byte) [][]byte {
 			return claudetl.ConvertOpenAIResponseToClaude(
-				context.Background(), mname, inbound, openAIBody, line, &param)
+				context.Background(), pub, inbound, openAIBody, line, &param)
 		})
 		defer rc.Close()
 		pumpStream(w, rc)
 		return
 	}
-	full, aerr := aggregateOpenAIJSON(st.body, mname)
+	full, aerr := aggregateOpenAIJSON(st.body, pub)
 	st.body.Close()
 	if aerr != nil {
 		writeAnthropicErr(w, http.StatusBadGateway, "api_error", aerr.Error())
@@ -151,7 +153,7 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
 	out := claudetl.ConvertOpenAIResponseToClaudeNonStream(
-		context.Background(), mname, inbound, openAIBody, full, &param)
+		context.Background(), pub, inbound, openAIBody, full, &param)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)

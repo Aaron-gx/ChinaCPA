@@ -20,6 +20,7 @@ import (
 	"chinacpa/internal/provider/qwen"
 	"chinacpa/internal/provider/trae"
 	"chinacpa/internal/provider/workbuddy"
+	"chinacpa/internal/pubmodel"
 	"chinacpa/internal/scheduler"
 	"chinacpa/internal/store"
 	"chinacpa/internal/usage"
@@ -70,6 +71,21 @@ func main() {
 		log.Fatalf("初始化用量目录失败: %v", err)
 	}
 
+	// 发布模型（对外模型 → 多渠道路由 + 单价）
+	pub, err := pubmodel.Load(filepath.Join(cfg.DataDir, "models.json"))
+	if err != nil {
+		log.Fatalf("加载发布模型失败: %v", err)
+	}
+	pl.SetPublished(pub)
+	pubPrices := map[string]usage.PubPrice{}
+	for k, v := range pub.PricingMap() {
+		pubPrices[k] = usage.PubPrice{Input: v.Input, Output: v.Output}
+	}
+	u.SetPublishedPricing(pubPrices, pub.USDCNY())
+	if n := len(pub.Get().Models); n > 0 {
+		log.Printf("发布模型 %d 个（/v1/models 仅暴露已发布模型）", n)
+	}
+
 	// Qwen 今日计数回填（重启恢复）
 	for _, a := range pl.Accounts() {
 		if a.Provider == "qwen" {
@@ -82,7 +98,7 @@ func main() {
 	gw.SetQwenCounter(qw)
 	sched := scheduler.New(cfg, pl, st)
 	sched.Start()
-	pn := panel.New(cfg, pl, st, u, sched)
+	pn := panel.New(cfg, pl, st, u, sched, pub)
 
 	mux := http.NewServeMux()
 	pn.Register(mux, gw)

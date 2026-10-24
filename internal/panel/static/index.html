@@ -180,7 +180,7 @@ code{background:#21262d;padding:2px 6px;border-radius:4px;font-size:12px;color:#
 <div id="toast"></div>
 
 <script>
-let OVERVIEW=null, MODELS=null, MODEL_TAB='workbuddy', POLL_TIMER=null, CB_BASE='';
+let OVERVIEW=null, MODELS=null, MODEL_TAB='workbuddy', POLL_TIMER=null, CB_BASE='', CUR_LOGIN=null;
 const $=s=>document.querySelector(s);
 const fmt=n=>{if(n==null)return'-';if(n>=1e8)return(n/1e8).toFixed(2)+'亿';if(n>=1e4)return(n/1e4).toFixed(2)+'万';return Number(n).toLocaleString()};
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -323,6 +323,7 @@ async function startLogin(prov){
   const r=await api('/api/login/start',{method:'POST',body:JSON.stringify({provider:prov,callback_base:location.origin})});
   if(r.error){$('#loginFlow').innerHTML=`<div class="status-line err">发起失败：${esc(r.error)}</div>`;return}
   savePending(prov,r.id);
+  CUR_LOGIN={prov,id:r.id};
   const html=`<h3 style="margin-top:8px">${({workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder国内','qoder-intl':'Qoder国际'})[prov]} 授权登录</h3>
     <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':'在浏览器打开链接完成腾讯账号登录：'}</p>
     ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
@@ -334,8 +335,7 @@ async function startLogin(prov){
   if(POLL_TIMER)clearInterval(POLL_TIMER);
   POLL_TIMER=setInterval(()=>pollLogin(prov,r.id),3000);
 }
-async function pollLogin(prov,id){
-  try{
+async function pollLogin(prov,id){  try{
     const r=await api(`/api/login/poll?provider=${prov}&id=${encodeURIComponent(id)}`);
     const el=$('#loginStatus');
     if(r.status==='success'){
@@ -352,6 +352,16 @@ async function pollLogin(prov,id){
 // 登录票据持久化：面板页被跳走/刷新后，回来仍能自动检测纳管结果
 function savePending(prov,id){localStorage.setItem('ccpa_pending_login',JSON.stringify({provider:prov,id,ts:Date.now()}))}
 function clearPending(){localStorage.removeItem('ccpa_pending_login')}
+// 授权标签页回调成功后 postMessage 通知本页：弹窗立即变绿（轮询只是兜底）
+window.addEventListener('message',e=>{
+  if(!e.data||e.data.type!=='ccpa:login-done'||!CUR_LOGIN)return;
+  clearPending();
+  if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}
+  const el=$('#loginStatus');
+  if(el){el.className='status-line ok';el.innerHTML='✅ 纳管成功，已自动签到并拉取额度'}
+  toast('✅ 授权登录成功，账号已纳管');
+  setTimeout(refreshAll,800);
+});
 function resumePending(){
   let p=null;try{p=JSON.parse(localStorage.getItem('ccpa_pending_login'))}catch(e){}
   if(!p||!p.provider||!p.id)return;

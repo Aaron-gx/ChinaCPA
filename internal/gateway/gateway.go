@@ -6,6 +6,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -71,13 +72,12 @@ type openAIStream struct {
 	body io.ReadCloser
 }
 
-// callOpenAIStream 失败转移调用：轮询 provider 可用账号直到成功。
-// 请求体必须 stream=true；失败时已写错误响应，返回 nil。
-func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, pid, mname string, body []byte) *openAIStream {
+// tryProviderStream 单渠道调用：该 provider 内账号轮询直到成功。
+// 失败返回聚合错误信息（不写响应，供上层跨渠道重试）。
+func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte) (*openAIStream, *provider.Error, int, []byte) {
 	pr, ok := g.pool.Provider(pid)
 	if !ok {
-		writeErr(w, http.StatusBadRequest, "provider_missing", pid)
-		return nil
+		return nil, &provider.Error{Kind: provider.ErrClient, Msg: "未知平台 " + pid}, 0, nil
 	}
 	var lastStatus int
 	var lastBody []byte
@@ -117,10 +117,34 @@ func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, p
 		if pid == "qwen" && g.qwenProv != nil {
 			g.qwenProv.CountRequest(a.UID)
 		}
-		return &openAIStream{acct: a, pid: pid, body: res.Body}
+		return &openAIStream{acct: a, pid: pid, body: res.Body}, nil, 0, nil
+	}
+	if lastErr == nil {
+		lastErr = &provider.Error{Kind: provider.ErrUpstream, Msg: fmt.Sprintf("平台 %s 无可用账号", pid)}
+	}
+	return nil, lastErr, lastStatus, lastBody
+}
+
+// callRoutedStream 多渠道失败转移：按路由顺序尝试渠道，每渠道内部再账号轮询。
+// 失败时已写错误响应，返回 nil。
+func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, route *pool.Route, body []byte) *openAIStream {
+	var lastErr *provider.Error
+	var lastStatus int
+	var lastBody []byte
+	for _, ch := range route.Channels {
+		st, err, status, respBody := g.tryProviderStream(ctx, ch.PID, ch.Model, body)
+		if st != nil {
+			return st
+		}
+		lastErr, lastStatus, lastBody = err, status, respBody
+		if status >= 400 && status < 500 && status != 429 {
+			// 客户端类错误（模型名/参数问题）换渠道也大概率失败，但 401/403 可能是
+			// 单渠道凭证问题——继续尝试下一渠道再报错。
+			continue
+		}
 	}
 	msg := "上游调用失败"
-	if lastErr != nil {
+	if lastErr != nil && lastErr.Error() != "" {
 		msg = lastErr.Error()
 	} else if len(lastBody) > 0 {
 		msg = string(lastBody[:min(300, len(lastBody))])
@@ -133,16 +157,35 @@ func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, p
 	return nil
 }
 
+// callOpenAIStream 兼容旧签名：单渠道调用（失败已写响应）。
+func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, pid, mname string, body []byte) *openAIStream {
+	route := &pool.Route{Public: mname, Channels: []pool.ChannelTarget{{PID: pid, Model: mname}}}
+	return g.callRoutedStream(ctx, w, route, body)
+}
+
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
-	all, err := g.pool.AllModels(r.Context())
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "models_error", err.Error())
-		return
-	}
 	type om struct {
 		ID      string `json:"id"`
 		Object  string `json:"object"`
 		OwnedBy string `json:"owned_by"`
+	}
+	// 发布模型优先：对外只暴露用户配置的模型
+	if pm := g.pool.Published(); pm != nil && !pm.Empty() {
+		data := []om{}
+		for _, mo := range pm.Get().Models {
+			owned := "chinacpa"
+			if len(mo.Channels) > 0 {
+				owned = mo.Channels[0].Provider
+			}
+			data = append(data, om{ID: mo.ID, Object: "model", OwnedBy: owned})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+		return
+	}
+	all, err := g.pool.AllModels(r.Context())
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "models_error", err.Error())
+		return
 	}
 	data := []om{}
 	seen := map[string]bool{}
@@ -190,73 +233,17 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_json", "请求体不是合法 JSON")
 		return
 	}
-	pid, mname, err := g.pool.ResolveModel(r.Context(), cr.Model)
+	route, err := g.pool.ResolveRoute(r.Context(), cr.Model)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "model_not_found", err.Error())
 		return
 	}
-	pr, ok := g.pool.Provider(pid)
-	if !ok {
-		writeErr(w, http.StatusBadRequest, "provider_missing", pid)
+	st := g.callRoutedStream(r.Context(), w, route, body)
+	if st == nil {
 		return
 	}
-
-	// 失败转移：最多尝试该 provider 的全部可用账号
-	var lastStatus int
-	var lastBody []byte
-	var lastErr *provider.Error
-	tried := map[string]bool{}
-	for {
-		a, perr := g.pool.Pick(pid)
-		if perr != nil {
-			break
-		}
-		if tried[a.UID] {
-			break // 一轮已过
-		}
-		tried[a.UID] = true
-		// 临期 token 刷新
-		if _, terr := g.pool.EnsureFreshToken(r.Context(), a); terr != nil {
-			lastErr = provider.AsError(terr)
-			continue
-		}
-		res, cerr := pr.ChatStream(r.Context(), a, mname, body)
-		if cerr != nil {
-			g.pool.MarkError(a, cerr)
-			lastErr = provider.AsError(cerr)
-			continue
-		}
-		if res.Err != nil || res.Status >= 400 {
-			if res.Err != nil {
-				g.pool.MarkError(a, res.Err)
-				lastErr = res.Err
-			}
-			if res.Body != nil {
-				res.Body.Close()
-			}
-			lastStatus, lastBody = res.Status, res.RespBody
-			continue
-		}
-		// 成功：流式/非流式写出 + 记账
-		g.pool.MarkSuccess(a)
-		if pid == "qwen" && g.qwenProv != nil {
-			g.qwenProv.CountRequest(a.UID)
-		}
-		g.serve(w, r, res, pid, a.UID, cr.Model, cr.Stream)
-		return
-	}
-	// 全账号失败
-	msg := "上游调用失败"
-	if lastErr != nil {
-		msg = lastErr.Error()
-	} else if len(lastBody) > 0 {
-		msg = string(lastBody[:min(300, len(lastBody))])
-	}
-	status := http.StatusBadGateway
-	if lastStatus > 0 {
-		status = lastStatus
-	}
-	writeErr(w, status, "upstream_error", msg)
+	res := &provider.ChatResult{Body: st.body, ContentType: "text/event-stream"}
+	g.serve(w, r, res, st.pid, st.acct.UID, route.Public, cr.Stream)
 }
 
 // serve 写出响应并提取 usage 落账。

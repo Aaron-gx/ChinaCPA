@@ -21,6 +21,7 @@ import (
 	"chinacpa/internal/gateway"
 	"chinacpa/internal/model"
 	"chinacpa/internal/pool"
+	"chinacpa/internal/pubmodel"
 	"chinacpa/internal/scheduler"
 	"chinacpa/internal/store"
 	"chinacpa/internal/usage"
@@ -36,6 +37,7 @@ type Panel struct {
 	st    *store.Store
 	usage *usage.Tracker
 	sched *scheduler.Scheduler
+	pub   *pubmodel.Manager
 
 	mu       sync.Mutex
 	sessions map[string]*model.LoginSession // login session id -> session
@@ -43,20 +45,31 @@ type Panel struct {
 }
 
 type loginTicket struct {
-	provider string
-	session  *model.LoginSession
-	result   *model.PollResult
-	done     bool
+	provider  string
+	session   *model.LoginSession
+	result    *model.PollResult
+	done      bool
+	createdAt time.Time
+}
+
+// purgeTicketsLocked 清理过期登录票据（调用方持锁，30 分钟）。
+func (p *Panel) purgeTicketsLocked() {
+	for id, t := range p.tokens {
+		if time.Since(t.createdAt) > 30*time.Minute {
+			delete(p.tokens, id)
+		}
+	}
 }
 
 // New 构造。
-func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sched *scheduler.Scheduler) *Panel {
+func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sched *scheduler.Scheduler, pub *pubmodel.Manager) *Panel {
 	return &Panel{
 		cfg:     cfg,
 		pool:    p,
 		st:      st,
 		usage:   u,
 		sched:   sched,
+		pub:     pub,
 		sessions: map[string]*model.LoginSession{},
 		tokens:   map[string]*loginTicket{},
 	}
@@ -79,6 +92,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 	mux.HandleFunc("/api/import", p.authed(p.handleImport))
 	mux.HandleFunc("/api/usage", p.authed(p.handleUsage))
 	mux.HandleFunc("/api/checkin_all", p.authed(p.handleCheckinAll))
+	mux.HandleFunc("/api/publish", p.authed(p.handlePublish))
 }
 
 // ── 面板鉴权 ─────────────────────────────────────────────
@@ -425,8 +439,9 @@ func (p *Panel) handleLoginStart(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	t := &loginTicket{provider: body.Provider, session: s}
+	t := &loginTicket{provider: body.Provider, session: s, createdAt: time.Now()}
 	p.mu.Lock()
+	p.purgeTicketsLocked()
 	p.tokens[s.ID] = t
 	p.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -438,6 +453,7 @@ func (p *Panel) handleLoginPoll(w http.ResponseWriter, r *http.Request) {
 	provID := r.URL.Query().Get("provider")
 	id := r.URL.Query().Get("id")
 	p.mu.Lock()
+	p.purgeTicketsLocked()
 	t, ok := p.tokens[id]
 	p.mu.Unlock()
 	if !ok || t.provider != provID {
@@ -492,11 +508,22 @@ func (p *Panel) handleTraeCallback(w http.ResponseWriter, r *http.Request) {
 			log.Printf("PANEL: Trae 回调纳管 %s", res.Account.UID)
 		}
 	}
+	// 回调侧已纳管：把面板的 trae 登录票据直接标记完成，轮询立刻返回成功，
+	// 不再二次 AddAccount（也修掉「回调先到、轮询后到」时报会话过期的竞态）。
+	p.mu.Lock()
+	for _, tk := range p.tokens {
+		if tk.provider == "trae" && !tk.done {
+			tk.done, tk.result = true, res
+		}
+	}
+	p.mu.Unlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprint(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
-		`<meta http-equiv="refresh" content="2;url=/">`+
+		`<meta http-equiv="refresh" content="4;url=/">`+
 		`<style>body{background:#0d1117;color:#e6edf3;font-family:"Microsoft YaHei",sans-serif;padding:60px;text-align:center}a{color:#58a6ff}</style></head><body>`+
-		`<h3>✅ Trae 登录成功，账号已纳管</h3><p>2 秒后自动返回面板…</p><p><a href="/">立即返回</a></p></body></html>`)
+		`<h3>✅ Trae 登录成功，账号已纳管</h3><p>正在返回面板…（本页 4 秒后自动跳转）</p><p><a href="/">立即返回</a></p>`+
+		`<script>try{if(window.opener){window.opener.postMessage({type:'ccpa:login-done'},location.origin);setTimeout(function(){window.close()},600)}}catch(e){}</script>`+
+		`</body></html>`)
 }
 
 func (p *Panel) traeProvider() traeProviderIface {
@@ -574,6 +601,36 @@ func contextWithTimeout(parent context.Context, d time.Duration) context.Context
 	ctx, cancel := context.WithTimeout(parent, d)
 	_ = cancel // 请求结束即释放
 	return ctx
+}
+
+// ── 发布模型（对外模型 → 多渠道） ────────────────────────
+
+// handlePublish 发布模型配置读写：GET 返回配置，POST 保存并热生效。
+func (p *Panel) handlePublish(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, p.pub.Get())
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET/POST only"})
+		return
+	}
+	var cfg pubmodel.Config
+	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体不是合法 JSON"})
+		return
+	}
+	if err := p.pub.Save(&cfg); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	// 计价热生效（发布模型单价优先于 pricing.json）
+	pub := map[string]usage.PubPrice{}
+	for k, v := range p.pub.PricingMap() {
+		pub[strings.ToLower(k)] = usage.PubPrice{Input: v.Input, Output: v.Output}
+	}
+	p.usage.SetPublishedPricing(pub, p.pub.USDCNY())
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(p.pub.Get().Models)})
 }
 
 // ── 工具 ─────────────────────────────────────────────────

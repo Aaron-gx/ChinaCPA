@@ -35,6 +35,15 @@ type Tracker struct {
 	pricingMu sync.Mutex
 	pricing   *Pricing
 	pricingAt string
+	// pubPricing 发布模型单价（面板设置，优先于 pricing 文件）；pubUSDCNY 同步覆盖汇率
+	pubPricing map[string]PubPrice
+	pubUSDCNY  float64
+}
+
+// PubPrice 发布模型单价条目（$/1M tokens）。
+type PubPrice struct {
+	Input  float64
+	Output float64
 }
 
 type agg struct {
@@ -285,15 +294,49 @@ func defaultPricing() *Pricing {
 	}
 }
 
-// Cost 估算一段用量的费用（人民币元）。
+// SetPublishedPricing 注入发布模型单价（面板保存时调用）；usdcny>0 时同步覆盖汇率。
+func (t *Tracker) SetPublishedPricing(m map[string]PubPrice, usdcny float64) {
+	t.pricingMu.Lock()
+	defer t.pricingMu.Unlock()
+	t.pubPricing = m
+	if usdcny > 0 {
+		t.pubUSDCNY = usdcny
+	} else {
+		t.pubUSDCNY = 0
+	}
+}
+
+// PublishedPricing 当前发布模型单价（面板展示用）。
+func (t *Tracker) PublishedPricing() map[string]PubPrice {
+	t.pricingMu.Lock()
+	defer t.pricingMu.Unlock()
+	out := make(map[string]PubPrice, len(t.pubPricing))
+	for k, v := range t.pubPricing {
+		out[k] = v
+	}
+	return out
+}
+
+// Cost 估算一段用量的费用（人民币元）。发布模型单价优先，其次 pricing 文件/内置价。
 func (t *Tracker) Cost(model string, prompt, completion int64) float64 {
 	t.pricingMu.Lock()
 	p := t.pricing
+	pub := t.pubPricing
+	pubCNY := t.pubUSDCNY
 	t.pricingMu.Unlock()
+	name := normalizeModel(model)
+	if pp, ok := pub[strings.ToLower(name)]; ok {
+		cny := pubCNY
+		if cny <= 0 {
+			cny = 7.1
+		}
+		usd := float64(prompt)/1e6*pp.Input + float64(completion)/1e6*pp.Output
+		return usd * cny
+	}
 	if p == nil {
 		return 0
 	}
-	mp, ok := p.Models[normalizeModel(model)]
+	mp, ok := p.Models[name]
 	if !ok {
 		return 0
 	}
@@ -301,10 +344,13 @@ func (t *Tracker) Cost(model string, prompt, completion int64) float64 {
 	return usd * p.USDCNY
 }
 
-// USDCNY 当前汇率。
+// USDCNY 当前汇率（发布模型配置的优先）。
 func (t *Tracker) USDCNY() float64 {
 	t.pricingMu.Lock()
 	defer t.pricingMu.Unlock()
+	if t.pubUSDCNY > 0 {
+		return t.pubUSDCNY
+	}
 	if t.pricing == nil {
 		return 7.1
 	}
