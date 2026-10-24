@@ -93,6 +93,7 @@ func New() *Provider {
 		http:       &http.Client{Timeout: 120 * time.Second, Transport: tr},
 		streamHTTP: &http.Client{Transport: tr},
 		sessions:   map[string]*loginPending{},
+		catalog:    map[string]string{},
 	}
 }
 
@@ -789,6 +790,9 @@ func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelI
 		return nil, fmt.Errorf("模型表为空（两个 scene 均失败）")
 	}
 	p.catalogMu.Lock()
+	if p.catalog == nil {
+		p.catalog = map[string]string{}
+	}
 	for k, v := range scenes {
 		p.catalog[k] = v
 	}

@@ -143,6 +143,7 @@ func (p *Panel) handleIndex(w http.ResponseWriter, r *http.Request) {
 // ── 总览（仪表板数据） ───────────────────────────────────
 
 func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(contextWithTimeout(r.Context(), 45*time.Second))
 	type acctView struct {
 		Provider      string             `json:"provider"`
 		ProviderName  string             `json:"provider_name"`
@@ -343,6 +344,7 @@ func (p *Panel) handleCheckinAll(w http.ResponseWriter, r *http.Request) {
 // ── 模型列表 ─────────────────────────────────────────────
 
 func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(contextWithTimeout(r.Context(), 60*time.Second))
 	force := r.URL.Query().Get("refresh") == "1"
 	type mv struct {
 		ID          string `json:"id"`
@@ -565,6 +567,13 @@ func (p *Panel) handleUsage(w http.ResponseWriter, r *http.Request) {
 		"today":   p.usage.TodayWithCost(),
 		"totals":  usage.Sum(p.usage.TodayWithCost()),
 	})
+}
+
+// contextWithTimeout 上游拉取兜底超时。
+func contextWithTimeout(parent context.Context, d time.Duration) context.Context {
+	ctx, cancel := context.WithTimeout(parent, d)
+	_ = cancel // 请求结束即释放
+	return ctx
 }
 
 // ── 工具 ─────────────────────────────────────────────────

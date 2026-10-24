@@ -780,7 +780,9 @@ func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelI
 	if err := p.ensureFresh(ctx, b); err != nil {
 		return nil, err
 	}
-	raw, err := qauth.FetchModelCatalog(ctx, b.sess, b.region)
+	mctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	raw, err := qauth.FetchModelCatalog(mctx, b.sess, b.region)
 	if err != nil {
 		return nil, fmt.Errorf("模型目录获取失败: %w", err)
 	}
