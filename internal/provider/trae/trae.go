@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,6 +78,7 @@ type loginPending struct {
 	verifier   string
 	done       bool
 	failed     bool
+	exchanging bool // 回调已到，令牌交换进行中（防重复回调）
 	message    string
 	acct       *model.Account
 	createdAt  time.Time
@@ -266,6 +268,9 @@ func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model
 	if pend.done && pend.acct != nil {
 		return &model.PollResult{Status: model.LoginDone, Account: pend.acct}, nil
 	}
+	if pend.exchanging {
+		return &model.PollResult{Status: model.LoginPending, Message: "已收到授权回调，正在交换令牌并纳管…"}, nil
+	}
 	return &model.PollResult{Status: model.LoginPending, Message: "等待浏览器授权完成（成功后自动回调纳管）"}, nil
 }
 
@@ -383,6 +388,48 @@ func (p *Provider) HandleCallback(q url.Values) (*model.PollResult, error) {
 		}
 	}
 	p.mu.Unlock()
+	// 有 pending 会话：后台异步交换令牌（授权码交换+用户信息是多次网络调用，
+	// 同步做会让回调页面干等数十秒，浏览器表现像卡死），面板轮询会取到最终结果。
+	if pend != nil {
+		p.mu.Lock()
+		if pend.exchanging {
+			p.mu.Unlock()
+			return &model.PollResult{Status: model.LoginPending, Message: "已收到授权回调，正在交换令牌并纳管…"}, nil
+		}
+		pend.exchanging = true
+		p.mu.Unlock()
+		infoCopy, pendRef := info, pend
+		go func() {
+			var res *model.Account
+			var err error
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						err = fmt.Errorf("令牌交换异常: %v", r)
+					}
+				}()
+				res, err = p.finishCallback(pendRef, infoCopy)
+			}()
+			p.mu.Lock()
+			if err != nil {
+				pendRef.failed, pendRef.message, pendRef.finishedAt = true, err.Error(), time.Now()
+			} else {
+				pendRef.done, pendRef.acct, pendRef.finishedAt = true, res, time.Now()
+			}
+			p.mu.Unlock()
+		}()
+		return &model.PollResult{Status: model.LoginPending, Message: "已收到授权回调，正在交换令牌并纳管…"}, nil
+	}
+	// 无 pending（票据丢失，如服务重启后回调）：同步完成，账号仍可纳管
+	a, err := p.finishCallback(nil, info)
+	if err != nil {
+		return nil, err
+	}
+	return &model.PollResult{Status: model.LoginDone, Account: a}, nil
+}
+
+// finishCallback 交换令牌并构建账号（pend 为 nil 时不再写回 pending 状态）。
+func (p *Provider) finishCallback(pend *loginPending, info callbackInfo) (*model.Account, error) {
 	a := &model.Account{Provider: p.ID(), UID: info.UID, Nickname: info.Nickname, AuthHost: info.APIHost}
 	if pend != nil {
 		a.MachineID, a.DeviceID, a.DevicePrivateKey = pend.machine, pend.device, pend.deviceKey
@@ -396,7 +443,6 @@ func (p *Provider) HandleCallback(q url.Values) (*model.PollResult, error) {
 	case info.AuthCode != "":
 		a.RefreshClientID = clientID
 		if _, err := p.exchangeAuthCode(ctx, a, info.AuthCode, pendVerifier(pend)); err != nil {
-			p.failPending(pend, err.Error())
 			return nil, fmt.Errorf("授权码兑换失败: %w", err)
 		}
 	case info.RefreshToken != "":
@@ -405,7 +451,6 @@ func (p *Provider) HandleCallback(q url.Values) (*model.PollResult, error) {
 		a.ExpiresAt = info.ExpiresAt
 		a.RefreshClientID = legacyClientID
 		if _, err := p.refreshTokenExchange(ctx, a, true); err != nil {
-			p.failPending(pend, err.Error())
 			return nil, fmt.Errorf("令牌交换失败: %w", err)
 		}
 	default:
@@ -420,12 +465,7 @@ func (p *Provider) HandleCallback(q url.Values) (*model.PollResult, error) {
 	if a.UID == "" {
 		a.UID = "trae-" + hex16()
 	}
-	if pend != nil {
-		p.mu.Lock()
-		pend.done, pend.acct, pend.finishedAt = true, a, time.Now()
-		p.mu.Unlock()
-	}
-	return &model.PollResult{Status: model.LoginDone, Account: a}, nil
+	return a, nil
 }
 
 func pendVerifier(p *loginPending) string {
@@ -870,8 +910,8 @@ func (p *Provider) fetchScene(ctx context.Context, a *model.Account, scene strin
 	}
 	var resp struct {
 		ConfigInfoList []struct {
-			ConfigName            string `json:"config_name"`
-			DisplayConfig         struct {
+			ConfigName    string `json:"config_name"`
+			DisplayConfig struct {
 				DisplayName string `json:"display_name"`
 			} `json:"display_config"`
 			DisplayContactConfig json.RawMessage `json:"display_contact_config"`
@@ -950,6 +990,8 @@ func prepareBody(src []byte, modelName, scene string) []byte {
 	obj["function"] = scene
 	obj["config_name"] = modelName
 	obj["model"] = modelName
+	// Trae 上游 FunctionDefinition.parameters 只接受字符串，OpenAI 协议是对象
+	provider.NormalizeToolParamsString(obj)
 	if msgs, ok := obj["messages"].([]any); ok {
 		for _, mi := range msgs {
 			m, ok := mi.(map[string]any)
@@ -1012,8 +1054,17 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 		return &provider.ChatResult{Status: resp.StatusCode, RespBody: raw, Err: classify(resp.StatusCode, raw)}, nil
 	}
 	if wantStream {
+		var src io.ReadCloser = resp.Body
+		if df := os.Getenv("TRAE_DEBUG"); df != "" {
+			if f, err := os.OpenFile(df, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+				src = struct {
+					io.Reader
+					io.Closer
+				}{io.TeeReader(resp.Body, f), resp.Body}
+			}
+		}
 		return &provider.ChatResult{
-			Body:        newSoloToOpenAIStream(resp.Body, a.UID, p, modelName),
+			Body:        newSoloToOpenAIStream(src, a.UID, p, modelName),
 			ContentType: "text/event-stream",
 		}, nil
 	}

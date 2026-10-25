@@ -23,6 +23,7 @@ type Channel struct {
 type Pricing struct {
 	Input  float64 `json:"input"`
 	Output float64 `json:"output"`
+	Cache  float64 `json:"cache,omitempty"` // 缓存 token 单价（$/1M），0 = 缓存按输入价计
 }
 
 // Model 一个对外发布的模型。
@@ -45,6 +46,50 @@ type Manager struct {
 	mu   sync.RWMutex
 	file string
 	cfg  *Config
+
+	// stats 渠道调用计数（运行期，重启清零）：key = lower(pubID)|provider|model
+	statsMu sync.Mutex
+	stats   map[string]*ChanStat
+}
+
+// ChanStat 渠道成功/失败计数。
+type ChanStat struct {
+	OK   int64 `json:"ok"`
+	Fail int64 `json:"fail"`
+}
+
+func chanStatKey(pubID, provider, model string) string {
+	return strings.ToLower(strings.TrimSpace(pubID)) + "|" + provider + "|" + model
+}
+
+// BumpChannel 渠道调用计数 +1。
+func (m *Manager) BumpChannel(pubID, provider, model string, ok bool) {
+	m.statsMu.Lock()
+	defer m.statsMu.Unlock()
+	if m.stats == nil {
+		m.stats = map[string]*ChanStat{}
+	}
+	st := m.stats[chanStatKey(pubID, provider, model)]
+	if st == nil {
+		st = &ChanStat{}
+		m.stats[chanStatKey(pubID, provider, model)] = st
+	}
+	if ok {
+		st.OK++
+	} else {
+		st.Fail++
+	}
+}
+
+// ChannelStats 渠道计数快照。
+func (m *Manager) ChannelStats() map[string]ChanStat {
+	m.statsMu.Lock()
+	defer m.statsMu.Unlock()
+	out := map[string]ChanStat{}
+	for k, v := range m.stats {
+		out[k] = *v
+	}
+	return out
 }
 
 // Load 从文件加载；文件不存在返回空配置。

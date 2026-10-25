@@ -54,12 +54,12 @@ var ErrNotSupported = errors.New("此平台不支持该功能")
 // OpenAI 兼容流：rc 为已转换成 OpenAI SSE 的字节流（或非流式 JSON 原文），
 // 调用方负责 Close。Status/RespBody 仅在错误路径（HTTP >= 400）有值。
 type ChatResult struct {
-	Body         io.ReadCloser // 成功：响应体（SSE 或 JSON）
-	ContentType  string        // text/event-stream 或 application/json
-	Status       int           // >=400 时的上游状态码
-	RespBody     []byte        // >=400 时的上游响应体
-	Err          *Error        // 分类错误
-	UsageHook    func(line []byte) // SSE 行回调（网关提取 usage 用）
+	Body        io.ReadCloser     // 成功：响应体（SSE 或 JSON）
+	ContentType string            // text/event-stream 或 application/json
+	Status      int               // >=400 时的上游状态码
+	RespBody    []byte            // >=400 时的上游响应体
+	Err         *Error            // 分类错误
+	UsageHook   func(line []byte) // SSE 行回调（网关提取 usage 用）
 }
 
 // Provider 平台抽象。实现必须并发安全（账号对象由池串行传给单次调用）。

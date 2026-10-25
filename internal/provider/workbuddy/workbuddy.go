@@ -29,21 +29,21 @@ import (
 )
 
 const (
-	chatBaseCN        = "https://copilot.tencent.com"
-	billingBaseCN     = "https://www.codebuddy.cn"
-	webBaseCN         = "https://www.workbuddy.cn"
-	globalBase        = "https://www.workbuddy.ai"
-	clientVersion     = "5.5.4"
-	cliVersion        = "2.137.1"
-	originCN          = "https://www.codebuddy.cn"
-	originGlobal      = "https://www.workbuddy.ai"
+	chatBaseCN    = "https://copilot.tencent.com"
+	billingBaseCN = "https://www.codebuddy.cn"
+	webBaseCN     = "https://www.workbuddy.cn"
+	globalBase    = "https://www.workbuddy.ai"
+	clientVersion = "5.5.4"
+	cliVersion    = "2.137.1"
+	originCN      = "https://www.codebuddy.cn"
+	originGlobal  = "https://www.workbuddy.ai"
 )
 
 // Provider WorkBuddy 实现。
 type Provider struct {
 	http *http.Client
 	// loginSessions 面板登录会话（state -> session）
-	mu      sync.Mutex
+	mu       sync.Mutex
 	sessions map[string]*model.LoginSession
 }
 
@@ -325,11 +325,11 @@ func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model
 		return &model.PollResult{Status: model.LoginPending, Message: "等待授权完成"}, nil
 	}
 	a := &model.Account{
-		Provider:      p.ID(),
-		AccessToken:   tok.AccessToken,
-		RefreshToken:  tok.RefreshToken,
-		Domain:        tok.Domain,
-		ExpiresAt:     time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix(),
+		Provider:     p.ID(),
+		AccessToken:  tok.AccessToken,
+		RefreshToken: tok.RefreshToken,
+		Domain:       tok.Domain,
+		ExpiresAt:    time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix(),
 	}
 	// 拿 uid / nickname
 	areq, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v2/plugin/login/account?state="+s.State, nil)

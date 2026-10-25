@@ -95,11 +95,11 @@ type bridge struct {
 
 	machineID, machineToken, machineType, machineCode string
 
-	sess           *qauth.SessionContext
-	identity       *qauth.AuthIdentity
-	refreshToken   string
-	securityOauth  string
-	expireMs       int64
+	sess          *qauth.SessionContext
+	identity      *qauth.AuthIdentity
+	refreshToken  string
+	securityOauth string
+	expireMs      int64
 
 	openapiMu        sync.Mutex
 	openapiBearer    string
@@ -124,7 +124,7 @@ func New(realm string) *Provider {
 	}
 }
 
-func (p *Provider) ID() string          { return p.id }
+func (p *Provider) ID() string { return p.id }
 func (p *Provider) DisplayName() string {
 	if p.realm == "intl" {
 		return "Qoder 国际版（qoder.com）"
@@ -202,15 +202,15 @@ func (p *Provider) bridgeOf(a *model.Account) *bridge {
 		codeSum := md5.Sum([]byte("machinecode:" + a.UID))
 		identity := qauth.AuthIdentity{
 			Name: a.Nickname, Aid: a.UID, UID: a.UID,
-			UserType: "personal_professional_trial",
+			UserType:           "personal_professional_trial",
 			SecurityOauthToken: a.AccessToken,
 			RefreshToken:       a.RefreshToken,
 		}
 		b := &bridge{
 			region: region, source: "oauth", acct: a,
 			machineID: id, machineToken: token, machineType: typ,
-			machineCode: hex.EncodeToString(codeSum[:]),
-			identity: &identity,
+			machineCode:   hex.EncodeToString(codeSum[:]),
+			identity:      &identity,
 			securityOauth: a.AccessToken, refreshToken: a.RefreshToken,
 			expireMs: a.ExpiresAt * 1000,
 		}
@@ -266,9 +266,9 @@ func applyJobToken(b *bridge, jt map[string]interface{}) {
 	}
 	identity := qauth.AuthIdentity{
 		Name: name, Aid: id, UID: id,
-		UserType:         "personal_standard",
+		UserType:           "personal_standard",
 		SecurityOauthToken: securityOauth,
-		RefreshToken:     refreshToken,
+		RefreshToken:       refreshToken,
 	}
 	b.sess = qauth.NewSession(identity, b.machineID, b.machineToken, b.machineType)
 	b.identity = &identity
@@ -404,14 +404,14 @@ func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model
 		}
 	}
 	a := &model.Account{
-		Provider:      p.ID(),
-		UID:           uid,
-		Nickname:      nickname,
-		Realm:         p.realm,
-		Source:        "oauth",
-		AccessToken:   token,
-		RefreshToken:  data.RefreshToken,
-		ExpiresAt:     expiresAt,
+		Provider:     p.ID(),
+		UID:          uid,
+		Nickname:     nickname,
+		Realm:        p.realm,
+		Source:       "oauth",
+		AccessToken:  token,
+		RefreshToken: data.RefreshToken,
+		ExpiresAt:    expiresAt,
 	}
 	p.mu.Lock()
 	delete(p.logins, s.ID)
@@ -997,10 +997,14 @@ func buildChatBody(openAIBody []byte, modelName string) map[string]any {
 			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
-		Tools         json.RawMessage `json:"tools"`
-		MaxTokens     *int64          `json:"max_tokens"`
-		Temperature   *float64        `json:"temperature"`
-		TopP          *float64        `json:"top_p"`
+		Tools            json.RawMessage `json:"tools"`
+		MaxTokens        *int64          `json:"max_tokens"`
+		Temperature      *float64        `json:"temperature"`
+		TopP             *float64        `json:"top_p"`
+		EnableThinking   *bool           `json:"enable_thinking"`
+		PresencePenalty  *float64        `json:"presence_penalty"`
+		FrequencyPenalty *float64        `json:"frequency_penalty"`
+		Seed             *int64          `json:"seed"`
 	}
 	_ = json.Unmarshal(openAIBody, &req)
 
@@ -1041,9 +1045,22 @@ func buildChatBody(openAIBody []byte, modelName string) map[string]any {
 	if req.TopP != nil {
 		parameters["top_p"] = *req.TopP
 	}
+	// 采样/思考开关等参数透传（客户端可带 enable_thinking:false 关闭推理烧输出预算）
+	if req.EnableThinking != nil {
+		parameters["enable_thinking"] = *req.EnableThinking
+	}
+	if req.PresencePenalty != nil {
+		parameters["presence_penalty"] = *req.PresencePenalty
+	}
+	if req.FrequencyPenalty != nil {
+		parameters["frequency_penalty"] = *req.FrequencyPenalty
+	}
+	if req.Seed != nil {
+		parameters["seed"] = *req.Seed
+	}
 	tools := json.RawMessage("[]")
 	if len(req.Tools) > 0 && string(req.Tools) != "null" {
-		tools = req.Tools
+		tools = req.Tools // Qoder 网关接受标准 OpenAI 形态（数组 + 对象参数），勿改写
 	}
 	name := prompt
 	if len(name) > 40 {

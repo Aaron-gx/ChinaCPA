@@ -111,8 +111,8 @@ func (s *Store) LoadAccounts() ([]*model.Account, error) {
 // ── 状态（额度快照 + 签到历史） ───────────────────────────
 
 type stateFile struct {
-	Quotas     map[string]*model.QuotaInfo      `json:"quotas"`
-	CheckinLog map[string]model.CheckinResult   `json:"checkin_log"`
+	Quotas     map[string]*model.QuotaInfo    `json:"quotas"`
+	CheckinLog map[string]model.CheckinResult `json:"checkin_log"`
 }
 
 func (s *Store) statePath() string { return filepath.Join(s.dir, "state.json") }

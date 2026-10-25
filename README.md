@@ -87,7 +87,7 @@ go build -o chinacpa.exe ./cmd/chinacpa
 ```
 
 客户端直接 `{"model":"gpt-5"}` 调用即可；配置了发布模型后 `/v1/models` 只返回已发布模型。
-各平台原始模型仍可 `平台:模型` 直连（内部模型库在面板中折叠展示）。
+各平台原始模型仍可 `平台:模型` 直连（面板「各平台模型 · 计价倍率」区可查全部原始模型与 credits 系数）。
 
 **Codex CLI 接入**（`~/.codex/config.toml`）：
 

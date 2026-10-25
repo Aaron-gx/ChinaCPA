@@ -4,6 +4,7 @@ package trae
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ type soloToOpenAIStream struct {
 	id       string
 	created  int64
 	curEvent string // 当前事件名（event: 行设置，data: 行消费）
+	hasTools bool   // 本次流出现过 tool_calls（done 时修正 finish_reason）
 }
 
 func newSoloToOpenAIStream(src io.ReadCloser, uid string, p *Provider, modelName string) *soloToOpenAIStream {
@@ -131,6 +133,45 @@ func (s *soloToOpenAIStream) handleEvent(evName string, dataLine string) []byte 
 		if v, ok := raw["reasoning_content"].(string); ok && v != "" {
 			delta["reasoning_content"] = v
 		}
+		// SOLO 工具调用流式增量（function_call 老式形状）→ OpenAI tool_calls delta
+		if tcs, ok := raw["tool_calls"].([]any); ok && len(tcs) > 0 {
+			var ocs []any
+			for _, tci := range tcs {
+				tc, ok := tci.(map[string]any)
+				if !ok {
+					continue
+				}
+				oc := map[string]any{}
+				if v, ok := tc["id"].(string); ok && v != "" {
+					oc["id"] = v
+				}
+				if v, ok := tc["type"].(string); ok && v != "" {
+					oc["type"] = v
+				}
+				if idx, ok := tc["index"].(float64); ok {
+					oc["index"] = int(idx)
+				}
+				if fc, ok := tc["function_call"].(map[string]any); ok {
+					fn := map[string]any{}
+					if v, ok := fc["name"].(string); ok && v != "" {
+						fn["name"] = v
+					}
+					if v, ok := fc["arguments"].(string); ok && v != "" {
+						fn["arguments"] = v
+					}
+					if len(fn) > 0 {
+						oc["function"] = fn
+					}
+				}
+				if len(oc) > 0 {
+					ocs = append(ocs, oc)
+				}
+			}
+			if len(ocs) > 0 {
+				delta["tool_calls"] = ocs
+				s.hasTools = true
+			}
+		}
 		if len(delta) > 0 {
 			out = append(out, sseWrap(s.chunk(delta, nil, nil))...)
 		}
@@ -164,16 +205,24 @@ func (s *soloToOpenAIStream) handleEvent(evName string, dataLine string) []byte 
 		} else {
 			finish = "stop"
 		}
+		if s.hasTools && finish == "stop" {
+			finish = "tool_calls" // OpenAI 语义：有工具调用时 finish 应为 tool_calls
+		}
 		out = append(out, sseWrap(s.chunk(map[string]any{}, finish, nil))...)
 		out = append(out, []byte("data: [DONE]\n\n")...)
 		s.done = true
 		s.src.Close()
 	case "error":
-		msg := "upstream error"
+		msg := ""
 		if v, ok := raw["message"].(string); ok {
 			msg = v
 		} else if v, ok := raw["error"].(string); ok {
 			msg = v
+		}
+		if msg == "" {
+			// 上游未给错误详情：附带原始报文便于排查
+			rawBytes, _ := json.Marshal(raw)
+			msg = "upstream error (raw: " + string(rawBytes) + ")"
 		}
 		errObj, _ := json.Marshal(map[string]any{"error": map[string]any{"message": msg, "type": "upstream_error"}})
 		out = append(out, []byte("data: "+string(errObj)+"\n\n")...)
@@ -190,6 +239,13 @@ func sseWrap(chunk []byte) []byte {
 
 func (s *soloToOpenAIStream) Close() error { return s.src.Close() }
 
+// aggTool 非流式聚合中的工具调用累积。
+type aggTool struct {
+	id   string
+	name string
+	args string
+}
+
 // aggregateSolo 非流式：聚合 SOLO SSE 为完整 OpenAI 响应 JSON。
 func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([]byte, error) {
 	sc := bufio.NewScanner(body)
@@ -199,6 +255,8 @@ func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([
 	var finish = "stop"
 	errMsg := ""
 	evName := ""
+	aggTools := map[string]*aggTool{}
+	var toolOrder []string
 	for sc.Scan() {
 		line := strings.TrimRight(sc.Text(), "\r")
 		if strings.HasPrefix(line, "event:") {
@@ -223,6 +281,33 @@ func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([
 			}
 			if v, ok := raw["reasoning_content"].(string); ok {
 				reasoning.WriteString(v)
+			}
+			if tcs, ok := raw["tool_calls"].([]any); ok {
+				for _, tci := range tcs {
+					tc, ok := tci.(map[string]any)
+					if !ok {
+						continue
+					}
+					fc, _ := tc["function_call"].(map[string]any)
+					name, _ := fc["name"].(string)
+					args, _ := fc["arguments"].(string)
+					id, _ := tc["id"].(string)
+					key := "0"
+					if idx, ok := tc["index"].(float64); ok {
+						key = fmt.Sprintf("%d", int(idx))
+					}
+					agg := aggTools[key]
+					if agg == nil {
+						agg = &aggTool{}
+						aggTools[key] = agg
+						toolOrder = append(toolOrder, key)
+					}
+					if id != "" {
+						agg.id = id
+					}
+					agg.name += name
+					agg.args += args
+				}
 			}
 		case "token_usage":
 			if v, ok := raw["prompt_tokens"].(float64); ok {
@@ -260,6 +345,30 @@ func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([
 	if reasoning.Len() > 0 {
 		msg["reasoning_content"] = reasoning.String()
 	}
+	var toolCalls []any
+	for _, k := range toolOrder {
+		agg := aggTools[k]
+		if agg == nil || agg.name == "" {
+			continue
+		}
+		toolCalls = append(toolCalls, map[string]any{
+			"id":   agg.id,
+			"type": "function",
+			"function": map[string]any{
+				"name":      agg.name,
+				"arguments": agg.args,
+			},
+		})
+	}
+	if len(toolCalls) > 0 {
+		msg["tool_calls"] = toolCalls
+		if content.Len() == 0 {
+			msg["content"] = nil
+		}
+		if finish == "stop" {
+			finish = "tool_calls"
+		}
+	}
 	resp := map[string]any{
 		"id":      "chatcmpl-" + hex16(),
 		"object":  "chat.completion",
@@ -276,6 +385,3 @@ func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([
 }
 
 // ── 工具 ─────────────────────────────────────────────────
-
-
-

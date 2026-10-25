@@ -33,8 +33,8 @@ type Account struct {
 	// Source 凭证类型（qoder：pat / oauth），影响会话构建方式
 	Source string `json:"source,omitempty"`
 
-	Disabled bool  `json:"disabled,omitempty"`
-	CreatedAt int64 `json:"created_at,omitempty"`
+	Disabled   bool  `json:"disabled,omitempty"`
+	CreatedAt  int64 `json:"created_at,omitempty"`
 	LastUsedAt int64 `json:"last_used_at,omitempty"`
 }
 
@@ -45,11 +45,11 @@ type QuotaInfo struct {
 
 	// 归一化剩余额度：Used/Limit/Remaining 用各自平台主单位
 	Used      float64 `json:"used"`
-	Limit     float64 `json:"limit"`    // <=0 = 未知/无固定上限
+	Limit     float64 `json:"limit"` // <=0 = 未知/无固定上限
 	Remaining float64 `json:"remaining"`
-	Unit      string  `json:"unit"`     // credits / requests/day / ide_credits
-	Daily     bool    `json:"daily"`    // 是否每日重置
-	Healthy   bool    `json:"healthy"`  // Remaining > 0 或未知
+	Unit      string  `json:"unit"`    // credits / requests/day / ide_credits
+	Daily     bool    `json:"daily"`   // 是否每日重置
+	Healthy   bool    `json:"healthy"` // Remaining > 0 或未知
 
 	// WorkBuddy：积分余额
 	Credits int64 `json:"credits,omitempty"`
@@ -59,7 +59,7 @@ type QuotaInfo struct {
 	// Qwen：本地计数的今日请求数（对照每日上限）
 	RequestsUsedToday int64 `json:"requests_used_today,omitempty"`
 
-	Detail   map[string]any `json:"detail,omitempty"`
+	Detail    map[string]any `json:"detail,omitempty"`
 	FetchedAt int64          `json:"fetched_at"`
 }
 
@@ -73,23 +73,23 @@ type CheckinResult struct {
 
 // ModelInfo 模型条目。
 type ModelInfo struct {
-	ID            string `json:"id"`
-	Provider      string `json:"provider"`
-	Name          string `json:"name,omitempty"`
-	Description   string `json:"description,omitempty"`
-	ContextWindow int64  `json:"context_window,omitempty"`
-	MaxTokens     int64  `json:"max_tokens,omitempty"`
-	SupportsTools bool   `json:"supports_tools,omitempty"`
-	SupportsImages bool  `json:"supports_images,omitempty"`
-	Credits       string `json:"credits,omitempty"` // WorkBuddy 计价倍率原文
+	ID             string `json:"id"`
+	Provider       string `json:"provider"`
+	Name           string `json:"name,omitempty"`
+	Description    string `json:"description,omitempty"`
+	ContextWindow  int64  `json:"context_window,omitempty"`
+	MaxTokens      int64  `json:"max_tokens,omitempty"`
+	SupportsTools  bool   `json:"supports_tools,omitempty"`
+	SupportsImages bool   `json:"supports_images,omitempty"`
+	Credits        string `json:"credits,omitempty"` // WorkBuddy 计价倍率原文
 }
 
 // LoginSession 一次登录会话（面板发起，浏览器完成，面板轮询结果）。
 type LoginSession struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
-	URL      string `json:"url"`                  // 用户在浏览器打开的授权地址
-	UserCode string `json:"user_code,omitempty"`  // Qwen 设备码展示
+	URL      string `json:"url"`                 // 用户在浏览器打开的授权地址
+	UserCode string `json:"user_code,omitempty"` // Qwen 设备码展示
 
 	// 内部轮询上下文（不序列化到面板响应）
 	DeviceCode   string `json:"-"`

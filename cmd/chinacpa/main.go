@@ -21,6 +21,7 @@ import (
 	"chinacpa/internal/provider/trae"
 	"chinacpa/internal/provider/workbuddy"
 	"chinacpa/internal/pubmodel"
+	"chinacpa/internal/reqlog"
 	"chinacpa/internal/scheduler"
 	"chinacpa/internal/store"
 	"chinacpa/internal/usage"
@@ -79,7 +80,7 @@ func main() {
 	pl.SetPublished(pub)
 	pubPrices := map[string]usage.PubPrice{}
 	for k, v := range pub.PricingMap() {
-		pubPrices[k] = usage.PubPrice{Input: v.Input, Output: v.Output}
+		pubPrices[k] = usage.PubPrice{Input: v.Input, Output: v.Output, Cache: v.Cache}
 	}
 	u.SetPublishedPricing(pubPrices, pub.USDCNY())
 	if n := len(pub.Get().Models); n > 0 {
@@ -93,12 +94,35 @@ func main() {
 		}
 	}
 
+	// 请求日志（bbolt 本地数据库，自动迁移历史 JSONL）
+	rl, err := reqlog.Open(filepath.Join(cfg.DataDir, "usage"))
+	if err != nil {
+		log.Fatalf("初始化请求日志失败: %v", err)
+	}
+	retentionDays := cfg.RequestLogDays
+	if retentionDays <= 0 {
+		retentionDays = 90
+	}
+	go func() {
+		cutoff := func() int64 { return time.Now().AddDate(0, 0, -retentionDays).Unix() }
+		if n, err := rl.DeleteBefore(cutoff()); err == nil && n > 0 {
+			log.Printf("请求日志清理 %d 条（保留 %d 天）", n, retentionDays)
+		}
+		t := time.NewTicker(6 * time.Hour)
+		for range t.C {
+			if n, err := rl.DeleteBefore(cutoff()); err == nil && n > 0 {
+				log.Printf("请求日志清理 %d 条", n)
+			}
+		}
+	}()
+
 	// gateway + scheduler + panel
 	gw := gateway.New(pl, u)
 	gw.SetQwenCounter(qw)
+	gw.SetReqLog(rl)
 	sched := scheduler.New(cfg, pl, st)
 	sched.Start()
-	pn := panel.New(cfg, pl, st, u, sched, pub)
+	pn := panel.New(cfg, pl, st, u, sched, pub, rl)
 
 	mux := http.NewServeMux()
 	pn.Register(mux, gw)

@@ -16,6 +16,7 @@
   --shadow-lift:0 2px 4px rgba(31,30,29,.06),0 8px 24px rgba(31,30,29,.08);
   --serif:Georgia,"Times New Roman","Noto Serif SC","SimSun",serif;
   --sans:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+  --side-w:216px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
@@ -32,17 +33,32 @@ a:hover{text-decoration:underline}
 @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* ── 布局 ─────────────────────────────── */
-.container{max-width:1180px;margin:0 auto;padding:0 24px 60px}
-header{position:sticky;top:0;z-index:20;display:flex;justify-content:space-between;align-items:center;
-  padding:15px 0;margin-bottom:26px;gap:12px;flex-wrap:wrap;
-  background:rgba(250,249,245,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--border)}
-.brand{display:flex;align-items:center;gap:12px}
-.brand .mark{width:28px;height:28px;flex:none;color:var(--accent);animation:fadeUp .6s both}
-.brand h1{font-family:var(--serif);font-size:21px;font-weight:600;letter-spacing:.2px;animation:fadeUp .6s .05s both}
-.brand h1 em{font-style:normal;color:var(--accent)}
-.brand .sub{font-size:12px;color:var(--muted);margin-top:1px;animation:fadeUp .6s .1s both}
-.actions{display:flex;gap:8px;flex-wrap:wrap;animation:fadeUp .6s .15s both}
+/* ── 侧栏布局 ─────────────────────────── */
+#app{min-height:100vh}
+.sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--side-w);z-index:30;display:flex;flex-direction:column;
+  background:var(--card);border-right:1px solid var(--border);padding:20px 14px 16px}
+.side-brand{display:flex;align-items:center;gap:10px;padding:2px 8px 18px;border-bottom:1px solid var(--border);margin-bottom:14px}
+.side-brand .mark{width:26px;height:26px;flex:none;color:var(--accent)}
+.side-brand h1{font-family:var(--serif);font-size:17.5px;font-weight:600;letter-spacing:.2px;line-height:1.2}
+.side-brand h1 em{font-style:normal;color:var(--accent)}
+.side-brand .sub{font-size:11px;color:var(--muted);margin-top:1px}
+nav.side-nav{display:flex;flex-direction:column;gap:4px;flex:1}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 13px;border-radius:10px;cursor:pointer;
+  color:var(--text2);font-size:13.5px;transition:background .16s,color .16s;user-select:none;text-decoration:none}
+.nav-item .ico{width:17px;text-align:center;flex:none;font-size:14px}
+.nav-item:hover{background:var(--bg-soft);color:var(--text);text-decoration:none}
+.nav-item.active{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-badge{margin-left:auto;min-width:20px;text-align:center;font-size:11px;color:var(--muted);
+  background:var(--bg-soft);border-radius:99px;padding:1px 7px;font-variant-numeric:tabular-nums}
+.nav-item.active .nav-badge{color:var(--accent);background:#fff}
+.side-foot{border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:8px}
+.side-foot .btn{width:100%;text-align:center}
+
+.main{margin-left:var(--side-w);padding:24px 34px 60px;max-width:1480px}
+.view{display:none}
+.view.active{display:block;animation:fadeUp .35s both}
+.view-title{font-family:var(--serif);font-size:21px;font-weight:600;margin-bottom:18px;letter-spacing:.2px}
+.view-title .vt-sub{font-family:var(--sans);font-size:12px;color:var(--muted);font-weight:400;margin-left:10px}
 
 /* ── 按钮 ─────────────────────────────── */
 .btn{background:#fff;border:1px solid var(--border2);color:var(--text2);padding:6px 14px;border-radius:10px;
@@ -60,7 +76,7 @@ header{position:sticky;top:0;z-index:20;display:flex;justify-content:space-betwe
 
 /* ── 卡片与区块 ───────────────────────── */
 section{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:22px 24px;margin-bottom:22px;
-  box-shadow:var(--shadow);animation:fadeUp .55s both}
+  box-shadow:var(--shadow)}
 section h2{font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
   margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .h2-extra{font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;color:var(--faint)}
@@ -103,7 +119,7 @@ code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;bo
 
 /* ── 网关信息 ─────────────────────────── */
 .gwinfo{background:linear-gradient(135deg,#fff,#faf8f2);border:1px solid var(--border);border-radius:16px;
-  padding:18px 20px;margin-bottom:22px;font-size:13px;line-height:2;box-shadow:var(--shadow);animation:fadeUp .5s both}
+  padding:18px 20px;margin-bottom:22px;font-size:13px;line-height:2;box-shadow:var(--shadow)}
 .gwinfo .k{display:inline-flex;align-items:center;gap:6px;margin-right:8px;color:var(--accent);font-weight:600}
 
 /* ── 柱状图 ───────────────────────────── */
@@ -114,6 +130,67 @@ code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;bo
 .bar-col:hover .bar{filter:brightness(1.12) saturate(1.1)}
 .bar-val{font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 .bar-label{font-size:10.5px;color:var(--faint)}
+
+/* ── 横向条形图（模型用量） ─────────────── */
+.hbar-row{display:grid;grid-template-columns:minmax(140px,240px) 1fr minmax(150px,auto);gap:14px;align-items:center;
+  padding:7px 0;border-bottom:1px solid var(--border);animation:fadeUp .4s both;animation-delay:calc(var(--i)*50ms)}
+.hbar-row:last-child{border-bottom:none}
+.hbar-label{overflow:hidden;text-overflow:ellipsis}
+.hbar-track{height:14px;background:var(--bg-soft);border-radius:7px;overflow:hidden}
+.hbar-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));border-radius:7px;
+  transition:width .8s cubic-bezier(.22,.9,.28,1)}
+.hbar-meta{font-size:11.5px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* ── 签到概览 chips ────────────────────── */
+.chipwrap{display:flex;flex-wrap:wrap;gap:8px}
+.chip{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:99px;
+  padding:5px 14px 5px 16px;font-size:12.5px;background:#fff;animation:fadeUp .4s both;animation-delay:calc(var(--i)*40ms)}
+
+/* ── 请求日志 ─────────────────────────── */
+.req-toolbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:18px}
+.req-toolbar select{padding:6px 10px;font-size:12.5px}
+.req-charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-bottom:22px}
+.req-charts section{margin-bottom:0}
+.donut{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.donut svg{width:130px;height:130px;flex:none}
+.legend{display:flex;flex-direction:column;gap:6px;min-width:140px;flex:1}
+.legend .lg{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text2)}
+.legend .lg b{margin-left:auto;font-variant-numeric:tabular-nums}
+.legend .sw{width:9px;height:9px;border-radius:3px;flex:none}
+.chan-row{display:grid;grid-template-columns:minmax(130px,200px) minmax(150px,1fr) 90px 90px 1fr;gap:12px;align-items:center;
+  padding:8px 0;border-bottom:1px solid var(--border);font-size:13px;animation:fadeUp .4s both;animation-delay:calc(var(--i)*40ms)}
+.chan-row:last-child{border-bottom:none}
+.chan-row .rate-track{height:10px;background:var(--bg-soft);border-radius:5px;overflow:hidden}
+.chan-row .rate-fill{height:100%;background:linear-gradient(90deg,#7cae7f,#5c8a5e);border-radius:5px;transition:width .7s cubic-bezier(.22,.9,.28,1)}
+.chan-row .nums{font-variant-numeric:tabular-nums;font-size:12.5px}
+.chan-row .nums .ok{color:var(--green)}.chan-row .nums .fail{color:var(--red)}
+/* ── 请求明细卡片列表 ──────────────────── */
+.req-card{display:grid;grid-template-columns:minmax(240px,1.5fr) 76px minmax(130px,1fr) 130px minmax(150px,1fr) minmax(170px,1.1fr);
+  gap:16px;align-items:center;padding:13px 12px;border-bottom:1px solid var(--border);
+  animation:fadeUp .35s both;animation-delay:calc(min(var(--i),15)*25ms);transition:background .15s}
+.req-card:hover{background:var(--bg-soft)}
+.req-card:last-child{border-bottom:none}
+.pill-model{display:inline-flex;align-items:center;gap:7px;background:#fff;border:1px solid var(--border2);border-radius:99px;
+  padding:4px 13px;font-family:Consolas,monospace;font-size:12.5px;font-weight:600;max-width:100%;overflow:hidden}
+.pill-model svg{width:12px;height:12px;color:var(--muted);flex:none}
+.pill-model span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-reported{font-size:11.5px;margin-top:5px;display:flex;align-items:center;gap:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-reported.ok{color:var(--green)}.rc-reported.warn{color:var(--yellow)}
+.rc-time{font-size:11px;color:var(--faint);margin-top:4px}
+.rc-type{font-size:13.5px;font-weight:600;color:var(--teal)}
+.rc-type .mini{font-weight:400;font-variant-numeric:tabular-nums}
+.rc-io{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums}
+.rc-io .mini{font-weight:400}
+.cost-pill{display:inline-block;background:var(--bg-soft);border:1px solid var(--border);border-radius:99px;
+  padding:4px 13px;font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+.rc-lat{border-left:3px solid var(--accent2);padding-left:11px;font-size:12.5px;line-height:1.7}
+.rc-lat b{font-variant-numeric:tabular-nums}
+.req-att{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.5}
+.req-id{font-family:Consolas,monospace;font-size:10.5px;color:var(--faint);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:1100px){
+  .req-card{grid-template-columns:1fr 1fr;gap:8px 16px}
+  .rc-lat{border-left:none;padding-left:0}
+}
 
 /* ── 登录遮罩 ─────────────────────────── */
 #loginMask{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:99;
@@ -168,7 +245,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 .pub-card .name{font-family:Consolas,monospace;font-size:14.5px;font-weight:600;color:var(--text);word-break:break-all}
 .pub-card .note{color:var(--muted);font-size:12px;margin-top:3px}
 .pub-card .ops{display:flex;gap:4px;flex:none}
-.pub-card .price{display:flex;gap:14px;margin:12px 0;padding:8px 12px;background:var(--bg-soft);border-radius:10px;font-size:12px;color:var(--muted)}
+.pub-card .price{display:flex;flex-wrap:wrap;gap:6px 14px;margin:12px 0;padding:8px 12px;background:var(--bg-soft);border-radius:10px;font-size:12px;color:var(--muted)}
 .pub-card .price b{color:var(--text2);font-weight:600;font-variant-numeric:tabular-nums}
 .pub-card .chlabel{font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
 .ch-list{display:flex;flex-direction:column;gap:6px}
@@ -191,15 +268,6 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 .tab:hover{color:var(--text);background:var(--bg-soft)}
 .tab.active{color:var(--accent);background:var(--accent-soft);border-color:#eccdbd;font-weight:500}
 
-/* ── 折叠内部模型库 ────────────────────── */
-details.lib{border-top:1px solid var(--border);margin-top:18px;padding-top:14px}
-details.lib summary{cursor:pointer;color:var(--muted);font-size:12.5px;user-select:none;list-style:none;
-  display:flex;align-items:center;gap:8px;transition:color .15s}
-details.lib summary:hover{color:var(--text)}
-details.lib summary::before{content:'▸';transition:transform .2s;color:var(--faint)}
-details.lib[open] summary::before{transform:rotate(90deg)}
-details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
-
 /* ── Toast ────────────────────────────── */
 #toast{position:fixed;bottom:26px;right:26px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--green);
   border-radius:12px;padding:12px 18px;display:none;z-index:100;font-size:13px;box-shadow:var(--shadow-lift);max-width:380px}
@@ -211,10 +279,17 @@ details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
 .muted{color:var(--muted)}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--border2);border-top-color:var(--accent);
   border-radius:50%;animation:spin .8s linear infinite;vertical-align:-2px}
-@media (max-width:640px){
-  .prov-grid{grid-template-columns:repeat(2,1fr)}
-  .ed-ch{grid-template-columns:1fr 1fr}
-  section{padding:16px}
+@media (max-width:860px){
+  :root{--side-w:0px}
+  .sidebar{position:static;width:auto;flex-direction:row;align-items:center;gap:10px;padding:10px 14px;border-right:none;border-bottom:1px solid var(--border)}
+  .side-brand{border:none;padding:0;margin:0}
+  .side-brand .sub{display:none}
+  nav.side-nav{flex-direction:row;overflow-x:auto;flex:1;gap:2px}
+  .nav-item{padding:6px 10px;font-size:12.5px;white-space:nowrap}
+  .nav-item .ico{display:none}
+  .side-foot{border:none;padding:0;flex-direction:row}
+  .side-foot .btn{width:auto}
+  .main{margin-left:0;padding:16px}
 }
 </style>
 </head>
@@ -235,68 +310,153 @@ details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
   </div>
 </div>
 
-<div class="container" id="main" style="display:none">
+<div id="app" style="display:none">
 
-  <header>
-    <div class="brand">
+  <aside class="sidebar">
+    <div class="side-brand">
       <svg class="mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6L5.6 18.4"/>
       </svg>
       <div>
-        <h1>ChinaCPA <em>·</em> 国产反代</h1>
-        <div class="sub">workbuddy · qwen · trae · qoder</div>
+        <h1>ChinaCPA <em>·</em></h1>
+        <div class="sub">国产反代网关</div>
       </div>
     </div>
-    <div class="actions">
-      <button class="btn sm" onclick="refreshAll(true)">↻ 刷新</button>
+    <nav class="side-nav">
+      <a class="nav-item active" data-view="dash" onclick="switchView('dash')"><span class="ico">◈</span>仪表板</a>
+      <a class="nav-item" data-view="accounts" onclick="switchView('accounts')"><span class="ico">☰</span>账号池<span class="nav-badge" id="navAccounts" style="display:none"></span></a>
+      <a class="nav-item" data-view="usage" onclick="switchView('usage')"><span class="ico">▤</span>用量统计</a>
+      <a class="nav-item" data-view="requests" onclick="switchView('requests')"><span class="ico">≡</span>请求日志</a>
+      <a class="nav-item" data-view="publish" onclick="switchView('publish')"><span class="ico">✳</span>模型发布<span class="nav-badge" id="navPublish" style="display:none"></span></a>
+      <a class="nav-item" data-view="models" onclick="switchView('models')"><span class="ico">%</span>模型倍率</a>
+    </nav>
+    <div class="side-foot">
+      <button class="btn sm" onclick="refreshAll(true)">↻ 刷新数据</button>
       <button class="btn sm" onclick="checkinAll()">⚡ 全部签到</button>
       <button class="btn sm primary" onclick="openAdd()">＋ 添加账号</button>
     </div>
-  </header>
+  </aside>
 
-  <div class="gwinfo" id="gwinfo"></div>
+  <main class="main">
 
-  <div class="cards" id="cards"></div>
+    <!-- 仪表板 -->
+    <div class="view active" id="view-dash">
+      <div class="view-title">仪表板<span class="vt-sub">实时额度与消耗统计</span></div>
+      <div class="gwinfo" id="gwinfo"></div>
+      <div class="cards" id="cards"></div>
+      <div class="cards" id="cards2"></div>
 
-  <section style="animation-delay:.15s">
-    <h2>账号池 <span class="h2-extra" id="acctCount"></span></h2>
-    <div class="tblwrap">
-    <table id="acctTable">
-      <thead><tr>
-        <th>平台</th><th>账号</th><th>剩余额度</th><th>额度明细</th><th>今日签到</th><th>Token 有效期</th><th>状态</th><th>操作</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
+      <section>
+        <h2>模型用量 · 今日（按调用模型）</h2>
+        <div id="modelBars"></div>
+      </section>
+
+      <section>
+        <h2>每日自动签到 <span class="h2-extra" id="checkinExtra"></span></h2>
+        <div class="chipwrap" id="checkinChips"></div>
+      </section>
+
+      <section>
+        <h2>渠道调用统计 <span class="h2-extra">发布模型各渠道成功 / 失败次数（含失败转移，重启清零）</span></h2>
+        <div id="chanStats"></div>
+      </section>
     </div>
-    <div class="empty" id="acctEmpty" style="display:none">暂无账号，点击右上角「添加账号」纳管第一个账号</div>
-  </section>
 
-  <section style="animation-delay:.2s">
-    <h2>今日用量 · 费用估算 <span class="h2-extra" id="usageSub"></span></h2>
-    <div class="tblwrap">
-    <table id="usageTable">
-      <thead><tr><th>模型</th><th>渠道</th><th>请求数</th><th>输入 tokens</th><th>输出 tokens</th><th>合计</th><th>估算费用</th></tr></thead>
-      <tbody></tbody>
-    </table>
+    <!-- 请求日志 -->
+    <div class="view" id="view-requests">
+      <div class="view-title">请求日志<span class="vt-sub" id="reqSub"></span></div>
+      <div class="req-toolbar">
+        <div class="tabs" style="margin:0" id="reqRanges">
+          <span class="tab active" data-r="today" onclick="setReqRange('today')">今日</span>
+          <span class="tab" data-r="yesterday" onclick="setReqRange('yesterday')">昨天</span>
+          <span class="tab" data-r="7d" onclick="setReqRange('7d')">近 7 天</span>
+          <span class="tab" data-r="30d" onclick="setReqRange('30d')">近 30 天</span>
+          <span class="tab" data-r="all" onclick="setReqRange('all')">全部</span>
+        </div>
+        <input id="reqModelFilter" placeholder="搜索模型…" style="width:180px" onkeydown="if(event.key==='Enter')setReqRange(REQ_RANGE)">
+        <select id="reqStatusFilter" onchange="setReqRange(REQ_RANGE)">
+          <option value="">全部状态</option>
+          <option value="ok">仅成功</option>
+          <option value="fail">仅失败</option>
+        </select>
+      </div>
+      <div class="cards" id="reqCards"></div>
+      <div class="req-charts">
+        <section><h2>模型分布</h2><div id="donutModels"></div></section>
+        <section><h2>线路分布</h2><div id="donutLines"></div></section>
+        <section><h2>状态分布</h2><div id="donutStatus"></div></section>
+      </div>
+      <section>
+        <h2>请求明细 <span class="h2-extra">含失败转移链路与响应模型校验</span></h2>
+        <div id="reqList"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+          <span class="mini" id="reqPageInfo"></span>
+          <span style="display:flex;gap:8px">
+            <button class="btn sm" id="reqPrev" onclick="reqPage(-1)">← 上一页</button>
+            <button class="btn sm" id="reqNext" onclick="reqPage(1)">下一页 →</button>
+          </span>
+        </div>
+      </section>
     </div>
-    <h2 style="margin-top:22px">近 7 日 token 消耗</h2>
-    <div class="bars" id="bars"></div>
-  </section>
 
-  <section id="pubSection" style="animation-delay:.25s">
-    <h2>模型发布 · 渠道归组
-      <span style="display:flex;gap:10px;align-items:center;font-weight:400;text-transform:none;letter-spacing:0">
-        <span class="h2-extra" style="display:flex;align-items:center;gap:4px">$1 = ¥<input id="usdCny" type="number" step="0.05" min="0" style="width:70px;padding:3px 8px;font-size:12px" onchange="saveUsdCny()"></span>
-        <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 新建模型</button>
-      </span>
-    </h2>
-    <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>（渠道间自动轮询 + 失败转移，渠道内多账号再轮询）。客户端写 <code>{"model":"发布模型名"}</code> 即可，单价用于费用估算。未配置发布模型时默认暴露全部内部模型。</div>
-    <div class="pub-grid" id="pubGrid"></div>
+    <!-- 账号池 -->
+    <div class="view" id="view-accounts">
+      <div class="view-title">账号池<span class="vt-sub" id="acctCount"></span></div>
+      <section>
+        <div class="tblwrap">
+        <table id="acctTable">
+          <thead><tr>
+            <th>平台</th><th>账号</th><th>剩余额度</th><th>已用</th><th>额度明细</th><th>今日签到</th><th>Token 有效期</th><th>状态</th><th>操作</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+        </div>
+        <div class="empty" id="acctEmpty" style="display:none">暂无账号，点击左下角「添加账号」纳管第一个账号</div>
+      </section>
+    </div>
 
-    <details class="lib" id="libDetails">
-      <summary>内部模型库（各平台自动拉取，添加渠道时可选择）</summary>
-      <div class="libbody">
-        <div style="margin-bottom:12px;display:flex;gap:10px;align-items:center"><button class="btn sm" onclick="loadModels(true)">↻ 强制刷新</button> <span class="hint" id="libHint"></span></div>
+    <!-- 用量统计 -->
+    <div class="view" id="view-usage">
+      <div class="view-title">用量统计<span class="vt-sub" id="usageSub"></span></div>
+      <section>
+        <h2>今日用量 · 费用估算</h2>
+        <div class="tblwrap">
+        <table id="usageTable">
+          <thead><tr><th>模型</th><th>渠道</th><th>请求数</th><th>输入 tokens</th><th>缓存命中</th><th>输出 tokens</th><th>合计</th><th>估算费用</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        </div>
+        <h2 style="margin-top:22px">近 7 日 token 消耗</h2>
+        <div class="bars" id="bars"></div>
+      </section>
+    </div>
+
+    <!-- 模型发布 -->
+    <div class="view" id="view-publish">
+      <div class="view-title">模型发布<span class="vt-sub">对外模型 → 多渠道归组</span></div>
+      <section>
+        <h2>发布列表
+          <span style="display:flex;gap:10px;align-items:center;font-weight:400;text-transform:none;letter-spacing:0">
+            <span class="h2-extra" style="display:flex;align-items:center;gap:4px">$1 = ¥<input id="usdCny" type="number" step="0.05" min="0" style="width:70px;padding:3px 8px;font-size:12px" onchange="saveUsdCny()"></span>
+            <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 新建模型</button>
+          </span>
+        </h2>
+        <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>（严格按优先级：始终先走第 1 个渠道，失败才切下一个；渠道内多账号按会话黏性分配（同一会话固定同一账号保上游缓存），国内/海外等渠道各自独立）。客户端写 <code>{"model":"发布模型名"}</code> 即可，单价（$/1M tokens）用于费用估算，缓存命中部分按缓存价计。未配置发布模型时默认暴露全部内部模型。</div>
+        <div class="pub-grid" id="pubGrid"></div>
+      </section>
+    </div>
+
+    <!-- 模型倍率 -->
+    <div class="view" id="view-models">
+      <div class="view-title">模型倍率<span class="vt-sub">各平台原始模型与 credits 系数</span></div>
+      <section>
+        <h2>各平台模型 · 计价倍率
+          <span style="display:flex;gap:10px;align-items:center;font-weight:400;text-transform:none;letter-spacing:0">
+            <span class="h2-extra" id="libHint"></span>
+            <button class="btn sm" onclick="loadModels(true)">↻ 强制刷新</button>
+          </span>
+        </h2>
+        <div class="hint" style="margin-bottom:14px">各平台自动拉取的原始模型与官方计价倍率（credits 系数，越低越省积分）。可直接 <code>平台:模型</code> 调用，或在「模型发布」里挂为渠道。</div>
         <div class="tabs" id="modelTabs"></div>
         <div class="tblwrap">
         <table id="modelTable">
@@ -304,9 +464,10 @@ details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
           <tbody></tbody>
         </table>
         </div>
-      </div>
-    </details>
-  </section>
+      </section>
+    </div>
+
+  </main>
 </div>
 
 <!-- 添加账号弹窗 -->
@@ -358,12 +519,13 @@ details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
     <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / gpt-5-codex / my-claude">
     <label class="f">备注（可选）</label>
     <input id="mmNote" style="width:100%" placeholder="显示在面板上的备注名">
-    <label class="f">单价（$/1M tokens，用于费用估算，留空不计价）</label>
+    <label class="f">单价（$/1M tokens，用于费用估算，留空不计价；缓存价未填时缓存按输入价计）</label>
     <div style="display:flex;gap:10px">
-      <div style="flex:1"><input id="mmIn" type="number" step="0.0001" min="0" style="width:100%" placeholder="输入单价，如 0.002"></div>
-      <div style="flex:1"><input id="mmOut" type="number" step="0.0001" min="0" style="width:100%" placeholder="输出单价，如 0.008"></div>
+      <div style="flex:1"><input id="mmIn" type="number" step="0.0001" min="0" style="width:100%" placeholder="输入价，如 0.002"></div>
+      <div style="flex:1"><input id="mmOut" type="number" step="0.0001" min="0" style="width:100%" placeholder="输出价，如 0.008"></div>
+      <div style="flex:1"><input id="mmCache" type="number" step="0.0001" min="0" style="width:100%" placeholder="缓存价，如 0.0002"></div>
     </div>
-    <label class="f">上游渠道（按优先级排列，轮询起点自动轮转 + 失败转移）</label>
+    <label class="f">上游渠道（按优先级排列：始终先走第 1 个，失败才切下一个；渠道内多账号按会话黏性分配）</label>
     <div id="mmChannels"></div>
     <button class="btn sm" onclick="addEdChannel()" style="margin-top:4px">＋ 添加渠道</button>
     <datalist id="chModels"></datalist>
@@ -379,7 +541,7 @@ details.lib .libbody{animation:fadeUp .35s both;padding-top:14px}
 
 <script>
 let OVERVIEW=null, MODELS=null, PUB={models:[],usd_cny:0}, MODEL_TAB='workbuddy', POLL_TIMER=null, CUR_LOGIN=null;
-let ED=null, ED_IDX=-1, TOAST_T=null;
+let ED=null, ED_IDX=-1, TOAST_T=null, CUR_VIEW='dash';
 const PROV_NAMES={workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际'};
 const PROV_TAG={workbuddy:'p-wb',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl'};
 const $=s=>document.querySelector(s);
@@ -408,6 +570,21 @@ function countUp(el,target,format){
   requestAnimationFrame(step);
 }
 
+/* ── 左侧栏视图切换 ───────────────────── */
+function switchView(v){
+  CUR_VIEW=v;
+  document.querySelectorAll('.view').forEach(el=>el.classList.remove('active'));
+  const target=$('#view-'+v);
+  if(target)target.classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===v));
+  if(history.hash!==('#'+v))history.replaceState(null,'','#'+v);
+  if(v==='requests')loadRequests();
+}
+function initFromHash(){
+  const v=(location.hash||'').replace('#','');
+  if(v&&$('#view-'+v))switchView(v);else switchView('dash');
+}
+
 function toast(msg,ok=true){
   const t=$('#toast');clearTimeout(TOAST_T);
   t.textContent=msg;t.className='show'+(ok?'':' err');
@@ -419,11 +596,11 @@ async function api(path,opts={}){
   return r.json();
 }
 
-function showLogin(){$('#loginMask').style.display='flex';$('#main').style.display='none'}
+function showLogin(){$('#loginMask').style.display='flex';$('#app').style.display='none'}
 async function doLogin(){
   const pw=$('#pwInput').value;
   const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw})});
-  if(r.ok){$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll(false);loadPublish()}else{toast('密码错误',false)}
+  if(r.ok){$('#loginMask').style.display='none';$('#app').style.display='block';initFromHash();refreshAll(false);loadPublish()}else{toast('密码错误',false)}
 }
 
 async function refreshAll(manual){
@@ -431,6 +608,7 @@ async function refreshAll(manual){
   try{
     const [ov,us]=await Promise.all([api('/api/overview'),api('/api/usage?days=7')]);
     OVERVIEW=ov;renderOverview(ov);renderUsage(us);loadModels(false);
+    if(CUR_VIEW==='requests')loadRequests();
     if(manual)toast('已刷新');
   }catch(e){if(e.message!=='未登录')console.warn(e)}
 }
@@ -438,15 +616,16 @@ async function refreshAll(manual){
 function renderOverview(o){
   const host=location.host;
   const pubLine=(PUB.models&&PUB.models.length)
-    ?`模型调用：<code>{"model":"${esc(PUB.models[0].id)}"}</code> 等 ${PUB.models.length} 个已发布模型（见「模型发布」区）`
+    ?`模型调用：<code>{"model":"${esc(PUB.models[0].id)}"}</code> 等 ${PUB.models.length} 个已发布模型（见「模型发布」）`
     :`模型调用：<code>{"model":"qwen:qwen3-coder-plus"}</code>（前缀 <code>workbuddy:</code> / <code>qwen:</code> / <code>trae:</code>，裸名自动匹配）`;
   $('#gwinfo').innerHTML=`
     <span class="k">✳ 三协议接入</span>地址 <code>http://${host}/v1</code>，密钥 <code>config.json api_key</code>
     <br>① OpenAI SDK / 通用：<code>POST /v1/chat/completions</code>　② Codex CLI：<code>POST /v1/responses</code>　③ Claude Code：<code>POST /v1/messages</code>
     <br>${pubLine}；上游直连可用 <code>provider:model</code>
     <br>Codex/Claude Code 模型名写死时，可配 config.json <code>model_aliases</code>，或在「模型发布」里建同名模型`;
-  $('#acctCount').textContent=`共 ${o.account_total} 个账号`;
+  const na=$('#navAccounts');na.textContent=o.account_total;na.style.display=o.account_total?'':'none';
   const pc=Object.entries(o.provider_count||{}).map(([k,v])=>`${PROV_NAMES[k]||k} ×${v}`).join(' · ')||'暂无';
+  $('#acctCount').textContent=`共 ${o.account_total} 个账号 · ${pc}`;
   const cards=[
     {l:'账号总数',s:pc,c:'',n:o.account_total},
     {l:'WB 积分剩余',s:'WorkBuddy 全账号积分合计',c:'green',n:Math.round(o.total_credits)},
@@ -456,30 +635,40 @@ function renderOverview(o){
     {l:'今日请求',s:`输入 ${fmt(o.today?.prompt_tokens)} / 输出 ${fmt(o.today?.completion_tokens)} tokens`,c:'blue',n:o.today?.requests||0},
     {l:'今日费用估算',v:'¥'+(o.today?.cost_cny??0).toFixed(4),s:`按 $1=¥${o.usd_cny} 折算`,c:'accent'},
   ];
-  $('#cards').innerHTML=cards.map((c,i)=>`<div class="card" style="--i:${i}">
-    <div class="label"><span class="dot"></span>${c.l}</div>
-    <div class="value ${c.c}" ${c.n!=null?`data-n="${c.n}"`:''}>${c.n!=null?'0':c.v}</div>
-    <div class="sub">${esc(c.s)}</div></div>`).join('');
-  document.querySelectorAll('#cards .value[data-n]').forEach(el=>{
-    countUp(el,Number(el.dataset.n),x=>fmt(Math.round(x)));
-  });
+  renderCards($('#cards'),cards);
+  // 第二行：token 汇总 + 自动签到状态
+  const ud=o.usage_days||{},d7=ud.d7||{},d30=ud.d30||{};
+  const sch=o.schedule||{},accs=o.accounts||[];
+  const signed=accs.filter(a=>a.checkin_today&&a.checkin_today.ok).length;
+  const hours=(sch.checkin_hours||[]).join(' / ');
+  const nextT=sch.next_checkin?(()=>{const d=new Date(sch.next_checkin*1000);
+    return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:00`})():'';
+  const cards2=[
+    {l:'今日 tokens',n:o.today?.total_tokens||0,c:'accent',
+      s:`输入 ${fmt(o.today?.prompt_tokens)} / 输出 ${fmt(o.today?.completion_tokens)}${o.today?.cache_tokens>0?` / 缓存命中 ${Math.round(o.today.cache_tokens/(o.today.prompt_tokens||1)*100)}%`:''}`},
+    {l:'近 7 日 tokens',n:d7.total_tokens||0,c:'blue',s:`${fmt(d7.requests||0)} 次请求`},
+    {l:'近 30 日 tokens',n:d30.total_tokens||0,c:'purple',s:`${fmt(d30.requests||0)} 次请求`},
+    {l:'每日自动签到',v:sch.checkin_enabled?'已开启':'已关闭',c:sch.checkin_enabled?'green':'',
+      s:[hours?`每日 ${hours} 点`:'',accs.length?`今日已签 ${signed}/${accs.length}`:'',nextT?`下次 ${nextT}`:''].filter(Boolean).join(' · ')||'—'},
+  ];
+  renderCards($('#cards2'),cards2);
+  renderModelBars(o);
+  renderCheckin(o);
   // 账号表
   const tb=$('#acctTable tbody');tb.innerHTML='';
   (o.accounts||[]).forEach((a,ri)=>{
-    let quota='—',detail='—',cls='ok',txt='正常';
+    let quota='—',used='—',detail='—',cls='ok',txt='正常';
     if(a.quota){
       if(a.quota.unit==='requests/day')quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)} 次`;
       else if(a.quota.limit>0)quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)}`;
       else quota=fmt(a.quota.remaining)+(a.quota.unit==='ide_credits'?' 积分':'');
+      used=a.quota.used!=null?fmt(a.quota.used):'—';
       const bits=[];
-      if(a.quota.used!=null)bits.push('已用 '+fmt(a.quota.used));
       if(a.provider==='qwen'&&a.quota.requests_used_today!=null)bits.push('今日已请求 '+a.quota.requests_used_today+' 次');
       if(a.quota.detail&&a.quota.detail.packs)bits.push(a.quota.detail.packs+' 个权益包');
       detail=bits.join(' · ')||'—';
-      const age=(o.now-a.quota.fetched_at)/60;
-      detail+=`（${age<1?'刚刚':Math.round(age)+' 分钟前'}自动刷新）`;
     }
-    if(a.status==='cooldown'){cls='cooldown';txt='冷却中'}
+    if(a.status==='cooldown'){cls='cooldown';const cm=(a.cooldown_models||[]).join('、');txt=`冷却中${cm?`（${esc(cm)}）`:''}`}
     if(a.status==='disabled'){cls='disabled';txt='已禁用'}
     if(a.status==='expired'){cls='expired';txt='Token 过期'}
     let chk='<span class="muted">—</span>';
@@ -492,7 +681,8 @@ function renderOverview(o){
       <td>${provTag} <span class="mini">${esc(a.provider_name)}</span></td>
       <td>${esc(a.nickname||a.uid)}</td>
       <td><b>${quota}</b></td>
-      <td class="mini" style="white-space:normal;max-width:280px">${esc(detail)}</td>
+      <td>${used}</td>
+      <td class="mini" style="white-space:normal;max-width:220px">${esc(detail)}</td>
       <td>${chk}</td>
       <td>${exp}</td>
       <td><span class="tag ${cls}">${txt}</span></td>
@@ -506,6 +696,166 @@ function renderOverview(o){
   $('#acctEmpty').style.display=(o.accounts||[]).length?'none':'block';
 }
 
+/* 统计卡渲染 + 数字滚动 */
+function renderCards(el,cards){
+  el.innerHTML=cards.map((c,i)=>`<div class="card" style="--i:${i}">
+    <div class="label"><span class="dot"></span>${c.l}</div>
+    <div class="value ${c.c||''}" ${c.n!=null?`data-n="${c.n}"`:''}>${c.n!=null?'0':c.v}</div>
+    <div class="sub">${esc(c.s)}</div></div>`).join('');
+  el.querySelectorAll('.value[data-n]').forEach(x=>countUp(x,Number(x.dataset.n),v=>fmt(Math.round(v))));
+}
+
+/* 模型用量横向条形图（今日） */
+function renderModelBars(o){
+  const list=(o.today_by_model||[]).slice().sort((a,b)=>b.total_tokens-a.total_tokens);
+  const el=$('#modelBars');
+  if(!list.length){el.innerHTML='<div class="empty">今日暂无调用，发起一次请求后这里会显示各模型 token 占比</div>';return}
+  const max=Math.max(1,...list.map(x=>x.total_tokens));
+  el.innerHTML=list.map((u,i)=>`<div class="hbar-row" style="--i:${i}">
+    <div class="hbar-label"><code>${esc(u.model)}</code></div>
+    <div class="hbar-track"><div class="hbar-fill" data-w="${Math.max(Math.round(u.total_tokens/max*100),2)}" style="transition-delay:${i*60}ms"></div></div>
+    <div class="hbar-meta"><b>${fmt(u.total_tokens)}</b> tk · ${fmt(u.requests)} 次 · ${fmtCNY(u.cost_cny)}</div>
+  </div>`).join('');
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    el.querySelectorAll('.hbar-fill').forEach(f=>f.style.width=f.dataset.w+'%');
+  }));
+}
+
+/* 每日签到概览 */
+function renderCheckin(o){
+  const accs=o.accounts||[];
+  const sch=o.schedule||{};
+  $('#checkinExtra').textContent=sch.checkin_enabled
+    ?`自动签到已开启${(sch.checkin_hours||[]).length?`（每日 ${(sch.checkin_hours||[]).join('、')} 点）`:''}${(sch.tasks_enabled)?' · 含 WorkBuddy 任务中心':''}`
+    :'自动签到未开启（config.json → schedule.checkin_enabled）';
+  $('#checkinChips').innerHTML=accs.length?accs.map((a,i)=>{
+    let tag='<span class="tag plain">—</span>';
+    if(a.checkin_today)tag=a.checkin_today.ok
+      ?`<span class="tag ok">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`
+      :`<span class="tag cooldown">${esc(String(a.checkin_today.message||'未签').slice(0,20))}</span>`;
+    return `<span class="chip" style="--i:${i}">${esc(a.nickname||a.uid)}${tag}</span>`;
+  }).join(''):'<div class="empty">暂无账号</div>';
+}
+
+/* ── 请求日志 ─────────────────────────── */
+let REQ=null, REQ_RANGE='today', REQ_OFFSET=0;
+const REQ_LIMIT=100;
+const REQ_RANGE_NAMES={today:'今日',yesterday:'昨天','7d':'近 7 天','30d':'近 30 天',all:'全部'};
+function setReqRange(r){
+  if(typeof r==='string'&&REQ_RANGE_NAMES[r]!==undefined)REQ_RANGE=r;
+  REQ_OFFSET=0;
+  document.querySelectorAll('#reqRanges .tab').forEach(t=>t.classList.toggle('active',t.dataset.r===REQ_RANGE));
+  loadRequests();
+}
+function reqPage(d){ REQ_OFFSET=Math.max(0,REQ_OFFSET+d*REQ_LIMIT); loadRequests(); }
+async function loadRequests(){
+  try{
+    const model=encodeURIComponent(($('#reqModelFilter')?.value||'').trim());
+    const status=$('#reqStatusFilter')?.value||'';
+    REQ=await api(`/api/requests?range=${REQ_RANGE}&model=${model}&status=${status}&limit=${REQ_LIMIT}&offset=${REQ_OFFSET}`);
+    renderRequests();
+  }catch(e){}
+}
+function renderRequests(){
+  if(!REQ)return;
+  const s=REQ.stats||{};
+  $('#reqSub').textContent=`${REQ_RANGE_NAMES[REQ_RANGE]||REQ_RANGE} · 共 ${fmt(s.total)} 次 · 成功 ${fmt(s.ok)} / 失败 ${fmt(s.fail)}（本地数据库持久化，重启不丢）`;
+  renderCards($('#reqCards'),[
+    {l:'请求数',n:s.total||0,c:'',s:`成功 ${fmt(s.ok)} · 失败 ${fmt(s.fail)}`},
+    {l:'Token 用量',n:s.total_tokens||0,c:'blue',s:`输入 ${fmt(s.prompt_tokens)} / 输出 ${fmt(s.completion_tokens)}${s.cache_tokens>0?` / 缓存 ${fmt(s.cache_tokens)}`:''}`},
+    {l:'实际消费',v:fmtCNY(s.cost_cny||0),c:'accent',s:'按发布模型单价折算'},
+    {l:'平均耗时',v:((s.avg_ms||0)/1000).toFixed(1)+' s',c:'purple',s:`平均首字 ${(s.avg_first_ms||0)/1000>0?((s.avg_first_ms||0)/1000).toFixed(2)+' s':'—'}`},
+  ]);
+  // 环形分布图（服务端按筛选范围聚合）
+  renderDonut('donutModels',(s.by_model||[]).map(x=>({label:x.label,value:x.value})));
+  renderDonut('donutLines',(s.by_line||[]).map(x=>({label:PROV_NAMES[x.label]||x.label,value:x.value})));
+  renderDonut('donutStatus',(s.by_status||[]).map(x=>({label:x.label,value:x.value,color:x.label==='成功'?'#5c8a5e':'#b3564e'})));
+  // 明细卡片列表
+  const entries=REQ.entries||[];
+  const list=$('#reqList');
+  if(!entries.length){list.innerHTML='<div class="empty">暂无请求记录</div>';return}
+  list.innerHTML=entries.map((e,i)=>{
+    const proto=({chat:'',responses:'Responses',messages:'Claude'})[e.protocol]||e.protocol;
+    // 输出速度 = 输出 tokens / 内容流式时长（总耗时-首字延迟）
+    const streamSec=(e.total_ms-e.first_ms)/1000;
+    const speed=(e.stream&&streamSec>0.15&&e.completion_tokens>0)?Math.round(e.completion_tokens/streamSec):0;
+    const rep=e.reported_model?(e.reported_model.toLowerCase()===e.model.toLowerCase()
+      ?`<div class="rc-reported ok">✓ 响应模型：${esc(e.reported_model)}</div>`
+      :`<div class="rc-reported warn" title="上游自报模型与请求不一致（网关已自动改写回请求名）">⚠ 响应模型：${esc(e.reported_model)}</div>`):'';
+    const att=(e.attempts&&e.attempts.length>1)?`<div class="req-att">转移：${e.attempts.map(esc).join(' → ')}</div>`:'';
+    const attFail=(!e.ok&&e.error)?`<div class="req-att" style="color:var(--red)" title="${esc(e.error)}">${esc(e.error.slice(0,80))}</div>`:'';
+    const cache=e.cache_tokens>0
+      ?`<div class="mini" style="color:var(--green)">缓存 ↓ ${fmt(e.cache_tokens)}</div>`
+      :`<div class="mini" style="color:var(--faint)">缓存未命中</div>`;
+    const lat=e.ok?`<div>首字延迟 <b>${e.first_ms?(e.first_ms/1000).toFixed(2):'—'}</b> s</div><div class="mini">耗时 <b>${(e.total_ms/1000).toFixed(2)}</b> s</div>`:'<div class="mini">—</div>';
+    const status=e.ok?`<span class="tag ok">成功</span>`:`<span class="tag expired">失败</span>`;
+    const fin=e.ok&&e.finish&&e.finish!=='stop'
+      ?(e.finish==='length'
+        ?`<div class="rc-reported warn" title="模型输出到达 max_tokens 上限被截断">⚠ 输出截断 (length)</div>`
+        :`<div class="mini" style="margin-top:4px">结束: ${esc(e.finish)}</div>`):'';
+    return `<div class="req-card" style="--i:${i}">
+      <div style="min-width:0">
+        <span class="pill-model"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8l-9-5-9 5v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5M12 13v9"/></svg><span>${esc(e.model)}</span></span>
+        ${rep}${att}${attFail}
+        <div class="rc-time">${new Date(e.ts*1000).toLocaleString('zh-CN',{hour12:false})}${e.provider?' · '+(PROV_NAMES[e.provider]||esc(e.provider)):''}${e.account?' · '+esc(e.account.slice(0,8)):''}</div>
+      </div>
+      <div class="rc-type">${e.stream?'流':'非流'}${speed?`<div class="mini">${speed} t/s</div>`:'<div class="mini">—</div>'}${proto?`<div class="mini">${proto}</div>`:''}</div>
+      <div class="rc-io">${fmt(e.prompt_tokens)} / ${fmt(e.completion_tokens)}${cache}</div>
+      <div>${e.cost_cny>0?`<span class="cost-pill">${fmtCNY(e.cost_cny)}</span>`:'<span class="cost-pill" style="color:var(--faint)">—</span>'}</div>
+      <div class="rc-lat">${lat}</div>
+      <div style="min-width:0">${status}${fin}<div class="req-id" title="${esc(e.id||'')}">${esc((e.id||'').slice(0,24))}</div></div>
+    </div>`;
+  }).join('');
+  // 分页
+  const total=(REQ.query&&REQ.query.total)||s.total||0;
+  $('#reqPageInfo').textContent=`共 ${fmt(total)} 条 · 显示 ${total?fmt(REQ_OFFSET+1):0}-${fmt(REQ_OFFSET+entries.length)}`;
+  $('#reqPrev').disabled=REQ_OFFSET<=0;
+  $('#reqNext').disabled=REQ_OFFSET+REQ_LIMIT>=total;
+}
+/* SVG 环形图 */
+function renderDonut(elId,items){
+  const el=document.getElementById(elId);
+  const total=items.reduce((s,x)=>s+x.value,0);
+  if(!total){el.innerHTML='<div class="empty">暂无数据</div>';return}
+  const C=2*Math.PI*40;let off=0;
+  const segs=items.slice(0,8).map(it=>{
+    const len=Math.max(it.value/total*C,2);
+    const s=`<circle r="40" cx="60" cy="60" fill="none" stroke="${it.color}" stroke-width="15" stroke-dasharray="${len} ${C-len}" stroke-dashoffset="${-off}" transform="rotate(-90 60 60)"/>`;
+    off+=len;return s;
+  }).join('');
+  el.innerHTML=`<div class="donut"><svg viewBox="0 0 120 120">${segs}<text x="60" y="65" text-anchor="middle" font-size="15" font-weight="600" fill="var(--text)">${fmt(total)}</text></svg>
+    <div class="legend">${items.slice(0,8).map(it=>`<div class="lg"><span class="sw" style="background:${it.color}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.label)}</span><b>${fmt(it.value)}</b></div>`).join('')}</div></div>`;
+}
+
+/* 渠道调用统计（仪表板 + 发布卡片共用数据） */
+function chanStatOf(pubId,ch){
+  const m=(PUB.channel_stats||{})[`${(pubId||'').toLowerCase()}|${ch.provider}|${ch.model}`];
+  return m||{ok:0,fail:0};
+}
+function renderChannelStats(){
+  const el=$('#chanStats');
+  const rows=[];
+  (PUB.models||[]).forEach(m=>(m.channels||[]).forEach(ch=>{
+    const st=chanStatOf(m.id,ch);
+    rows.push({m,ch,st});
+  }));
+  if(!rows.length){el.innerHTML='<div class="empty">还没有发布模型，去「模型发布」创建后这里显示各渠道成功/失败统计</div>';return}
+  el.innerHTML=rows.map((r,i)=>{
+    const total=r.st.ok+r.st.fail;
+    const rate=total?Math.round(r.st.ok/total*100):0;
+    return `<div class="chan-row" style="--i:${i}">
+      <span class="name" style="font-family:Consolas,monospace;font-size:12.5px">${esc(r.m.id)}</span>
+      <span><span class="tag ${PROV_TAG[r.ch.provider]||'plain'}">${PROV_NAMES[r.ch.provider]||esc(r.ch.provider)}</span> <span class="mini">${esc(r.ch.model)}</span></span>
+      <span class="nums"><span class="ok">✓ ${fmt(r.st.ok)}</span></span>
+      <span class="nums"><span class="fail">✗ ${fmt(r.st.fail)}</span></span>
+      <span style="display:flex;align-items:center;gap:10px"><span class="rate-track" style="flex:1"><span class="rate-fill" style="display:block;width:0" data-w="${rate}"></span></span><span class="mini" style="width:44px;text-align:right">${rate}%</span></span>
+    </div>`;
+  }).join('');
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    el.querySelectorAll('.rate-fill').forEach(f=>f.style.width=f.dataset.w+'%');
+  }));
+}
+
 /* 该模型是否配置了发布单价 */
 function hasPrice(model){
   const m=(model||'').toLowerCase();
@@ -514,17 +864,24 @@ function hasPrice(model){
 
 function renderUsage(us){
   const tb=$('#usageTable tbody');
-  if(!us.today||!us.today.length){tb.innerHTML='<tr><td colspan="7" class="empty">今日暂无调用</td></tr>'}
+  if(!us.today||!us.today.length){tb.innerHTML='<tr><td colspan="8" class="empty">今日暂无调用</td></tr>'}
   else tb.innerHTML=us.today.map((u,ri)=>{
     const cost=hasPrice(u.model)?fmtCNY(u.cost_cny):(u.cost_cny>0?fmtCNY(u.cost_cny):'<span class="muted">未计价</span>');
+    const pt=u.prompt_tokens||0, ct=u.cache_tokens||0;
+    const rate=pt>0?Math.round(ct/pt*100):0;
+    const cin=ct>0
+      ?`<div style="color:var(--green)">缓存 ↓ ${fmt(ct)}<span class="mini">（${rate}%）</span></div>`
+      :'<div class="mini" style="color:var(--faint)">未命中</div>';
     return `<tr style="--r:${ri}">
       <td><code>${esc(u.model)}</code></td>
       <td><span class="tag ${PROV_TAG[u.provider]||'plain'}">${PROV_NAMES[u.provider]||esc(u.provider)}</span></td>
       <td>${fmt(u.requests)}</td>
-      <td>${fmt(u.prompt_tokens)}</td><td>${fmt(u.completion_tokens)}</td><td><b>${fmt(u.total_tokens)}</b></td>
+      <td>${fmt(u.prompt_tokens)}</td><td>${cin}</td><td>${fmt(u.completion_tokens)}</td><td><b>${fmt(u.total_tokens)}</b></td>
       <td style="color:var(--accent)">${cost}</td></tr>`;
   }).join('');
-  $('#usageSub').textContent=`今日合计 ${fmt(us.totals?.requests)} 次请求 / ${fmt(us.totals?.total_tokens)} tokens / ${fmtCNY(us.totals?.cost_cny)}`;
+  const tpt=us.totals?.prompt_tokens||0, tct=us.totals?.cache_tokens||0;
+  const crate=tpt>0?Math.round(tct/tpt*100):0;
+  $('#usageSub').textContent=`今日合计 ${fmt(us.totals?.requests)} 次请求 / ${fmt(us.totals?.total_tokens)} tokens / 缓存命中 ${crate}%（${fmt(tct)}/${fmt(tpt)}） / ${fmtCNY(us.totals?.cost_cny)}`;
   // 7 日柱状图（生长动画）
   const hist=us.history||[];const max=Math.max(1,...hist.map(h=>h.total_tokens));
   $('#bars').innerHTML=hist.map((h,i)=>{
@@ -546,6 +903,8 @@ async function loadPublish(){
     PUB.models=PUB.models||[];
     if(PUB.usd_cny>0)$('#usdCny').value=PUB.usd_cny;
     renderPublish();
+    renderChannelStats();
+    const np=$('#navPublish');np.textContent=PUB.models.length;np.style.display=PUB.models.length?'':'none';
     if(OVERVIEW)renderOverview(OVERVIEW); // 同步网关提示行
   }catch(e){}
 }
@@ -558,8 +917,12 @@ function renderPublish(){
       <button class="btn accent" onclick="openModelEditor(-1)">＋ 新建第一个模型</button></div>`;
     return;
   }
-  g.innerHTML=PUB.models.map((m,i)=>`
-    <div class="pub-card" style="--i:${i}">
+  g.innerHTML=PUB.models.map((m,i)=>{
+    const p=m.pricing;
+    const priceHtml=(p&&(p.input>0||p.output>0||p.cache>0))
+      ?`${p.input>0?`<span>输入 <b>$${p.input}</b>/1M</span>`:''}${p.output>0?`<span>输出 <b>$${p.output}</b>/1M</span>`:''}${p.cache>0?`<span>缓存 <b>$${p.cache}</b>/1M</span>`:''}`
+      :'<span class="muted">未配置单价（费用估算显示「未计价」）</span>';
+    return `<div class="pub-card" style="--i:${i}">
       <div class="head">
         <div><span class="name">${esc(m.id)}</span>${m.note?`<div class="note">${esc(m.note)}</div>`:''}</div>
         <div class="ops">
@@ -567,17 +930,18 @@ function renderPublish(){
           <button class="btn sm icon danger" title="删除" onclick="delModel(${i})">✕</button>
         </div>
       </div>
-      <div class="price">
-        ${m.pricing&&(m.pricing.input>0||m.pricing.output>0)
-          ?`<span>输入 <b>$${m.pricing.input}</b>/1M</span><span>输出 <b>$${m.pricing.output}</b>/1M</span>`
-          :'<span class="muted">未配置单价（费用估算显示「未计价」）</span>'}
-      </div>
+      <div class="price">${priceHtml}</div>
       <div class="chlabel">渠道 ×${m.channels.length}</div>
-      <div class="ch-list">${m.channels.map(ch=>`
-        <div class="ch-row"><span class="tag ${PROV_TAG[ch.provider]||'plain'}">${PROV_NAMES[ch.provider]||esc(ch.provider)}</span>
-        <span class="arrow">→</span><span class="m">${esc(ch.model)}</span></div>`).join('')}
+      <div class="ch-list">${m.channels.map(ch=>{
+        const cr=creditsOf(ch.provider,ch.model);
+        const st=chanStatOf(m.id,ch);
+        const stTxt=(st.ok||st.fail)?`<span class="mini" style="margin-left:auto;font-variant-numeric:tabular-nums"><span style="color:var(--green)">✓${st.ok}</span> <span style="color:var(--red)">✗${st.fail}</span></span>`:'';
+        return `<div class="ch-row"><span class="tag ${PROV_TAG[ch.provider]||'plain'}">${PROV_NAMES[ch.provider]||esc(ch.provider)}</span>
+        <span class="arrow">→</span><span class="m">${esc(ch.model)}</span>${stTxt}${cr?`<span class="mini" style="${(st.ok||st.fail)?'':'margin-left:auto'};color:var(--faint)">${esc(cr)}</span>`:''}</div>`;
+      }).join('')}
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 async function saveUsdCny(){
   const v=parseFloat($('#usdCny').value);
@@ -606,7 +970,9 @@ function openModelEditor(i){
   ED=i<0?{id:'',note:'',pricing:null,channels:[]}:JSON.parse(JSON.stringify(PUB.models[i]));
   $('#mmTitle').innerHTML=`${i<0?'新建发布模型':'编辑模型'} <button class="xbtn" onclick="closeModelEditor()">✕</button>`;
   $('#mmId').value=ED.id;$('#mmNote').value=ED.note||'';
-  $('#mmIn').value=ED.pricing?ED.pricing.input:'';$('#mmOut').value=ED.pricing?ED.pricing.output:'';
+  $('#mmIn').value=ED.pricing?ED.pricing.input:'';
+  $('#mmOut').value=ED.pricing?ED.pricing.output:'';
+  $('#mmCache').value=ED.pricing?ED.pricing.cache||'':'';
   $('#mmStatus').textContent='';
   renderEdChannels();
   $('#modelModal').classList.add('open');
@@ -619,7 +985,7 @@ function renderEdChannels(){
       <select onchange="ED.channels[${i}].provider=this.value;renderEdChannels()">
         ${Object.entries(PROV_NAMES).map(([k,v])=>`<option value="${k}" ${ch.provider===k?'selected':''}>${v}</option>`).join('')}
       </select>
-      <input list="chModels" value="${esc(ch.model)}" placeholder="上游模型 ID（聚焦显示候选）"
+      <input list="chModels" value="${esc(ch.model)}" placeholder="上游模型 ID（聚焦显示候选与倍率）"
         onfocus="fillDatalist('${esc(ch.provider)}')" oninput="ED.channels[${i}].model=this.value">
       <span style="display:flex;gap:4px">
         <button class="btn sm icon" title="上移" onclick="moveCh(${i},-1)" ${i===0?'disabled':''}>↑</button>
@@ -627,8 +993,15 @@ function renderEdChannels(){
       </span>
     </div>`).join('');
 }
+/* 查内部模型库里的计价倍率 */
+function creditsOf(pid,mid){
+  const list=((MODELS||{})[pid])||[];
+  const m=list.find(x=>x.id===mid);
+  return m&&m.credits?m.credits:'';
+}
 function fillDatalist(pid){
-  $('#chModels').innerHTML=(((MODELS||{})[pid])||[]).map(m=>`<option value="${esc(m.id)}">`).join('');
+  $('#chModels').innerHTML=(((MODELS||{})[pid])||[]).map(m=>
+    `<option value="${esc(m.id)}">${esc(m.name||'')}${m.credits?' · '+esc(m.credits):''}</option>`).join('');
 }
 function addEdChannel(){
   const used=ED.channels.map(c=>c.provider);
@@ -646,8 +1019,8 @@ function moveCh(i,d){
 async function saveModelEditor(){
   ED.id=$('#mmId').value.trim();
   ED.note=$('#mmNote').value.trim();
-  const pin=parseFloat($('#mmIn').value),pout=parseFloat($('#mmOut').value);
-  ED.pricing=(pin>0||pout>0)?{input:pin||0,output:pout||0}:null;
+  const pin=parseFloat($('#mmIn').value),pout=parseFloat($('#mmOut').value),pc=parseFloat($('#mmCache').value);
+  ED.pricing=(pin>0||pout>0||pc>0)?{input:pin||0,output:pout||0,cache:pc||0}:null;
   const err=m=>{$('#mmStatus').className='status-line err';$('#mmStatus').textContent=m};
   if(!ED.id)return err('请填写对外模型名');
   if(PUB.models.some((m,i)=>i!==ED_IDX&&m.id.toLowerCase()===ED.id.toLowerCase()))return err('模型名已存在');
@@ -658,13 +1031,13 @@ async function saveModelEditor(){
   if(await savePublish())closeModelEditor();
 }
 
-/* ── 内部模型库 ───────────────────────── */
+/* ── 各平台模型倍率 ───────────────────── */
 async function loadModels(force){
   try{
     MODELS=await api('/api/models'+(force?'?refresh=1':''));
     const provs=Object.keys(MODELS).filter(p=>MODELS[p]&&MODELS[p].length);
     const total=provs.reduce((s,p)=>s+MODELS[p].length,0);
-    $('#libHint').textContent=`共 ${total} 个内部模型 · 添加渠道时可直接选择`;
+    $('#libHint').textContent=`共 ${total} 个模型`;
     if(!provs.includes(MODEL_TAB))MODEL_TAB=provs[0]||'workbuddy';
     $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${PROV_NAMES[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
     renderModels();
@@ -768,9 +1141,9 @@ async function doImport(){
 (async()=>{
   const r=await fetch('/api/overview');
   if(r.status===401){showLogin()}
-  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#main').style.display='block';refreshAll(false);loadPublish();resumePending()}).catch(showLogin)}
+  else{r.json().then(()=>{$('#loginMask').style.display='none';$('#app').style.display='block';initFromHash();refreshAll(false);loadPublish();resumePending()}).catch(showLogin)}
 })();
-setInterval(()=>{if($('#main').style.display!=='none'){refreshAll(false);loadPublish()}},30000);
+setInterval(()=>{if($('#app').style.display!=='none'){refreshAll(false);loadPublish()}},30000);
 </script>
 </body>
 </html>

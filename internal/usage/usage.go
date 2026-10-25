@@ -22,6 +22,7 @@ type Record struct {
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`
 	TotalTokens      int64  `json:"total_tokens"`
+	CacheTokens      int64  `json:"cache_tokens,omitempty"` // 命中缓存的输入 tokens
 }
 
 // Tracker 用量记录器与聚合器。
@@ -44,6 +45,7 @@ type Tracker struct {
 type PubPrice struct {
 	Input  float64
 	Output float64
+	Cache  float64
 }
 
 type agg struct {
@@ -54,6 +56,7 @@ type agg struct {
 	Prompt   int64  `json:"prompt_tokens"`
 	Complete int64  `json:"completion_tokens"`
 	Total    int64  `json:"total_tokens"`
+	Cache    int64  `json:"cache_tokens"`
 }
 
 // Pricing 模型单价表（$/1M tokens）。
@@ -62,6 +65,7 @@ type Pricing struct {
 	Models map[string]struct {
 		Input  float64 `json:"input"`
 		Output float64 `json:"output"`
+		Cache  float64 `json:"cache,omitempty"`
 	} `json:"models"`
 }
 
@@ -110,6 +114,7 @@ func (t *Tracker) Record(r Record) {
 	a.Prompt += r.PromptTokens
 	a.Complete += r.CompletionTokens
 	a.Total += r.TotalTokens
+	a.Cache += r.CacheTokens
 	// 追加落盘
 	f, err := os.OpenFile(t.file(day), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -144,6 +149,7 @@ func (t *Tracker) restoreToday() {
 		a.Prompt += r.PromptTokens
 		a.Complete += r.CompletionTokens
 		a.Total += r.TotalTokens
+		a.Cache += r.CacheTokens
 	}
 }
 
@@ -187,6 +193,7 @@ func (t *Tracker) HistoryDays(n int) []DayTotal {
 				dt.Prompt += a.Prompt
 				dt.Complete += a.Complete
 				dt.Total += a.Total
+				dt.Cache += a.Cache
 			}
 		} else {
 			dt = t.scanDay(day)
@@ -203,6 +210,7 @@ type DayTotal struct {
 	Prompt   int64  `json:"prompt_tokens"`
 	Complete int64  `json:"completion_tokens"`
 	Total    int64  `json:"total_tokens"`
+	Cache    int64  `json:"cache_tokens"`
 }
 
 func (t *Tracker) scanDay(day string) DayTotal {
@@ -223,6 +231,7 @@ func (t *Tracker) scanDay(day string) DayTotal {
 		dt.Prompt += r.PromptTokens
 		dt.Complete += r.CompletionTokens
 		dt.Total += r.TotalTokens
+		dt.Cache += r.CacheTokens
 	}
 	return dt
 }
@@ -275,12 +284,14 @@ func defaultPricing() *Pricing {
 	type m = struct {
 		Input  float64 `json:"input"`
 		Output float64 `json:"output"`
+		Cache  float64 `json:"cache,omitempty"`
 	}
 	return &Pricing{
 		USDCNY: 7.1,
 		Models: map[string]struct {
 			Input  float64 `json:"input"`
 			Output float64 `json:"output"`
+			Cache  float64 `json:"cache,omitempty"`
 		}{
 			"qwen3-coder-plus":  {Input: 0.002, Output: 0.006},
 			"qwen3-coder-flash": {Input: 0.0005, Output: 0.002},
@@ -319,6 +330,11 @@ func (t *Tracker) PublishedPricing() map[string]PubPrice {
 
 // Cost 估算一段用量的费用（人民币元）。发布模型单价优先，其次 pricing 文件/内置价。
 func (t *Tracker) Cost(model string, prompt, completion int64) float64 {
+	return t.CostWithCache(model, prompt, completion, 0)
+}
+
+// CostWithCache 同 Cost，缓存命中的输入按缓存单价计（缓存价未配置时按输入价）。
+func (t *Tracker) CostWithCache(model string, prompt, completion, cached int64) float64 {
 	t.pricingMu.Lock()
 	p := t.pricing
 	pub := t.pubPricing
@@ -330,7 +346,7 @@ func (t *Tracker) Cost(model string, prompt, completion int64) float64 {
 		if cny <= 0 {
 			cny = 7.1
 		}
-		usd := float64(prompt)/1e6*pp.Input + float64(completion)/1e6*pp.Output
+		usd := costUSD(prompt, completion, cached, pp.Input, pp.Output, pp.Cache)
 		return usd * cny
 	}
 	if p == nil {
@@ -340,8 +356,19 @@ func (t *Tracker) Cost(model string, prompt, completion int64) float64 {
 	if !ok {
 		return 0
 	}
-	usd := float64(prompt)/1e6*mp.Input + float64(completion)/1e6*mp.Output
-	return usd * p.USDCNY
+	return costUSD(prompt, completion, cached, mp.Input, mp.Output, mp.Cache) * p.USDCNY
+}
+
+// costUSD 费用公式：非缓存输入×input + 缓存×cacheRate + 输出×output（$/1M）。
+func costUSD(prompt, completion, cached int64, in, out, cacheRate float64) float64 {
+	if cacheRate <= 0 {
+		cacheRate = in
+	}
+	fresh := float64(prompt) - float64(cached)
+	if fresh < 0 {
+		fresh = 0
+	}
+	return fresh/1e6*in + float64(cached)/1e6*cacheRate + float64(completion)/1e6*out
 }
 
 // USDCNY 当前汇率（发布模型配置的优先）。
@@ -377,7 +404,7 @@ func (t *Tracker) TodayWithCost() []AggWithCost {
 	base := t.TodayAgg()
 	out := make([]AggWithCost, 0, len(base))
 	for _, a := range base {
-		out = append(out, AggWithCost{agg: a, CostCNY: t.Cost(a.Model, a.Prompt, a.Complete)})
+		out = append(out, AggWithCost{agg: a, CostCNY: t.CostWithCache(a.Model, a.Prompt, a.Complete, a.Cache)})
 	}
 	return out
 }
@@ -388,6 +415,7 @@ type Totals struct {
 	Prompt   int64   `json:"prompt_tokens"`
 	Complete int64   `json:"completion_tokens"`
 	Total    int64   `json:"total_tokens"`
+	Cache    int64   `json:"cache_tokens"`
 	CostCNY  float64 `json:"cost_cny"`
 }
 
@@ -399,6 +427,7 @@ func Sum(items []AggWithCost) Totals {
 		tt.Prompt += it.Prompt
 		tt.Complete += it.Complete
 		tt.Total += it.Total
+		tt.Cache += it.Cache
 		tt.CostCNY += it.CostCNY
 	}
 	return tt

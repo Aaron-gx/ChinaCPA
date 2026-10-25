@@ -4,17 +4,22 @@
 package gateway
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"chinacpa/internal/model"
 	"chinacpa/internal/pool"
 	"chinacpa/internal/provider"
+	"chinacpa/internal/reqlog"
 	"chinacpa/internal/usage"
 )
 
@@ -23,6 +28,7 @@ type Gateway struct {
 	pool     *pool.Pool
 	usage    *usage.Tracker
 	qwenProv qwenCounter
+	rlog     *reqlog.DB
 }
 
 // qwenCounter Qwen 本地请求计数的最小接口（解耦）。
@@ -37,6 +43,29 @@ func New(p *pool.Pool, u *usage.Tracker) *Gateway {
 
 // SetQwenCounter 注入 Qwen 计数器。
 func (g *Gateway) SetQwenCounter(c qwenCounter) { g.qwenProv = c }
+
+// SetReqLog 注入请求日志（nil = 不记录）。
+func (g *Gateway) SetReqLog(l *reqlog.DB) { g.rlog = l }
+
+// logReq 记录一条请求日志（费用按对外模型单价估算）。
+func (g *Gateway) logReq(proto, pubModel, pid, uid string, stream bool, u *usageSnapshot, ok bool, errMsg string, attempts []string, firstMS, totalMS int64, reported, finish string) {
+	if g.rlog == nil {
+		return
+	}
+	e := reqlog.Entry{
+		Protocol: proto, Model: pubModel, Provider: pid, Account: uid,
+		Stream: stream, OK: ok, Error: errMsg, Attempts: attempts,
+		FirstMS: firstMS, TotalMS: totalMS, ReportedModel: reported, Finish: finish,
+	}
+	if u != nil {
+		e.PromptTokens = u.PromptTokens
+		e.CompletionTokens = u.CompletionTokens
+		e.TotalTokens = u.TotalTokens
+		e.CacheTokens = u.cacheTokens()
+		e.CostCNY = g.usage.CostWithCache(pubModel, e.PromptTokens, e.CompletionTokens, e.CacheTokens)
+	}
+	g.rlog.Add(e)
+}
 
 // Register 挂载到 mux（调用方保证 /v1 前缀）。
 func (g *Gateway) Register(mux *http.ServeMux, authKey string) {
@@ -67,14 +96,95 @@ func (g *Gateway) auth(next http.HandlerFunc, key string) http.HandlerFunc {
 
 // openAIStream 一次成功的 provider 调用（body 恒为 OpenAI 兼容 SSE 流）。
 type openAIStream struct {
-	acct *model.Account
-	pid  string
-	body io.ReadCloser
+	acct     *model.Account
+	pid      string
+	body     io.ReadCloser
+	attempts []string // 渠道尝试链路（含失败转移记录）
+}
+
+// peekStreamError 探测「HTTP 200 但错误内嵌在流里」的情况：
+// 部分平台（Qoder 等）上游出错时不返回非 2xx，而是返回 200 + 错误事件流，
+// 若不探测会吞掉跨渠道失败转移。返回消费掉的原始字节（需回放）、接续 reader
+// （bufio 缓冲中可能已包含后续数据）、是否错误、错误消息。
+func peekStreamError(rc io.ReadCloser) (peeked []byte, cont io.Reader, isErr bool, msg string) {
+	br := bufio.NewReader(rc)
+	var firstData []byte
+	for {
+		line, err := br.ReadBytes('\n')
+		if len(line) > 0 {
+			peeked = append(peeked, line...)
+			t := strings.TrimSpace(string(line))
+			if t != "" {
+				if strings.HasPrefix(t, "data:") {
+					payload := strings.TrimSpace(strings.TrimPrefix(t, "data:"))
+					if payload != "" && payload != "[DONE]" {
+						firstData = []byte(payload)
+						break
+					}
+				} else if strings.HasPrefix(t, "{") {
+					// 非 SSE 的单行 JSON（非流式响应）
+					firstData = []byte(t)
+					break
+				} else if !strings.HasPrefix(t, "event:") && !strings.HasPrefix(t, "retry:") && !strings.HasPrefix(t, ":") {
+					break // 未知行，放行
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if firstData == nil {
+		return peeked, br, false, ""
+	}
+	var probe struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(firstData, &probe) == nil && probe.Error != nil {
+		return peeked, br, true, probe.Error.Message
+	}
+	return peeked, br, false, ""
+}
+
+// replayRC 回放探测期消费的字节后接续原流。
+type replayRC struct {
+	r      io.Reader
+	closer io.Closer
+}
+
+func (p *replayRC) Read(b []byte) (int, error) { return p.r.Read(b) }
+func (p *replayRC) Close() error               { return p.closer.Close() }
+
+// sessionKeyOf 从请求体提取会话标识（黏性选号用）：
+// OpenAI 的 prompt_cache_key / user，Claude 的 metadata.user_id。
+func sessionKeyOf(body []byte) string {
+	var probe struct {
+		PromptCacheKey string `json:"prompt_cache_key"`
+		User           string `json:"user"`
+		Metadata       struct {
+			UserID string `json:"user_id"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return ""
+	}
+	if probe.PromptCacheKey != "" {
+		return "pck:" + probe.PromptCacheKey
+	}
+	if probe.Metadata.UserID != "" {
+		return "uid:" + probe.Metadata.UserID
+	}
+	if probe.User != "" {
+		return "user:" + probe.User
+	}
+	return ""
 }
 
 // tryProviderStream 单渠道调用：该 provider 内账号轮询直到成功。
 // 失败返回聚合错误信息（不写响应，供上层跨渠道重试）。
-func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte) (*openAIStream, *provider.Error, int, []byte) {
+func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey string) (*openAIStream, *provider.Error, int, []byte) {
 	pr, ok := g.pool.Provider(pid)
 	if !ok {
 		return nil, &provider.Error{Kind: provider.ErrClient, Msg: "未知平台 " + pid}, 0, nil
@@ -84,7 +194,7 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 	var lastErr *provider.Error
 	tried := map[string]bool{}
 	for {
-		a, perr := g.pool.Pick(pid)
+		a, perr := g.pool.Pick(pid, mname, sessionKey)
 		if perr != nil {
 			break
 		}
@@ -98,13 +208,13 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 		}
 		res, cerr := pr.ChatStream(ctx, a, mname, body)
 		if cerr != nil {
-			g.pool.MarkError(a, cerr)
+			g.pool.MarkError(a, mname, cerr)
 			lastErr = provider.AsError(cerr)
 			continue
 		}
 		if res.Err != nil || res.Status >= 400 {
 			if res.Err != nil {
-				g.pool.MarkError(a, res.Err)
+				g.pool.MarkError(a, mname, res.Err)
 				lastErr = res.Err
 			}
 			if res.Body != nil {
@@ -113,7 +223,21 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 			lastStatus, lastBody = res.Status, res.RespBody
 			continue
 		}
-		g.pool.MarkSuccess(a)
+		// 200 但错误内嵌流首行（Qoder 等）：探测以实现账号/渠道级失败转移
+		if res.Body != nil {
+			peeked, cont, isErr, emsg := peekStreamError(res.Body)
+			if isErr {
+				pe := &provider.Error{Kind: provider.ErrUpstream, Msg: "上游流内错误: " + emsg}
+				g.pool.MarkError(a, mname, pe)
+				lastErr = pe
+				res.Body.Close()
+				continue
+			}
+			if len(peeked) > 0 {
+				res.Body = &replayRC{r: io.MultiReader(bytes.NewReader(peeked), cont), closer: res.Body}
+			}
+		}
+		g.pool.MarkSuccess(a, mname)
 		if pid == "qwen" && g.qwenProv != nil {
 			g.qwenProv.CountRequest(a.UID)
 		}
@@ -126,22 +250,27 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 }
 
 // callRoutedStream 多渠道失败转移：按路由顺序尝试渠道，每渠道内部再账号轮询。
-// 失败时已写错误响应，返回 nil。
-func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, route *pool.Route, body []byte) *openAIStream {
+// proto: chat / responses / messages（请求日志用）。失败时已写错误响应，返回 nil。
+func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, route *pool.Route, body []byte, proto string, sessionKey string) *openAIStream {
+	t0 := time.Now()
 	var lastErr *provider.Error
 	var lastStatus int
 	var lastBody []byte
+	var attempts []string
 	for _, ch := range route.Channels {
-		st, err, status, respBody := g.tryProviderStream(ctx, ch.PID, ch.Model, body)
+		st, err, status, respBody := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey)
 		if st != nil {
+			g.bumpChannel(route, ch, true)
+			st.attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, true, ""))
 			return st
 		}
-		lastErr, lastStatus, lastBody = err, status, respBody
-		if status >= 400 && status < 500 && status != 429 {
-			// 客户端类错误（模型名/参数问题）换渠道也大概率失败，但 401/403 可能是
-			// 单渠道凭证问题——继续尝试下一渠道再报错。
-			continue
+		g.bumpChannel(route, ch, false)
+		note := ""
+		if err != nil {
+			note = err.Error()
 		}
+		attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, false, note))
+		lastErr, lastStatus, lastBody = err, status, respBody
 	}
 	msg := "上游调用失败"
 	if lastErr != nil && lastErr.Error() != "" {
@@ -154,13 +283,24 @@ func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, r
 		status = lastStatus
 	}
 	writeErr(w, status, "upstream_error", msg)
+	g.logReq(proto, route.Public, "", "", false, nil, false, msg, attempts, 0, time.Since(t0).Milliseconds(), "", "")
 	return nil
+}
+
+// bumpChannel 发布模型渠道调用计数。
+func (g *Gateway) bumpChannel(route *pool.Route, ch pool.ChannelTarget, ok bool) {
+	if !route.Published {
+		return
+	}
+	if pm := g.pool.Published(); pm != nil {
+		pm.BumpChannel(route.Public, ch.PID, ch.Model, ok)
+	}
 }
 
 // callOpenAIStream 兼容旧签名：单渠道调用（失败已写响应）。
 func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, pid, mname string, body []byte) *openAIStream {
 	route := &pool.Route{Public: mname, Channels: []pool.ChannelTarget{{PID: pid, Model: mname}}}
-	return g.callRoutedStream(ctx, w, route, body)
+	return g.callRoutedStream(ctx, w, route, body, "chat", sessionKeyOf(body))
 }
 
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -238,16 +378,18 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "model_not_found", err.Error())
 		return
 	}
-	st := g.callRoutedStream(r.Context(), w, route, body)
+	t0 := time.Now()
+	st := g.callRoutedStream(r.Context(), w, route, body, "chat", sessionKeyOf(body))
 	if st == nil {
 		return
 	}
 	res := &provider.ChatResult{Body: st.body, ContentType: "text/event-stream"}
-	g.serve(w, r, res, st.pid, st.acct.UID, route.Public, cr.Stream)
+	g.serve(w, r, res, st.pid, st.acct.UID, route.Public, cr.Stream, "chat", st.attempts, t0)
 }
 
 // serve 写出响应并提取 usage 落账。
-func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, res *provider.ChatResult, pid, uid, model string, wantStream bool) {
+// serve 写出响应并提取 usage 落账 + 请求日志。
+func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, res *provider.ChatResult, pid, uid, model string, wantStream bool, proto string, attempts []string, start time.Time) {
 	ct := res.ContentType
 	if ct == "" {
 		ct = "application/json"
@@ -259,71 +401,217 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, res *provider.Ch
 		w.Header().Set("X-Accel-Buffering", "no")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
+		mr := newModelRewriter(res.Body, model)
 		rc := &usageRecorder{
-			src:   res.Body,
+			// modelRewriter：把响应自报的 model 改写回请求名（上游渠道返回真实模型 ID，
+			// 如发布模型 deepseek-v4.1-flash 经 Qoder 渠道会自报 dfmodel，客户端会校验不一致）
+			src:   mr,
 			pid:   pid,
 			uid:   uid,
 			model: model,
 			g:     g,
+			start: start,
 		}
 		defer rc.Close()
-		buf := make([]byte, 32*1024)
-		for {
-			n, err := rc.Read(buf)
-			if n > 0 {
-				if _, werr := w.Write(buf[:n]); werr != nil {
+		func() {
+			defer func() {
+				// 防御：流式路径的 panic 不再静默掐断连接（记录到 stderr，且其后的请求日志仍会执行）
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "gateway: stream panic: %v\n", r)
+				}
+			}()
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := rc.Read(buf)
+				if n > 0 {
+					if _, werr := w.Write(buf[:n]); werr != nil {
+						return
+					}
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+				if err != nil {
 					return
 				}
-				if flusher != nil {
-					flusher.Flush()
-				}
 			}
-			if err != nil {
-				return
-			}
-		}
+		}()
+		g.logReq(proto, model, pid, uid, true, rc.captured, true, "", attempts, rc.firstMS, time.Since(start).Milliseconds(), mr.reported, rc.finish)
+		return
 	}
 	// 非流式 JSON
 	w.Header().Set("Content-Type", ct)
 	w.WriteHeader(http.StatusOK)
 	raw, _ := io.ReadAll(io.LimitReader(res.Body, 16<<20))
 	res.Body.Close()
+	var probeObj struct {
+		Model   string `json:"model"`
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	reported := ""
+	finish := ""
+	if json.Unmarshal(raw, &probeObj) == nil {
+		reported = probeObj.Model
+		for _, ch := range probeObj.Choices {
+			if ch.FinishReason != nil && *ch.FinishReason != "" {
+				finish = *ch.FinishReason
+			}
+		}
+	}
+	raw = rewriteModelJSON(raw, model)
 	w.Write(raw)
 	// 提取 usage 落账（openai 形态）
 	var resp struct {
-		Model string `json:"model"`
-		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			TotalTokens      int64 `json:"total_tokens"`
-		} `json:"usage"`
+		Model string         `json:"model"`
+		Usage *usageSnapshot `json:"usage"`
 	}
+	totalMS := time.Since(start).Milliseconds()
 	if json.Unmarshal(raw, &resp) == nil && resp.Usage != nil {
-		g.record(pid, uid, model, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
+		g.record(pid, uid, model, resp.Usage)
+		g.logReq(proto, model, pid, uid, false, resp.Usage, true, "", attempts, totalMS, totalMS, reported, finish)
+	} else {
+		g.logReq(proto, model, pid, uid, false, nil, true, "", attempts, totalMS, totalMS, reported, finish)
 	}
 }
 
-func (g *Gateway) record(pid, uid, model string, prompt, completion, total int64) {
+// modelRewriter 响应流改写器：把 OpenAI SSE 行里的顶层 model 字段改写为请求的对外模型名。
+// 上游渠道会自报真实模型 ID（如 Qoder 的 dfmodel），与客户端请求名不一致时严格客户端会报
+// model mismatch。仅改写成功解析的 JSON 行，内容增量行零开销透传。
+type modelRewriter struct {
+	sc       *bufio.Scanner
+	src      io.ReadCloser
+	want     string
+	reported string // 上游自报的模型名（改写前捕获，请求日志用）
+	out      []byte
+	done     bool
+}
+
+func newModelRewriter(src io.ReadCloser, want string) *modelRewriter {
+	sc := bufio.NewScanner(src)
+	sc.Buffer(make([]byte, 64*1024), 16<<20)
+	return &modelRewriter{sc: sc, src: src, want: want}
+}
+
+func (m *modelRewriter) Read(p []byte) (int, error) {
+	for len(m.out) == 0 {
+		if m.done {
+			return 0, io.EOF
+		}
+		if !m.sc.Scan() {
+			m.done = true
+			return 0, io.EOF
+		}
+		m.out = append(m.out, m.rewriteLine(m.sc.Bytes())...)
+		m.out = append(m.out, '\n')
+	}
+	n := copy(p, m.out)
+	m.out = m.out[n:]
+	return n, nil
+}
+
+func (m *modelRewriter) Close() error { return m.src.Close() }
+
+func (m *modelRewriter) rewriteLine(line []byte) []byte {
+	if !bytes.Contains(line, []byte(`"model"`)) {
+		return line
+	}
+	t := bytes.TrimSpace(line)
+	if !bytes.HasPrefix(t, []byte("data:")) {
+		return line
+	}
+	payload := bytes.TrimSpace(bytes.TrimPrefix(t, []byte("data:")))
+	if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+		return line
+	}
+	var obj map[string]any
+	if json.Unmarshal(payload, &obj) != nil {
+		return line
+	}
+	if cur, ok := obj["model"].(string); ok {
+		if m.reported == "" {
+			m.reported = cur
+		}
+		if cur != m.want {
+			obj["model"] = m.want
+			if raw, err := json.Marshal(obj); err == nil {
+				return append([]byte("data: "), raw...)
+			}
+		}
+	}
+	return line
+}
+
+// rewriteModelJSON 非流式响应：改写顶层 model 字段为请求的对外模型名。
+func rewriteModelJSON(raw []byte, want string) []byte {
+	var obj map[string]any
+	if json.Unmarshal(raw, &obj) != nil {
+		return raw
+	}
+	if cur, ok := obj["model"].(string); ok && cur != want {
+		obj["model"] = want
+		if out, err := json.Marshal(obj); err == nil {
+			return out
+		}
+	}
+	return raw
+}
+
+// usageSnapshot OpenAI 形态 usage 对象（含缓存命中字段，兼容多上游形状）。
+type usageSnapshot struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+	PromptDetails    *struct {
+		CachedTokens int64 `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CacheReadTokens int64 `json:"cache_read_input_tokens"`
+}
+
+// cacheTokens 缓存命中的输入 tokens。
+func (u *usageSnapshot) cacheTokens() int64 {
+	if u.PromptDetails != nil && u.PromptDetails.CachedTokens > 0 {
+		return u.PromptDetails.CachedTokens
+	}
+	return u.CacheReadTokens
+}
+
+func (g *Gateway) record(pid, uid, model string, u *usageSnapshot) {
+	if u == nil {
+		g.usage.Record(usage.Record{Provider: pid, Account: uid, Model: model})
+		return
+	}
 	g.usage.Record(usage.Record{
 		Provider: pid, Account: uid, Model: model,
-		PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total,
+		PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+		TotalTokens: u.TotalTokens, CacheTokens: u.cacheTokens(),
 	})
 }
 
-// usageRecorder 包装响应流：按行扫 usage（OpenAI chunk.usage / 已转换流）。
+// usageRecorder 包装响应流：按行扫 usage（OpenAI chunk.usage / 已转换流），
+// 同时记录首字延迟、捕获的 usage 与结束原因（请求日志用）。
 type usageRecorder struct {
-	src     io.ReadCloser
-	pid     string
-	uid     string
-	model   string
-	g       *Gateway
-	pending []byte
+	src      io.ReadCloser
+	pid      string
+	uid      string
+	model    string
+	g        *Gateway
+	pending  []byte
 	recorded atomic.Bool
+	start    time.Time
+	firstMS  int64
+	captured *usageSnapshot
+	reported string
+	finish   string
 }
 
 func (u *usageRecorder) Read(p []byte) (int, error) {
 	n, err := u.src.Read(p)
 	if n > 0 {
+		if u.firstMS == 0 && !u.start.IsZero() {
+			u.firstMS = time.Since(u.start).Milliseconds()
+		}
 		u.pending = append(u.pending, p[:n]...)
 		// 按行切出完整 JSON 行
 		for {
@@ -361,17 +649,25 @@ func (u *usageRecorder) scanLine(line string) {
 		return
 	}
 	var chunk struct {
-		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			TotalTokens      int64 `json:"total_tokens"`
-		} `json:"usage"`
+		Usage   *usageSnapshot `json:"usage"`
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
 	}
-	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
+		return
+	}
+	for _, ch := range chunk.Choices {
+		if ch.FinishReason != nil && *ch.FinishReason != "" {
+			u.finish = *ch.FinishReason
+		}
+	}
+	if chunk.Usage == nil {
 		return
 	}
 	if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 || chunk.Usage.TotalTokens > 0 {
-		u.g.record(u.pid, u.uid, u.model, chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens)
+		u.g.record(u.pid, u.uid, u.model, chunk.Usage)
+		u.captured = chunk.Usage
 		u.recorded.Store(true)
 	}
 }

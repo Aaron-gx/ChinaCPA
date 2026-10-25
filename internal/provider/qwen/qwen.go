@@ -30,9 +30,9 @@ const (
 	grantDevice        = "urn:ietf:params:oauth:grant-type:device_code"
 	defaultResourceURL = "portal.qwen.ai"
 
-	userAgent        = "google-api-nodejs-client/9.15.1"
-	xGoogAPIClient   = "gl-node/22.17.0"
-	clientMetadata   = "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
+	userAgent      = "google-api-nodejs-client/9.15.1"
+	xGoogAPIClient = "gl-node/22.17.0"
+	clientMetadata = "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"
 )
 
 // Provider Qwen 实现。
@@ -109,11 +109,11 @@ func (p *Provider) StartLogin(ctx context.Context, _ string) (*model.LoginSessio
 		u = df.VerificationURI + "?user_code=" + df.UserCode
 	}
 	s := &model.LoginSession{
-		Provider:    p.ID(),
-		ID:          df.DeviceCode,
-		URL:         u,
-		UserCode:    df.UserCode,
-		DeviceCode:  df.DeviceCode,
+		Provider:     p.ID(),
+		ID:           df.DeviceCode,
+		URL:          u,
+		UserCode:     df.UserCode,
+		DeviceCode:   df.DeviceCode,
 		CodeVerifier: verifier,
 	}
 	p.mu.Lock()
@@ -207,7 +207,8 @@ func (p *Provider) ImportCredential(ctx context.Context, raw string) (*model.Acc
 		a.AccessToken = pick(str("access_token"), str("accessToken"))
 		a.RefreshToken = pick(str("refresh_token"), str("refreshToken"))
 		a.ResourceURL = pick(str("resource_url"), str("resourceUrl"))
-		if e := pick(str("expiry_date"), str("expire"), str("expired")); e != "" {			if t, err := time.Parse(time.RFC3339, e); err == nil {
+		if e := pick(str("expiry_date"), str("expire"), str("expired")); e != "" {
+			if t, err := time.Parse(time.RFC3339, e); err == nil {
 				a.ExpiresAt = t.Unix()
 			}
 		}
@@ -294,8 +295,8 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 
 // 本地请求计数（进程内存 + 跨日自动清零；重启后由 usage 日志回填）。
 var (
-	countMu    sync.Mutex
-	counters   = map[string]*dayCounter{}
+	countMu  sync.Mutex
+	counters = map[string]*dayCounter{}
 )
 
 type dayCounter struct {

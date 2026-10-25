@@ -2,3 +2,7 @@ data/
 chinacpa.exe
 server.log
 config.json
+dist/
+models.json
+*.exe~
+*.zip

@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"chinacpa/internal/model"
 	"chinacpa/internal/pool"
 	"chinacpa/internal/pubmodel"
+	"chinacpa/internal/reqlog"
 	"chinacpa/internal/scheduler"
 	"chinacpa/internal/store"
 	"chinacpa/internal/usage"
@@ -38,10 +40,10 @@ type Panel struct {
 	usage *usage.Tracker
 	sched *scheduler.Scheduler
 	pub   *pubmodel.Manager
+	rlog  *reqlog.DB
 
-	mu       sync.Mutex
-	sessions map[string]*model.LoginSession // login session id -> session
-	tokens   map[string]*loginTicket        // 登录票据（轮询用）
+	mu     sync.Mutex
+	tokens map[string]*loginTicket // 登录票据（轮询用）
 }
 
 type loginTicket struct {
@@ -62,16 +64,16 @@ func (p *Panel) purgeTicketsLocked() {
 }
 
 // New 构造。
-func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sched *scheduler.Scheduler, pub *pubmodel.Manager) *Panel {
+func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sched *scheduler.Scheduler, pub *pubmodel.Manager, rl *reqlog.DB) *Panel {
 	return &Panel{
-		cfg:     cfg,
-		pool:    p,
-		st:      st,
-		usage:   u,
-		sched:   sched,
-		pub:     pub,
-		sessions: map[string]*model.LoginSession{},
-		tokens:   map[string]*loginTicket{},
+		cfg:    cfg,
+		pool:   p,
+		st:     st,
+		usage:  u,
+		sched:  sched,
+		pub:    pub,
+		rlog:   rl,
+		tokens: map[string]*loginTicket{},
 	}
 }
 
@@ -93,6 +95,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 	mux.HandleFunc("/api/usage", p.authed(p.handleUsage))
 	mux.HandleFunc("/api/checkin_all", p.authed(p.handleCheckinAll))
 	mux.HandleFunc("/api/publish", p.authed(p.handlePublish))
+	mux.HandleFunc("/api/requests", p.authed(p.handleRequests))
 }
 
 // ── 面板鉴权 ─────────────────────────────────────────────
@@ -159,17 +162,18 @@ func (p *Panel) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(contextWithTimeout(r.Context(), 45*time.Second))
 	type acctView struct {
-		Provider      string             `json:"provider"`
-		ProviderName  string             `json:"provider_name"`
-		UID           string             `json:"uid"`
-		Nickname      string             `json:"nickname"`
-		Disabled      bool               `json:"disabled"`
-		ExpiresAt     int64              `json:"expires_at"`
-		TokenDaysLeft float64            `json:"token_days_left"`
-		CooldownUntil int64              `json:"cooldown_until"`
-		Quota         *model.QuotaInfo   `json:"quota,omitempty"`
-		CheckinToday  *model.CheckinResult `json:"checkin_today,omitempty"`
-		Status        string             `json:"status"` // ok / cooldown / disabled / expired
+		Provider       string               `json:"provider"`
+		ProviderName   string               `json:"provider_name"`
+		UID            string               `json:"uid"`
+		Nickname       string               `json:"nickname"`
+		Disabled       bool                 `json:"disabled"`
+		ExpiresAt      int64                `json:"expires_at"`
+		TokenDaysLeft  float64              `json:"token_days_left"`
+		CooldownUntil  int64                `json:"cooldown_until"`
+		CooldownModels []string             `json:"cooldown_models,omitempty"` // 冷却中的模型（""=账号级）
+		Quota          *model.QuotaInfo     `json:"quota,omitempty"`
+		CheckinToday   *model.CheckinResult `json:"checkin_today,omitempty"`
+		Status         string               `json:"status"` // ok / cooldown / disabled / expired
 	}
 	accounts := p.pool.Accounts()
 	var views []acctView
@@ -196,7 +200,17 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		if until := p.pool.CooldownUntil(a.Provider, a.UID); until.After(time.Now()) {
 			v.CooldownUntil = until.Unix()
-			v.Status = "cooldown"
+			if v.Status == "" {
+				v.Status = "cooldown"
+			}
+			for m := range p.pool.CooldownModels(a.Provider, a.UID) {
+				label := m
+				if label == "" {
+					label = "全部模型"
+				}
+				v.CooldownModels = append(v.CooldownModels, label)
+			}
+			sort.Strings(v.CooldownModels)
 		}
 		if a.Disabled {
 			v.Status = "disabled"
@@ -234,6 +248,27 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// 近 7/30 日 token 汇总
+	days := p.usage.HistoryDays(30)
+	sumDays := func(list []usage.DayTotal) map[string]int64 {
+		var reqs, pr, cp, tt, ca int64
+		for _, d := range list {
+			reqs += d.Requests
+			pr += d.Prompt
+			cp += d.Complete
+			tt += d.Total
+			ca += d.Cache
+		}
+		return map[string]int64{"requests": reqs, "prompt_tokens": pr, "completion_tokens": cp, "total_tokens": tt, "cache_tokens": ca}
+	}
+	usageDays := map[string]any{"d7": sumDays(days[len(days)-7:]), "d30": sumDays(days)}
+	// 签到调度信息
+	schedule := map[string]any{
+		"checkin_enabled": p.cfg.Schedule.CheckinEnabled,
+		"checkin_hours":   p.cfg.Schedule.CheckinHours,
+		"tasks_enabled":   p.cfg.Schedule.TasksEnabled,
+		"next_checkin":    p.nextCheckinUnix(),
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"accounts":          views,
 		"account_total":     len(views),
@@ -241,6 +276,8 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"model_count":       modelCount,
 		"today":             total,
 		"today_by_model":    today,
+		"usage_days":        usageDays,
+		"schedule":          schedule,
 		"total_credits":     totalCredits,
 		"total_ide_credits": totalIdeCredits,
 		"qwen_remaining":    qwenRemaining,
@@ -250,6 +287,22 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"listen":            p.cfg.Listen,
 		"now":               time.Now().Unix(),
 	})
+}
+
+// nextCheckinUnix 下一次自动签到时刻（未启用返回 0）。
+func (p *Panel) nextCheckinUnix() int64 {
+	if !p.cfg.Schedule.CheckinEnabled || len(p.cfg.Schedule.CheckinHours) == 0 {
+		return 0
+	}
+	hours := append([]int(nil), p.cfg.Schedule.CheckinHours...)
+	sort.Ints(hours)
+	now := time.Now()
+	for _, h := range hours {
+		if t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location()); t.After(now) {
+			return t.Unix()
+		}
+	}
+	return time.Date(now.Year(), now.Month(), now.Day(), hours[0], 0, 0, 0, now.Location()).AddDate(0, 0, 1).Unix()
 }
 
 // ── 账号操作 ─────────────────────────────────────────────
@@ -323,7 +376,6 @@ func (p *Panel) handleAccountAction(w http.ResponseWriter, r *http.Request) {
 	case "refresh_token":
 		changed, err := p.pool.EnsureFreshToken(ctx, a)
 		if err != nil {
-			p.pool.MarkError(a, err)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 			return
 		}
@@ -500,7 +552,8 @@ func (p *Panel) handleTraeCallback(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "<h3>❌ Trae 登录失败</h3><p>%s</p><p><a href=\"/\">返回面板</a></p>", err.Error())
 		return
 	}
-	if res.Account != nil {
+	doneNow := res.Account != nil
+	if doneNow {
 		if err := p.pool.AddAccount(res.Account); err == nil {
 			go func() {
 				p.sched.CheckinAccount(res.Account)
@@ -508,21 +561,27 @@ func (p *Panel) handleTraeCallback(w http.ResponseWriter, r *http.Request) {
 			log.Printf("PANEL: Trae 回调纳管 %s", res.Account.UID)
 		}
 	}
-	// 回调侧已纳管：把面板的 trae 登录票据直接标记完成，轮询立刻返回成功，
-	// 不再二次 AddAccount（也修掉「回调先到、轮询后到」时报会话过期的竞态）。
-	p.mu.Lock()
-	for _, tk := range p.tokens {
-		if tk.provider == "trae" && !tk.done {
-			tk.done, tk.result = true, res
+	// 同步完成（票据丢失的兜底路径）：票据直接标记完成，轮询立刻成功，不再二次 AddAccount。
+	// 异步路径（res 仍是 pending）：票据保持轮询，后台令牌交换完成后轮询自然拿到结果。
+	if doneNow {
+		p.mu.Lock()
+		for _, tk := range p.tokens {
+			if tk.provider == "trae" && !tk.done {
+				tk.done, tk.result = true, res
+			}
 		}
+		p.mu.Unlock()
 	}
-	p.mu.Unlock()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	title, sub := "✅ Trae 登录成功，账号已纳管", "正在返回面板…（本页 4 秒后自动跳转）"
+	if !doneNow {
+		title, sub = "✅ 已收到 Trae 授权", "正在后台交换令牌并纳管，本页可直接关闭或稍候自动返回面板"
+	}
 	fmt.Fprint(w, `<!DOCTYPE html><html><head><meta charset="utf-8">`+
 		`<meta http-equiv="refresh" content="4;url=/">`+
-		`<style>body{background:#0d1117;color:#e6edf3;font-family:"Microsoft YaHei",sans-serif;padding:60px;text-align:center}a{color:#58a6ff}</style></head><body>`+
-		`<h3>✅ Trae 登录成功，账号已纳管</h3><p>正在返回面板…（本页 4 秒后自动跳转）</p><p><a href="/">立即返回</a></p>`+
-		`<script>try{if(window.opener){window.opener.postMessage({type:'ccpa:login-done'},location.origin);setTimeout(function(){window.close()},600)}}catch(e){}</script>`+
+		`<style>body{background:#faf9f5;color:#1f1e1d;font-family:"Microsoft YaHei",sans-serif;padding:60px;text-align:center}a{color:#c96442}</style></head><body>`+
+		`<h3>`+title+`</h3><p>`+sub+`</p><p><a href="/">立即返回面板</a></p>`+
+		`<script>try{if(window.opener&&window.opener!==window&&`+fmt.Sprintf("%t", doneNow)+`){window.opener.postMessage({type:'ccpa:login-done'},location.origin)}}catch(e){}</script>`+
 		`</body></html>`)
 }
 
@@ -605,10 +664,15 @@ func contextWithTimeout(parent context.Context, d time.Duration) context.Context
 
 // ── 发布模型（对外模型 → 多渠道） ────────────────────────
 
-// handlePublish 发布模型配置读写：GET 返回配置，POST 保存并热生效。
+// handlePublish 发布模型配置读写：GET 返回配置+渠道计数，POST 保存并热生效。
 func (p *Panel) handlePublish(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, p.pub.Get())
+		cfg := p.pub.Get()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models":        cfg.Models,
+			"usd_cny":       cfg.USDCNY,
+			"channel_stats": p.pub.ChannelStats(),
+		})
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -627,10 +691,56 @@ func (p *Panel) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// 计价热生效（发布模型单价优先于 pricing.json）
 	pub := map[string]usage.PubPrice{}
 	for k, v := range p.pub.PricingMap() {
-		pub[strings.ToLower(k)] = usage.PubPrice{Input: v.Input, Output: v.Output}
+		pub[strings.ToLower(k)] = usage.PubPrice{Input: v.Input, Output: v.Output, Cache: v.Cache}
 	}
 	p.usage.SetPublishedPricing(pub, p.pub.USDCNY())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(p.pub.Get().Models)})
+}
+
+// handleRequests 请求日志：时间范围 + 模型/状态筛选 + 分页。
+// GET ?range=today|yesterday|7d|30d|all&model=&status=ok|fail&limit=100&offset=0
+func (p *Panel) handleRequests(w http.ResponseWriter, r *http.Request) {
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	from, to := int64(0), now.Unix()
+	switch r.URL.Query().Get("range") {
+	case "today":
+		from = todayStart.Unix()
+	case "yesterday":
+		from = todayStart.AddDate(0, 0, -1).Unix()
+		to = todayStart.Unix() - 1
+	case "7d":
+		from = todayStart.AddDate(0, 0, -6).Unix()
+	case "30d":
+		from = todayStart.AddDate(0, 0, -29).Unix()
+	default: // all
+	}
+	limit := 100
+	if n, err := fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit); err != nil || n < 1 || limit < 1 || limit > 1000 {
+		limit = 100
+	}
+	offset := 0
+	if n, err := fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset); err != nil || n < 1 || offset < 0 {
+		offset = 0
+	}
+	q := reqlog.QueryOpts{
+		From:   from,
+		To:     to,
+		Model:  r.URL.Query().Get("model"),
+		Status: r.URL.Query().Get("status"),
+		Limit:  limit,
+		Offset: offset,
+	}
+	entries, stats, err := p.rlog.Query(q)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": entries,
+		"stats":   stats,
+		"query":   map[string]any{"range": r.URL.Query().Get("range"), "limit": limit, "offset": offset, "total": stats.Total},
+	})
 }
 
 // ── 工具 ─────────────────────────────────────────────────
@@ -640,4 +750,3 @@ func writeJSON(w http.ResponseWriter, status int, obj any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(obj)
 }
-

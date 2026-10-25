@@ -28,6 +28,9 @@ type Config struct {
 
 	Pricing PricingConfig `json:"pricing"`
 
+	// RequestLogDays 请求日志保留天数（本地数据库 data/requests.db，0 = 默认 90 天）
+	RequestLogDays int `json:"request_log_days"`
+
 	Server ServerConfig `json:"server"`
 }
 
@@ -68,23 +71,24 @@ type ServerConfig struct {
 // Default 返回内置缺省配置。
 func Default() *Config {
 	return &Config{
-		Listen:       ":8318",
-		APIKey:       "sk-chinacpa-please-change-me",
+		Listen:        ":8318",
+		APIKey:        "sk-chinacpa-please-change-me",
 		PanelPassword: "123456",
-		DataDir:      "./data",
+		DataDir:       "./data",
 		Schedule: Schedule{
-			CheckinHours:         []int{9, 21},
-			CheckinEnabled:       true,
-			TasksEnabled:         true,
-			QuotaRefreshMinutes:  10,
-			TokenRefreshHours:    []int{3},
+			CheckinHours:        []int{9, 21},
+			CheckinEnabled:      true,
+			TasksEnabled:        true,
+			QuotaRefreshMinutes: 10,
+			TokenRefreshHours:   []int{3},
 		},
 		Qwen: QwenConfig{DailyRequestLimit: 2000},
 		Pricing: PricingConfig{
 			File:   "",
 			USDCNY: 7.1,
 		},
-		Server: ServerConfig{ReadTimeoutSeconds: 0, WriteTimeoutSeconds: 0},
+		RequestLogDays: 90,
+		Server:         ServerConfig{ReadTimeoutSeconds: 0, WriteTimeoutSeconds: 0},
 	}
 }
 
@@ -130,6 +134,9 @@ func (c *Config) normalize() {
 	}
 	if c.Pricing.USDCNY <= 0 {
 		c.Pricing.USDCNY = 7.1
+	}
+	if c.RequestLogDays <= 0 {
+		c.RequestLogDays = 90
 	}
 }
 

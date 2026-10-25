@@ -1,18 +1,21 @@
 // translate.go 网关多协议接入层：
 //   - /v1/responses  OpenAI Responses API（Codex CLI 原生协议）
 //   - /v1/messages   Anthropic Messages API（Claude Code 原生协议）
+//
 // 入站请求先翻译为 OpenAI Chat Completions 调 provider（恒流式出站），
 // 响应流逐行翻译回原协议。翻译器完整移植自 CLIProxyAPI。
 package gateway
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	claudetl "chinacpa/internal/translator/openai/claude"
 	responsestl "chinacpa/internal/translator/openai/responses"
@@ -64,7 +67,8 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_json", ferr.Error())
 		return
 	}
-	st := g.callRoutedStream(r.Context(), w, route, streamBody)
+	t0 := time.Now()
+	st := g.callRoutedStream(r.Context(), w, route, streamBody, "responses", sessionKeyOf(inbound))
 	if st == nil {
 		return
 	}
@@ -75,18 +79,21 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 		rc := newProtocolStream(st, st.pid, pub, g, func(line []byte) [][]byte {
 			return responsestl.ConvertOpenAIChatCompletionsResponseToOpenAIResponses(
 				context.Background(), pub, inbound, openAIBody, line, &param)
-		})
+		}, t0)
 		defer rc.Close()
 		pumpStream(w, rc)
+		g.logReq("responses", pub, st.pid, st.acct.UID, true, rc.captured, true, "", st.attempts, rc.firstMS, time.Since(t0).Milliseconds(), rc.reported, rc.finish)
 		return
 	}
-	full, aerr := aggregateOpenAIJSON(st.body, pub)
+	full, reported, afinish, aerr := aggregateOpenAIJSON(st.body, pub)
 	st.body.Close()
 	if aerr != nil {
 		writeErr(w, http.StatusBadGateway, "upstream_error", aerr.Error())
 		return
 	}
-	g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
+	u := g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
+	totalMS := time.Since(t0).Milliseconds()
+	g.logReq("responses", pub, st.pid, st.acct.UID, false, u, true, "", st.attempts, totalMS, totalMS, reported, afinish)
 	out := responsestl.ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(
 		context.Background(), pub, inbound, openAIBody, full, &param)
 	w.Header().Set("Content-Type", "application/json")
@@ -129,7 +136,8 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicErr(w, http.StatusBadRequest, "invalid_json", ferr.Error())
 		return
 	}
-	st := g.callRoutedStream(r.Context(), w, route, streamBody)
+	t0 := time.Now()
+	st := g.callRoutedStream(r.Context(), w, route, streamBody, "messages", sessionKeyOf(inbound))
 	if st == nil {
 		return
 	}
@@ -140,18 +148,21 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		rc := newProtocolStream(st, st.pid, pub, g, func(line []byte) [][]byte {
 			return claudetl.ConvertOpenAIResponseToClaude(
 				context.Background(), pub, inbound, openAIBody, line, &param)
-		})
+		}, t0)
 		defer rc.Close()
 		pumpStream(w, rc)
+		g.logReq("messages", pub, st.pid, st.acct.UID, true, rc.captured, true, "", st.attempts, rc.firstMS, time.Since(t0).Milliseconds(), rc.reported, rc.finish)
 		return
 	}
-	full, aerr := aggregateOpenAIJSON(st.body, pub)
+	full, reported, afinish, aerr := aggregateOpenAIJSON(st.body, pub)
 	st.body.Close()
 	if aerr != nil {
 		writeAnthropicErr(w, http.StatusBadGateway, "api_error", aerr.Error())
 		return
 	}
-	g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
+	u := g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
+	totalMS := time.Since(t0).Milliseconds()
+	g.logReq("messages", pub, st.pid, st.acct.UID, false, u, true, "", st.attempts, totalMS, totalMS, reported, afinish)
 	out := claudetl.ConvertOpenAIResponseToClaudeNonStream(
 		context.Background(), pub, inbound, openAIBody, full, &param)
 	w.Header().Set("Content-Type", "application/json")
@@ -198,20 +209,17 @@ func pumpStream(w http.ResponseWriter, rc io.ReadCloser) {
 	}
 }
 
-// recordFromJSON 从聚合后的 OpenAI JSON 提取 usage 落账。
-func (g *Gateway) recordFromJSON(pid, uid, modelName string, full []byte) {
+// recordFromJSON 从聚合后的 OpenAI JSON 提取 usage 落账，返回 usage（请求日志用）。
+func (g *Gateway) recordFromJSON(pid, uid, modelName string, full []byte) *usageSnapshot {
 	var resp struct {
-		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			TotalTokens      int64 `json:"total_tokens"`
-		} `json:"usage"`
+		Usage *usageSnapshot `json:"usage"`
 	}
-	if json.Unmarshal(full, &resp) == nil && resp.Usage != nil {
-		g.record(pid, uid, modelName, resp.Usage.PromptTokens, resp.Usage.CompletionTokens, resp.Usage.TotalTokens)
-		return
+	if json.Unmarshal(full, &resp) == nil && resp.Usage != nil && (resp.Usage.PromptTokens > 0 || resp.Usage.CompletionTokens > 0 || resp.Usage.TotalTokens > 0) {
+		g.record(pid, uid, modelName, resp.Usage)
+		return resp.Usage
 	}
-	g.record(pid, uid, modelName, 0, 0, 0)
+	g.record(pid, uid, modelName, nil)
+	return nil
 }
 
 // ── 流转换器：OpenAI SSE → 目标协议 SSE ──────────────────
@@ -229,12 +237,17 @@ type protocolStream struct {
 	uid      string
 	model    string
 	recorded atomic.Bool
+	start    time.Time
+	firstMS  int64
+	captured *usageSnapshot
+	reported string // 上游自报模型名
+	finish   string // 结束原因
 }
 
-func newProtocolStream(st *openAIStream, pid, modelName string, g *Gateway, convert func([]byte) [][]byte) *protocolStream {
+func newProtocolStream(st *openAIStream, pid, modelName string, g *Gateway, convert func([]byte) [][]byte, start time.Time) *protocolStream {
 	sc := bufio.NewScanner(st.body)
 	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
-	return &protocolStream{src: st.body, sc: sc, convert: convert, g: g, pid: pid, uid: st.acct.UID, model: modelName}
+	return &protocolStream{src: st.body, sc: sc, convert: convert, g: g, pid: pid, uid: st.acct.UID, model: modelName, start: start}
 }
 
 func (s *protocolStream) Read(p []byte) (int, error) {
@@ -248,7 +261,11 @@ func (s *protocolStream) Read(p []byte) (int, error) {
 			s.recordFallback()
 			return 0, io.EOF
 		}
+		if s.firstMS == 0 && !s.start.IsZero() {
+			s.firstMS = time.Since(s.start).Milliseconds()
+		}
 		line := s.sc.Bytes()
+		s.captureModel(line)
 		s.scanUsage(line)
 		for _, ev := range s.convert(line) {
 			s.out = append(s.out, ev...)
@@ -257,6 +274,35 @@ func (s *protocolStream) Read(p []byte) (int, error) {
 	n := copy(p, s.out)
 	s.out = s.out[n:]
 	return n, nil
+}
+
+// captureModel 捕获首个含 model 字段的原始 chunk（上游自报模型名）与结束原因。
+func (s *protocolStream) captureModel(line []byte) {
+	if !bytes.Contains(line, []byte(`"model"`)) && !bytes.Contains(line, []byte(`"finish_reason"`)) {
+		return
+	}
+	t := bytes.TrimSpace(line)
+	payload := []byte(t)
+	if p, ok := bytes.CutPrefix(t, []byte("data:")); ok {
+		payload = bytes.TrimSpace(p)
+	}
+	var pm struct {
+		Model   string `json:"model"`
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(payload, &pm) != nil {
+		return
+	}
+	if s.reported == "" && pm.Model != "" {
+		s.reported = pm.Model
+	}
+	for _, ch := range pm.Choices {
+		if ch.FinishReason != nil && *ch.FinishReason != "" {
+			s.finish = *ch.FinishReason
+		}
+	}
 }
 
 func (s *protocolStream) scanUsage(line []byte) {
@@ -272,24 +318,21 @@ func (s *protocolStream) scanUsage(line []byte) {
 		return
 	}
 	var chunk struct {
-		Usage *struct {
-			PromptTokens     int64 `json:"prompt_tokens"`
-			CompletionTokens int64 `json:"completion_tokens"`
-			TotalTokens      int64 `json:"total_tokens"`
-		} `json:"usage"`
+		Usage *usageSnapshot `json:"usage"`
 	}
 	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
 		return
 	}
 	if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 || chunk.Usage.TotalTokens > 0 {
-		s.g.record(s.pid, s.uid, s.model, chunk.Usage.PromptTokens, chunk.Usage.CompletionTokens, chunk.Usage.TotalTokens)
+		s.g.record(s.pid, s.uid, s.model, chunk.Usage)
+		s.captured = chunk.Usage
 		s.recorded.Store(true)
 	}
 }
 
 func (s *protocolStream) recordFallback() {
 	if !s.recorded.Load() {
-		s.g.record(s.pid, s.uid, s.model, 0, 0, 0)
+		s.g.record(s.pid, s.uid, s.model, nil)
 		s.recorded.Store(true)
 	}
 }
@@ -301,12 +344,14 @@ func (s *protocolStream) Close() error {
 
 // ── OpenAI SSE 聚合为完整 JSON ──────────────────────────
 
-func aggregateOpenAIJSON(body io.Reader, modelName string) ([]byte, error) {
+// aggregateOpenAIJSON 聚合 OpenAI SSE 为完整 JSON，返回聚合体与上游自报模型名。
+func aggregateOpenAIJSON(body io.Reader, modelName string) ([]byte, string, string, error) {
 	sc := bufio.NewScanner(body)
 	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	var content, reasoning strings.Builder
 	var toolCalls []any
 	var usage map[string]any
+	reported := ""
 	finish := "stop"
 	for sc.Scan() {
 		t := strings.TrimSpace(sc.Text())
@@ -321,6 +366,7 @@ func aggregateOpenAIJSON(body io.Reader, modelName string) ([]byte, error) {
 			break
 		}
 		var chunk struct {
+			Model   string `json:"model"`
 			Choices []struct {
 				Delta struct {
 					Content          string `json:"content"`
@@ -333,6 +379,9 @@ func aggregateOpenAIJSON(body io.Reader, modelName string) ([]byte, error) {
 		}
 		if json.Unmarshal([]byte(payload), &chunk) != nil {
 			continue
+		}
+		if chunk.Model != "" && reported == "" {
+			reported = chunk.Model
 		}
 		if chunk.Usage != nil {
 			usage = chunk.Usage
@@ -367,5 +416,6 @@ func aggregateOpenAIJSON(body io.Reader, modelName string) ([]byte, error) {
 	if usage != nil {
 		resp["usage"] = usage
 	}
-	return json.Marshal(resp)
+	out, err := json.Marshal(resp)
+	return out, reported, finish, err
 }
