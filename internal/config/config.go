@@ -22,6 +22,8 @@ type Config struct {
 
 	Qwen QwenConfig `json:"qwen"`
 
+	Doubao DoubaoConfig `json:"doubao"`
+
 	// ModelAliases 模型别名：客户端写死的模型名 -> ChinaCPA 模型名。
 	// 例：{"gpt-5.2-codex": "workbuddy:glm-5.3", "claude-sonnet-4-6": "trae:glm-5.2"}
 	ModelAliases map[string]string `json:"model_aliases"`
@@ -54,6 +56,14 @@ type QwenConfig struct {
 	DailyRequestLimit int64 `json:"daily_request_limit"`
 }
 
+// DoubaoConfig 豆包平台配置。
+type DoubaoConfig struct {
+	// ImageDailyLimit 每账号每日图片生成张数上限（本地计数，<=0 用默认 50）
+	ImageDailyLimit int64 `json:"image_daily_limit"`
+	// VideoDailyLimit 每账号每日视频生成条数上限（本地计数，<=0 用默认 10）
+	VideoDailyLimit int64 `json:"video_daily_limit"`
+}
+
 // PricingConfig 计价配置。
 type PricingConfig struct {
 	// File 模型单价表路径（$/1M tokens）
@@ -82,7 +92,8 @@ func Default() *Config {
 			QuotaRefreshMinutes: 10,
 			TokenRefreshHours:   []int{3},
 		},
-		Qwen: QwenConfig{DailyRequestLimit: 2000},
+		Qwen:   QwenConfig{DailyRequestLimit: 2000},
+		Doubao: DoubaoConfig{ImageDailyLimit: 50, VideoDailyLimit: 10},
 		Pricing: PricingConfig{
 			File:   "",
 			USDCNY: 7.1,
@@ -131,6 +142,12 @@ func (c *Config) normalize() {
 	}
 	if c.Qwen.DailyRequestLimit <= 0 {
 		c.Qwen.DailyRequestLimit = 2000
+	}
+	if c.Doubao.ImageDailyLimit <= 0 {
+		c.Doubao.ImageDailyLimit = 50
+	}
+	if c.Doubao.VideoDailyLimit <= 0 {
+		c.Doubao.VideoDailyLimit = 10
 	}
 	if c.Pricing.USDCNY <= 0 {
 		c.Pricing.USDCNY = 7.1

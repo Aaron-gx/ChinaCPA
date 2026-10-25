@@ -16,8 +16,10 @@ import (
 	"chinacpa/internal/panel"
 	"chinacpa/internal/pool"
 	"chinacpa/internal/provider"
+	"chinacpa/internal/provider/doubao"
 	"chinacpa/internal/provider/qoder"
 	"chinacpa/internal/provider/qwen"
+	"chinacpa/internal/provider/qwenwork"
 	"chinacpa/internal/provider/trae"
 	"chinacpa/internal/provider/workbuddy"
 	"chinacpa/internal/pubmodel"
@@ -52,9 +54,11 @@ func main() {
 	tr := trae.New()
 	qd := qoder.New("cn")
 	qdi := qoder.New("intl")
+	qww := qwenwork.New()
+	db := doubao.New(cfg.Doubao.ImageDailyLimit, cfg.Doubao.VideoDailyLimit)
 
 	// pool
-	provs := []provider.Provider{wb, qw, tr, qd, qdi}
+	provs := []provider.Provider{wb, qw, tr, qd, qdi, qww, db}
 	pl, err := pool.New(st, provs)
 	if err != nil {
 		log.Fatalf("加载账号失败: %v", err)

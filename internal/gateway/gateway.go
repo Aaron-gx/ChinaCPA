@@ -25,10 +25,11 @@ import (
 
 // Gateway 网关。
 type Gateway struct {
-	pool     *pool.Pool
-	usage    *usage.Tracker
-	qwenProv qwenCounter
-	rlog     *reqlog.DB
+	pool       *pool.Pool
+	usage      *usage.Tracker
+	qwenProv   qwenCounter
+	rlog       *reqlog.DB
+	videoTasks *videoTaskStore // 视频生成任务表（内存态）
 }
 
 // qwenCounter Qwen 本地请求计数的最小接口（解耦）。
@@ -38,7 +39,7 @@ type qwenCounter interface {
 
 // New 构造。
 func New(p *pool.Pool, u *usage.Tracker) *Gateway {
-	return &Gateway{pool: p, usage: u}
+	return &Gateway{pool: p, usage: u, videoTasks: &videoTaskStore{tasks: map[string]*videoTask{}}}
 }
 
 // SetQwenCounter 注入 Qwen 计数器。
@@ -73,6 +74,7 @@ func (g *Gateway) Register(mux *http.ServeMux, authKey string) {
 	mux.HandleFunc("/v1/chat/completions", g.auth(g.handleChat, authKey))
 	mux.HandleFunc("/v1/responses", g.auth(g.handleResponses, authKey))
 	mux.HandleFunc("/v1/messages", g.auth(g.handleClaudeMessages, authKey))
+	g.registerMedia(mux, authKey) // 图片 / 视频（含火山方舟 /api/v3 路径）
 }
 
 func (g *Gateway) auth(next http.HandlerFunc, key string) http.HandlerFunc {
@@ -378,6 +380,17 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "model_not_found", err.Error())
 		return
 	}
+	// 类型错配守卫：图片/视频模型不能走对话端点（正确调用方式见提示）
+	switch route.Type {
+	case "image":
+		writeErr(w, http.StatusBadRequest, "wrong_endpoint",
+			"模型 "+route.Public+" 是图片生成模型：请用 POST /v1/images/generations（body 含 prompt），不是 /v1/chat/completions")
+		return
+	case "video":
+		writeErr(w, http.StatusBadRequest, "wrong_endpoint",
+			"模型 "+route.Public+" 是视频生成模型：请用 POST /api/v3/contents/generations/tasks（火山方舟任务协议），不是 /v1/chat/completions")
+		return
+	}
 	t0 := time.Now()
 	st := g.callRoutedStream(r.Context(), w, route, body, "chat", sessionKeyOf(body))
 	if st == nil {
@@ -641,10 +654,15 @@ func (u *usageRecorder) scanLine(line string) {
 		return
 	}
 	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "data:") {
+	// 兼容两种形态：SSE 行（data: {...}）与 provider 聚合返回的裸 JSON 单行
+	// （trae 等平台客户端非流式时上游整体聚合为一条 JSON，Content-Type 被上层
+	// 统一标成 event-stream，但行本身无 data: 前缀）。
+	payload := trimmed
+	if strings.HasPrefix(trimmed, "data:") {
+		payload = strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	} else if !strings.HasPrefix(trimmed, "{") {
 		return
 	}
-	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
 	if payload == "" || payload == "[DONE]" {
 		return
 	}

@@ -25,6 +25,13 @@ type Account struct {
 	// Qwen 专属（OAuth resource_url，如 portal.qwen.ai）
 	ResourceURL string `json:"resource_url,omitempty"`
 
+	// Qwen 网页会话通道（Source=web）：chat.qwen.ai 的整串 Cookie（可空，仅 Bearer 也可）
+	WebCookie string `json:"web_cookie,omitempty"`
+
+	// Doubao 专属：网页协议设备标识 JSON {"device_id":"...","web_id":"..."}
+	//（导入时生成一次并落盘；fp=s_v_web_id 直接从 WebCookie 提取）
+	DoubaoSeed string `json:"doubao_seed,omitempty"`
+
 	// Trae 专属（PKCE 设备密钥 + 刷新客户端绑定 + 区域 host 覆盖）
 	DevicePrivateKey string `json:"device_private_key,omitempty"`
 	RefreshClientID  string `json:"refresh_client_id,omitempty"`
@@ -82,6 +89,8 @@ type ModelInfo struct {
 	SupportsTools  bool   `json:"supports_tools,omitempty"`
 	SupportsImages bool   `json:"supports_images,omitempty"`
 	Credits        string `json:"credits,omitempty"` // WorkBuddy 计价倍率原文
+	// Kind 模型类别：chat（默认）/ image / video（发布编辑器分组与端点校验用）
+	Kind string `json:"kind,omitempty"`
 }
 
 // LoginSession 一次登录会话（面板发起，浏览器完成，面板轮询结果）。
