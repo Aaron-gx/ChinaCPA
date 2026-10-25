@@ -71,55 +71,19 @@ func pkcePair() (verifier, challenge string) {
 	return
 }
 
-// StartLogin 发起设备码授权。
-func (p *Provider) StartLogin(ctx context.Context, _ string) (*model.LoginSession, error) {
-	verifier, challenge := pkcePair()
-	form := url.Values{}
-	form.Set("client_id", clientID)
-	form.Set("scope", scope)
-	form.Set("code_challenge", challenge)
-	form.Set("code_challenge_method", "S256")
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, deviceCodeEndpoint, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-	resp, err := p.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("发起设备码授权失败: %w", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("设备码授权失败 http %d: %s", resp.StatusCode, truncate(string(raw), 200))
-	}
-	var df struct {
-		DeviceCode              string `json:"device_code"`
-		UserCode                string `json:"user_code"`
-		VerificationURI         string `json:"verification_uri"`
-		VerificationURIComplete string `json:"verification_uri_complete"`
-		ExpiresIn               int    `json:"expires_in"`
-	}
-	if err := json.Unmarshal(raw, &df); err != nil || df.DeviceCode == "" {
-		return nil, fmt.Errorf("设备码响应异常: %s", truncate(string(raw), 200))
-	}
-	u := df.VerificationURIComplete
-	if u == "" {
-		u = df.VerificationURI + "?user_code=" + df.UserCode
-	}
-	s := &model.LoginSession{
-		Provider:     p.ID(),
-		ID:           df.DeviceCode,
-		URL:          u,
-		UserCode:     df.UserCode,
-		DeviceCode:   df.DeviceCode,
-		CodeVerifier: verifier,
-	}
-	p.mu.Lock()
-	p.sessions[df.DeviceCode] = s
-	p.mu.Unlock()
-	return s, nil
+// setOAuthHeaders OAuth 端点通用头。chat.qwen.ai 挂阿里 WAF：缺 UA（或 Go 默认 UA）
+// 会被 JS 挑战页拦截（405/aliyun_waf_aa），必须完整伪装 Qwen Code CLI 三件套。
+func setOAuthHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("X-Goog-Api-Client", xGoogAPIClient)
+	req.Header.Set("Client-Metadata", clientMetadata)
+}
+
+// StartLogin OAuth 设备流已失效：免费层 2026-04-15 下线且 chat.qwen.ai 前端移除了
+// /authorize 授权页（路由跳回首页）。面板引导用户走凭证导入（网页会话 token）。
+func (p *Provider) StartLogin(_ context.Context, _ string) (*model.LoginSession, error) {
+	return nil, fmt.Errorf("Qwen OAuth 设备码授权已下线（官方 2026-04 停止免费层并移除授权页）。" +
+		"请改用下方「粘贴登录凭证」：登录 chat.qwen.ai 后 F12 → Application → Local Storage → 复制 token 粘贴导入")
 }
 
 type tokenResp struct {
@@ -139,6 +103,7 @@ func (p *Provider) postToken(ctx context.Context, form url.Values) (*tokenResp, 
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
+	setOAuthHeaders(req)
 	resp, err := p.http.Do(req)
 	if err != nil {
 		return nil, err
@@ -186,45 +151,10 @@ func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model
 	return &model.PollResult{Status: model.LoginDone, Account: a}, nil
 }
 
-// ImportCredential 支持粘贴 refresh token / 完整 token JSON。
+// ImportCredential 网页会话凭证导入（chat.qwen.ai token / Cookie）。
+// OAuth 设备流免费层已下线，新账号一律走网页会话通道（Source=web）。
 func (p *Provider) ImportCredential(ctx context.Context, raw string) (*model.Account, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return nil, fmt.Errorf("凭证为空")
-	}
-	a := &model.Account{Provider: p.ID()}
-	if strings.HasPrefix(raw, "{") {
-		var m map[string]any
-		if err := json.Unmarshal([]byte(raw), &m); err != nil {
-			return nil, fmt.Errorf("JSON 解析失败: %v", err)
-		}
-		str := func(k string) string {
-			if v, ok := m[k].(string); ok {
-				return v
-			}
-			return ""
-		}
-		a.AccessToken = pick(str("access_token"), str("accessToken"))
-		a.RefreshToken = pick(str("refresh_token"), str("refreshToken"))
-		a.ResourceURL = pick(str("resource_url"), str("resourceUrl"))
-		if e := pick(str("expiry_date"), str("expire"), str("expired")); e != "" {
-			if t, err := time.Parse(time.RFC3339, e); err == nil {
-				a.ExpiresAt = t.Unix()
-			}
-		}
-	} else {
-		a.RefreshToken = raw
-	}
-	if a.AccessToken == "" && a.RefreshToken == "" {
-		return nil, fmt.Errorf("凭证中未找到 access_token / refresh_token")
-	}
-	if _, err := p.RefreshToken(ctx, a); err != nil && a.AccessToken == "" {
-		return nil, err
-	}
-	if a.UID == "" {
-		a.UID = "qwen-" + hashSuffix(pick(a.AccessToken, a.RefreshToken))
-	}
-	return a, nil
+	return p.webImport(ctx, raw)
 }
 
 func hashSuffix(s string) string {
@@ -242,8 +172,12 @@ func pick(vals ...string) string {
 	return ""
 }
 
-// RefreshToken 用 refresh token 换新 access token。
+// RefreshToken 刷新访问令牌。网页会话账号（Source=web）的 token 不可刷新，
+// 到期后需重新导入；OAuth 老账号仍走 refresh_token 换新。
 func (p *Provider) RefreshToken(ctx context.Context, a *model.Account) (bool, error) {
+	if a.Source == "web" {
+		return false, nil
+	}
 	if a.RefreshToken == "" {
 		return false, nil
 	}
@@ -351,7 +285,11 @@ var builtinModels = []model.ModelInfo{
 }
 
 // Models 优先 GET {base}/v1/models（OpenAI 格式），失败回落内置目录。
+// 网页会话账号走 /api/models。
 func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelInfo, error) {
+	if a.Source == "web" {
+		return p.webModels(ctx, a)
+	}
 	base := p.baseURL(a)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
 	if err == nil {
@@ -410,6 +348,9 @@ func (p *Provider) setHeaders(req *http.Request, a *model.Account, stream bool) 
 // 做三处改写：无 tools 时注入防"投毒"占位工具；stream=true 时补 stream_options.include_usage；
 // model 覆盖为实际模型名。
 func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName string, body []byte) (*provider.ChatResult, error) {
+	if a.Source == "web" {
+		return p.webChatStream(ctx, a, modelName, body)
+	}
 	var obj map[string]any
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return nil, fmt.Errorf("请求体不是合法 JSON: %w", err)
