@@ -138,7 +138,7 @@ func TestPrepareBody(t *testing.T) {
 
 // TestBuildLoginURL 登录 URL 关键参数。
 func TestBuildLoginURL(t *testing.T) {
-	u := buildLoginURL("m123", "d456", "http://127.0.0.1:8318/trae/callback", "trace123", "verifier-abc")
+	u := buildLoginURL("m123", "d456", "http://127.0.0.1:8313/trae/callback", "trace123", "verifier-abc")
 	for _, want := range []string{
 		"auth_callback_url=", "machine_id=m123", "device_id=d456", "client_id=" + clientID, "code_challenge=", "login_trace_id=trace123",
 	} {

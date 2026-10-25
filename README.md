@@ -35,7 +35,7 @@ go build -o chinacpa.exe ./cmd/chinacpa
 # Windows 双击 start.bat 也可以
 
 # 3. 打开面板
-# http://127.0.0.1:8318/   默认密码 123456
+# http://127.0.0.1:8313/   默认密码 123456
 ```
 
 ### 面板操作
@@ -98,14 +98,14 @@ wire_api = "responses"
 
 [model_providers.chinacpa]
 name = "ChinaCPA"
-base_url = "http://127.0.0.1:8318/v1"
+base_url = "http://127.0.0.1:8313/v1"
 env_key = "CHINACPA_API_KEY"       # export CHINACPA_API_KEY=<你的 api_key>
 ```
 
 **Claude Code 接入**：
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8318
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8313
 export ANTHROPIC_API_KEY=<你的 api_key>
 export ANTHROPIC_MODEL=trae:glm-5.2        # 或用 model_aliases 映射 claude-sonnet-4-6
 ```
@@ -113,7 +113,7 @@ export ANTHROPIC_MODEL=trae:glm-5.2        # 或用 model_aliases 映射 claude-
 **标准 OpenAI SDK**：
 
 ```bash
-curl http://127.0.0.1:8318/v1/chat/completions \
+curl http://127.0.0.1:8313/v1/chat/completions \
   -H "Authorization: Bearer <你的 api_key>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -130,7 +130,7 @@ curl http://127.0.0.1:8318/v1/chat/completions \
 
 ```jsonc
 {
-  "listen": ":8318",                    // 监听地址
+  "listen": ":8313",                    // 监听地址
   "api_key": "sk-xxx",                  // /v1 网关密钥
   "panel_password": "123456",           // 面板密码
   "data_dir": "./data",                 // 账号凭证/用量/状态目录

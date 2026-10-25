@@ -6,6 +6,6 @@ if not exist chinacpa.exe (
   echo [ChinaCPA] 未找到 chinacpa.exe，正在构建...
   go build -o chinacpa.exe ./cmd/chinacpa
 )
-echo [ChinaCPA] 启动中... 面板 http://127.0.0.1:8318/
+echo [ChinaCPA] 启动中... 面板 http://127.0.0.1:8313/
 chinacpa.exe -config config.json
 pause

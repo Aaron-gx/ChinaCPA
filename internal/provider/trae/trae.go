@@ -228,7 +228,7 @@ func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.
 		return nil, fmt.Errorf("生成设备密钥失败: %w", err)
 	}
 	if callbackBase == "" {
-		callbackBase = "http://127.0.0.1:8318"
+		callbackBase = "http://127.0.0.1:8313"
 	}
 	callbackURL := strings.TrimSuffix(callbackBase, "/") + "/authorize"
 	trace := hex16()

@@ -71,7 +71,7 @@ type ServerConfig struct {
 // Default 返回内置缺省配置。
 func Default() *Config {
 	return &Config{
-		Listen:        ":8318",
+		Listen:        ":8313",
 		APIKey:        "sk-chinacpa-please-change-me",
 		PanelPassword: "123456",
 		DataDir:       "./data",

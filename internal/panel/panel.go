@@ -264,10 +264,12 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 	usageDays := map[string]any{"d7": sumDays(days[len(days)-7:]), "d30": sumDays(days)}
 	// 签到调度信息
 	schedule := map[string]any{
-		"checkin_enabled": p.cfg.Schedule.CheckinEnabled,
-		"checkin_hours":   p.cfg.Schedule.CheckinHours,
-		"tasks_enabled":   p.cfg.Schedule.TasksEnabled,
-		"next_checkin":    p.nextCheckinUnix(),
+		"checkin_enabled":       p.cfg.Schedule.CheckinEnabled,
+		"checkin_hours":         p.cfg.Schedule.CheckinHours,
+		"tasks_enabled":         p.cfg.Schedule.TasksEnabled,
+		"next_checkin":          p.nextCheckinUnix(),
+		"quota_refresh_minutes": p.cfg.Schedule.QuotaRefreshMinutes,
+		"token_refresh_hours":   p.cfg.Schedule.TokenRefreshHours,
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"accounts":          views,
@@ -285,6 +287,8 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"usd_cny":           p.usage.USDCNY(),
 		"gateway_url":       "/v1",
 		"listen":            p.cfg.Listen,
+		"api_key":           p.cfg.APIKey,
+		"data_dir":          p.cfg.DataDir,
 		"now":               time.Now().Unix(),
 	})
 }

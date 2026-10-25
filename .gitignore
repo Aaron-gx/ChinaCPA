@@ -6,3 +6,7 @@ dist/
 models.json
 *.exe~
 *.zip
+
+# 浮动栏产物与日志；源码在 cmd/rail
+rail.exe
+rail.log
