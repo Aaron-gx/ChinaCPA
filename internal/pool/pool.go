@@ -466,6 +466,9 @@ type Route struct {
 	Channels []ChannelTarget
 	// Published 是否命中发布模型（渠道计数只对发布模型记录）
 	Published bool
+	// Type 发布模型类别：chat（默认）/ image / video（空 = 未标注，按对话处理）；
+	// 网关据此校验「图片模型不能走对话端点」等错配并给出提示
+	Type string
 }
 
 // ResolveRoute 解析请求模型名为路由：
@@ -491,7 +494,7 @@ func (p *Pool) ResolveRoute(ctx context.Context, name string) (*Route, error) {
 				return nil, fmt.Errorf("模型 %q 的渠道均不可用（平台未注册）", name)
 			}
 			// 渠道按用户配置的优先级严格排序（如：国内优先，国际兜底），不做起点轮转
-			return &Route{Public: mo.ID, Channels: chs, Published: true}, nil
+			return &Route{Public: mo.ID, Channels: chs, Published: true, Type: mo.Type}, nil
 		}
 	}
 	pid, mname, err := p.ResolveModel(ctx, name)

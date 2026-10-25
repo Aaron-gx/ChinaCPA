@@ -316,12 +316,15 @@ func (r *Rail) paintRing(p *painter, cx, cy int32, m Metric, active bool) {
 
 	// 图标：占中心盘 80%（Pulse 的 iconScale）；无读数时压到 35%
 	iconSize := int32(float32(discR*2) * float32(iconScale))
+	op := uint8(0xFF)
+	if m.Empty {
+		op = 0x59 // 35%
+	}
 	if icon := loadIcon(m.Provider); icon != nil {
-		op := uint8(0xFF)
-		if m.Empty {
-			op = 0x59 // 35%
-		}
 		p.drawIconAlpha(icon, cx, cy, iconSize, op)
+	} else {
+		// 没有素材的平台（新接入的 provider）画首字母，不留空白
+		drawInitial(p, m.Label, cx, cy, float32(iconSize)*0.72, op)
 	}
 
 	if active {
@@ -373,8 +376,12 @@ func (r *Rail) paintCard(p *painter, L layout) {
 	// 标题行
 	headY := c.Top + cardPadF()
 	iconSz := int32(cardHeaderIconF())
+	iconX := c.Left + cardPadF() + iconSz/2
+	iconY := headY + iconSz/2
 	if icon := loadIcon(m.Provider); icon != nil {
-		p.drawIconAlpha(icon, c.Left+cardPadF()+iconSz/2, headY+iconSz/2, iconSz, 0xFF)
+		p.drawIconAlpha(icon, iconX, iconY, iconSz, 0xFF)
+	} else {
+		drawInitial(p, m.Label, iconX, iconY, float32(iconSz)*0.72, 0xFF)
 	}
 	titleX := c.Left + cardPadF() + iconSz + 8
 	p.text(m.Full, titleX, headY-1, c.Right-cardPadF()-titleX, cardTitleFontF()+4,
@@ -551,4 +558,22 @@ type paintStruct struct {
 	Restore   int32
 	IncUpdate int32
 	Reserved  [32]byte
+}
+
+// drawInitial 在圆形范围内画平台名首字母，作为缺图标时的兜底。
+//
+// 新接入的 provider（比如上游刚加的豆包、QwenWork）没有内置素材，
+// 留空会让那个环看起来像坏了 —— 首字母至少能区分是谁。
+func drawInitial(p *painter, label string, cx, cy int32, size float32, alpha uint8) {
+	if label == "" {
+		return
+	}
+	r := []rune(label)
+	initial := string(r[0])
+	// 字号约为图标尺寸的 0.9；文字框按 size 宽度居中
+	fs := size * 0.9
+	col := argb(uint32(alpha)<<24 | 0x00F0EEE8)
+	w := int32(size * 1.4)
+	h := int32(size * 1.2)
+	p.text(initial, cx-w/2, cy-h/2, w, h, fs, true, stringAlignmentCenter, col)
 }

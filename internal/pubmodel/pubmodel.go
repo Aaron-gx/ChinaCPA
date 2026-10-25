@@ -30,8 +30,21 @@ type Pricing struct {
 type Model struct {
 	ID       string    `json:"id"`                // 对外模型名（客户端 model 参数写这个）
 	Note     string    `json:"note,omitempty"`    // 备注/显示名
+	Type     string    `json:"type,omitempty"`    // 类别：chat（默认）/ image / video
 	Pricing  *Pricing  `json:"pricing,omitempty"` // 单价；空 = 不计价
 	Channels []Channel `json:"channels"`          // 上游渠道（按序失败转移，轮询起点轮转）
+}
+
+// normalizeType 归一化类别（空 = chat）。
+func normalizeType(t string) string {
+	switch strings.ToLower(strings.TrimSpace(t)) {
+	case "image":
+		return "image"
+	case "video":
+		return "video"
+	default:
+		return ""
+	}
 }
 
 // Config 发布模型配置文件。
@@ -136,6 +149,7 @@ func (m *Manager) Save(cfg *Config) error {
 			return fmt.Errorf("模型 %q 重复", mo.ID)
 		}
 		seen[key] = true
+		mo.Type = normalizeType(mo.Type)
 		if len(mo.Channels) == 0 {
 			return fmt.Errorf("模型 %q 至少需要一个渠道", mo.ID)
 		}

@@ -244,6 +244,8 @@ func Metrics(ov *Overview) []Metric {
 		{"trae", "Trae", "Trae"},
 		{"qoder", "Qoder", "Qoder"},
 		{"qoder-intl", "Qoder", "Qoder 国际"},
+		{"qwenwork", "QwenWork", "QwenWork 千问办公"},
+		{"doubao", "Doubao", "豆包"},
 	}
 	var out []Metric
 	seen := map[string]bool{}

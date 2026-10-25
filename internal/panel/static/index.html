@@ -12,6 +12,7 @@
   --green:#5c8a5e; --green-soft:#e9f0e9; --red:#b3564e; --red-soft:#f7e7e4;
   --yellow:#9a7b2d; --yellow-soft:#f5eedb; --purple:#7a6ab5; --purple-soft:#ece8f7;
   --blue:#4b7fa8; --blue-soft:#e7eff5; --teal:#3f8f96; --teal-soft:#e5f2f3;
+  --pink:#b0567c; --pink-soft:#f7e8ee;
   --shadow:0 1px 2px rgba(31,30,29,.05),0 1px 8px rgba(31,30,29,.04);
   --shadow-lift:0 2px 4px rgba(31,30,29,.06),0 8px 24px rgba(31,30,29,.08);
   --serif:Georgia,"Times New Roman","Noto Serif SC","SimSun",serif;
@@ -107,6 +108,7 @@ section h2{font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:
 .card .sub{color:var(--faint);font-size:11.5px;margin-top:6px;line-height:1.5}
 .card .value.green{color:var(--green)}.card .value.blue{color:var(--blue)}.card .value.purple{color:var(--purple)}
 .card .value.yellow{color:var(--yellow)}.card .value.accent{color:var(--accent)}.card .value.teal{color:var(--teal)}
+.card .value.pink{color:var(--pink)}
 
 /* ── 详情双栏（参考图：左预览 + 右能力/清单/历史） ───────── */
 .detail{display:grid;grid-template-columns:minmax(280px,380px) minmax(0,1fr);gap:16px;align-items:start}
@@ -216,7 +218,16 @@ code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;bo
 .tag.p-trae{color:var(--accent);background:var(--accent-soft)}
 .tag.p-qoder{color:var(--teal);background:var(--teal-soft)}
 .tag.p-qoder-intl{color:var(--green);background:var(--green-soft)}
+.tag.p-qwenwork{color:var(--pink);background:var(--pink-soft)}
+.tag.p-doubao{color:var(--accent2);background:var(--accent-soft)}
 .tag.plain{color:var(--muted);background:var(--bg-soft)}
+
+/* ── 生成额度进度条 ── */
+.qbar{position:relative;height:18px;border-radius:9px;background:var(--bg-soft);overflow:hidden;min-width:110px}
+.qbar>i{position:absolute;inset:0;width:0;background:var(--green-soft);transition:width .4s}
+.qbar>i.warn{background:var(--yellow-soft)}
+.qbar>i.full{background:var(--red-soft)}
+.qbar>b{position:relative;z-index:1;display:block;text-align:center;font-size:11px;line-height:18px;font-weight:600;color:var(--text2);font-variant-numeric:tabular-nums}
 
 /* ── 网关信息 ─────────────────────────── */
 .gwinfo{background:linear-gradient(135deg,#fff,#faf8f2);border:1px solid var(--border);border-radius:16px;
@@ -431,9 +442,10 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
       <div class="side-group">
         <div class="side-group-label">账号 <span class="cnt" id="navAcctCnt">0</span></div>
         <a class="nav-item" data-view="accounts" onclick="switchView('accounts')"><span class="ico">☰</span>账号池</a>
+        <a class="nav-item" data-view="genquota" onclick="switchView('genquota')"><span class="ico">◐</span>生成额度</a>
       </div>
       <div class="side-group">
-        <div class="side-group-label">用量 <span class="cnt" id="navPubCnt"></span></div>
+        <div class="side-group-label">用量 <span class="cnt" id="navUsageCnt"></span></div>
         <a class="nav-item" data-view="usage" onclick="switchView('usage')"><span class="ico">▤</span>用量统计</a>
         <a class="nav-item" data-view="requests" onclick="switchView('requests')"><span class="ico">≡</span>请求日志</a>
       </div>
@@ -566,6 +578,26 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
       </section>
     </div>
 
+    <!-- 豆包生成额度 -->
+    <div class="view" id="view-genquota">
+      <div class="view-head">
+        <div class="view-title">豆包生成额度</div>
+        <div class="view-status" id="gqCount"></div>
+      </div>
+      <section>
+        <div class="hint" style="margin-bottom:14px">豆包网页端无公开额度接口，此页为<b>本地按账号日计数</b>（图片按张、视频按条、对话按次；提交成功即计数，跨日自动清零，服务重启清零）。达到上限的账号会被自动冷却并切到下一个豆包账号。每日上限在 config.json <code>doubao.image_daily_limit</code> / <code>doubao.video_daily_limit</code> 配置（默认 图片 50 / 视频 10）。</div>
+        <div class="tblwrap">
+        <table id="genQuotaTable">
+          <thead><tr>
+            <th>账号</th><th>图片（张/日）</th><th>视频（条/日）</th><th>对话（次/日）</th><th>模型明细</th><th>状态</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+        </div>
+        <div class="empty" id="gqEmpty" style="display:none">暂无豆包账号：左下角「添加账号 → 豆包」扫码纳管后，这里会展示各账号的每日生成额度消耗</div>
+      </section>
+    </div>
+
     <!-- 用量统计 -->
     <div class="view" id="view-usage">
       <div class="view-head">
@@ -598,7 +630,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
             <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 新建模型</button>
           </span>
         </h2>
-        <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>（严格按优先级：始终先走第 1 个渠道，失败才切下一个；渠道内多账号按会话黏性分配（同一会话固定同一账号保上游缓存），国内/海外等渠道各自独立）。客户端写 <code>{"model":"发布模型名"}</code> 即可，单价（$/1M tokens）用于费用估算，缓存命中部分按缓存价计。未配置发布模型时默认暴露全部内部模型。</div>
+        <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>（严格按优先级：始终先走第 1 个渠道，失败才切下一个；渠道内多账号按会话黏性分配（同一会话固定同一账号保上游缓存），国内/海外等渠道各自独立）。客户端写 <code>{"model":"发布模型名"}</code> 即可，单价（$/1M tokens）用于费用估算，缓存命中部分按缓存价计。未配置发布模型时默认暴露全部内部模型。<br>类型选<b>图片</b>/<b>视频</b>可发布生成类模型（如豆包 Seedream/Seedance）：图片走 <code>POST /v1/images/generations</code>，视频走 <code>POST /api/v3/contents/generations/tasks</code>（火山方舟任务协议），单价按 $/次 计。</div>
         <div class="pub-grid" id="pubGrid"></div>
       </section>
     </div>
@@ -639,8 +671,8 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
       <div class="prov-card" onclick="startLogin('workbuddy')">
         <div class="t" style="color:var(--blue)">WorkBuddy</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
       </div>
-      <div class="prov-card" onclick="startLogin('qwen')">
-        <div class="t" style="color:var(--purple)">Qwen 通义</div><div class="d">chat.qwen.ai<br>设备码授权 2000次/天</div>
+      <div class="prov-card" onclick="presetImport('qwen')">
+        <div class="t" style="color:var(--purple)">Qwen 通义</div><div class="d">chat.qwen.ai<br>粘贴 token 导入（OAuth 已下线）</div>
       </div>
       <div class="prov-card" onclick="startLogin('trae')">
         <div class="t" style="color:var(--accent)">Trae</div><div class="d">字节 SOLO 通道<br>授权回调自动纳管</div>
@@ -651,17 +683,25 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
       <div class="prov-card" onclick="startLogin('qoder-intl')">
         <div class="t" style="color:var(--green)">Qoder 国际版</div><div class="d">qoder.com<br>自动授权登录</div>
       </div>
+      <div class="prov-card" onclick="startLogin('qwenwork')">
+        <div class="t" style="color:var(--pink)">千问办公</div><div class="d">QwenWork 阿里<br>钉钉扫码授权登录</div>
+      </div>
+      <div class="prov-card" onclick="startLogin('doubao')">
+        <div class="t" style="color:var(--accent2)">豆包 Doubao</div><div class="d">doubao.com<br>App 扫码自动纳管 · 文/图/视频</div>
+      </div>
     </div>
     <div id="loginFlow"></div>
     <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:16px">
       <div style="font-weight:600;margin-bottom:4px;font-size:13px">或直接粘贴登录凭证</div>
-      <p class="hint">WorkBuddy：refreshToken / auth 文件 JSON；Qwen：refresh_token；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）。</p>
+      <p class="hint" id="importHint">WorkBuddy：refreshToken / auth 文件 JSON；Qwen：<code>邮箱:密码</code> 自动登录（最省事）或整串 Cookie（最稳，含 token=）；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）；千问办公：ory_rt_ 开头的 refresh token；豆包：www.doubao.com 任一请求的完整 Cookie 头（需含 s_v_web_id 与 sessionid）。</p>
       <select id="importProv" style="margin-right:8px">
         <option value="workbuddy">WorkBuddy</option>
         <option value="qwen">Qwen</option>
         <option value="trae">Trae</option>
         <option value="qoder">Qoder 国内</option>
         <option value="qoder-intl">Qoder 国际</option>
+        <option value="qwenwork">千问办公</option>
+        <option value="doubao">豆包 Doubao</option>
       </select>
       <textarea id="importCred" placeholder="粘贴凭证..."></textarea>
       <button class="btn primary" onclick="doImport()">导入凭证</button>
@@ -675,17 +715,29 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
   <div class="box wide">
     <h3 id="mmTitle">新建发布模型 <button class="xbtn" onclick="closeModelEditor()">✕</button></h3>
     <div class="m-sub">对外暴露一个模型名，实际由下方多个上游渠道轮询提供</div>
-    <label class="f">对外模型名（客户端 model 参数）</label>
-    <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / gpt-5-codex / my-claude">
+    <div style="display:flex;gap:10px">
+      <div style="flex:1">
+        <label class="f">对外模型名（客户端 model 参数）</label>
+        <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / my-seedream / my-seedance">
+      </div>
+      <div style="width:220px">
+        <label class="f">模型类型</label>
+        <select id="mmType" style="width:100%" onchange="onEdTypeChange()">
+          <option value="">对话 chat</option>
+          <option value="image">图片 image</option>
+          <option value="video">视频 video</option>
+        </select>
+      </div>
+    </div>
     <label class="f">备注（可选）</label>
     <input id="mmNote" style="width:100%" placeholder="显示在面板上的备注名">
-    <label class="f">单价（$/1M tokens，用于费用估算，留空不计价；缓存价未填时缓存按输入价计）</label>
+    <label class="f" id="mmPriceLabel">单价（$/1M tokens，用于费用估算，留空不计价；缓存价未填时缓存按输入价计）</label>
     <div style="display:flex;gap:10px">
       <div style="flex:1"><input id="mmIn" type="number" step="0.0001" min="0" style="width:100%" placeholder="输入价，如 0.002"></div>
-      <div style="flex:1"><input id="mmOut" type="number" step="0.0001" min="0" style="width:100%" placeholder="输出价，如 0.008"></div>
-      <div style="flex:1"><input id="mmCache" type="number" step="0.0001" min="0" style="width:100%" placeholder="缓存价，如 0.0002"></div>
+      <div id="mmOutWrap" style="flex:1"><input id="mmOut" type="number" step="0.0001" min="0" style="width:100%" placeholder="输出价，如 0.008"></div>
+      <div id="mmCacheWrap" style="flex:1"><input id="mmCache" type="number" step="0.0001" min="0" style="width:100%" placeholder="缓存价，如 0.0002"></div>
     </div>
-    <label class="f">上游渠道（按优先级排列：始终先走第 1 个，失败才切下一个；渠道内多账号按会话黏性分配）</label>
+    <label class="f" id="mmChLabel">上游渠道（按优先级排列：始终先走第 1 个，失败才切下一个；渠道内多账号按会话黏性分配）</label>
     <div id="mmChannels"></div>
     <button class="btn sm" onclick="addEdChannel()" style="margin-top:4px">＋ 添加渠道</button>
     <datalist id="chModels"></datalist>
@@ -702,8 +754,8 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 <script>
 let OVERVIEW=null, MODELS=null, PUB={models:[],usd_cny:0}, MODEL_TAB='workbuddy', POLL_TIMER=null, CUR_LOGIN=null;
 let ED=null, ED_IDX=-1, TOAST_T=null, CUR_VIEW='dash';
-const PROV_NAMES={workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际'};
-const PROV_TAG={workbuddy:'p-wb',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl'};
+const PROV_NAMES={workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际',qwenwork:'千问办公',doubao:'豆包 Doubao'};
+const PROV_TAG={workbuddy:'p-wb',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl',qwenwork:'p-qwenwork',doubao:'p-doubao'};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -841,6 +893,7 @@ function renderOverview(o){
     {ico:ICON.bolt,l:'Trae',used:0,val:o.total_ide_credits||0,unit:'积分',max:0},
     {ico:ICON.bolt,l:'Qwen',used:0,val:o.qwen_remaining||0,unit:'次/天',max:2000},
     {ico:ICON.bolt,l:'Qoder',used:0,val:o.qoder_remaining||0,unit:'credits',max:0},
+    {ico:ICON.bolt,l:'QwenWork',used:0,val:o.qwenwork_remaining||0,unit:'积分',max:0},
   ];
   $('#dashCap').innerHTML=capRows.map((r,i)=>{
     // 有上限：按占比画，带 0/mid/max 刻度；无上限：满宽灰条 + 只显示数值
@@ -960,11 +1013,14 @@ function renderAcctTable(o){
     let quota='—',used='—',detail='—',cls='ok',txt='正常';
     if(a.quota){
       if(a.quota.unit==='requests/day')quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)} 次`;
+      else if(a.quota.unit==='generations/day')quota=`${fmt(a.quota.remaining)} 次生成`;
+      else if(a.quota.unit==='web')quota=a.quota.healthy?'网页通道 · 可用':'<span style="color:var(--red)">凭证失效</span>';
       else if(a.quota.limit>0)quota=`${fmt(a.quota.remaining)} / ${fmt(a.quota.limit)}`;
-      else quota=fmt(a.quota.remaining)+(a.quota.unit==='ide_credits'?' 积分':'');
+      else quota=fmt(a.quota.remaining)+(a.quota.unit==='ide_credits'?' 积分':(a.quota.unit==='credits'?' credits':''));
       used=a.quota.used!=null?fmt(a.quota.used):'—';
       const bits=[];
       if(a.provider==='qwen'&&a.quota.requests_used_today!=null)bits.push('今日已请求 '+a.quota.requests_used_today+' 次');
+      if(a.provider==='doubao'&&a.quota.detail)bits.push(`图 ${a.quota.detail.images_used_today||0}/${a.quota.detail.images_limit||'∞'} · 视频 ${a.quota.detail.videos_used_today||0}/${a.quota.detail.videos_limit||'∞'}`);
       if(a.quota.detail&&a.quota.detail.packs)bits.push(a.quota.detail.packs+' 个权益包');
       detail=bits.join(' · ')||'—';
     }
@@ -976,7 +1032,7 @@ function renderAcctTable(o){
     const days=a.token_days_left;
     const exp=a.expires_at>0?(days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'):'长期';
     const intl=(a.realm==='global')?'·国际':'';
-    const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD'})[a.provider]||a.provider}${intl}</span>`;
+    const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD',qwenwork:'QWW',doubao:'DB'})[a.provider]||a.provider}${intl}</span>`;
     tb.insertAdjacentHTML('beforeend',`<tr style="--r:${ri}">
       <td>${provTag} <span class="mini">${esc(a.provider_name)}</span></td>
       <td>${esc(a.nickname||a.uid)}</td>
@@ -993,9 +1049,51 @@ function renderAcctTable(o){
         <button class="btn sm danger" onclick="delAcct('${a.provider}','${a.uid}')">删除</button>
       </td></tr>`);
   });
+  // 空账号时由整块提示替代表格（我们的布局用 #acctWrap 包住表格）
   const hasAccts=(o.accounts||[]).length>0;
   $('#acctWrap').style.display=hasAccts?'':'none';
   $('#acctEmpty').style.display=hasAccts?'none':'block';
+  renderGenQuota(o);
+}
+
+/* ── 豆包生成额度视图（本地日计数：图片按张 / 视频按条 / 对话按次）── */
+function qbar(used,limit){
+  if(!limit||limit<=0)return `<span class="muted">不限</span>`;
+  const pct=Math.min(100,Math.round(used/limit*100));
+  const cls=pct>=100?'full':pct>=70?'warn':'';
+  return `<div class="qbar"><i class="${cls}" style="width:${pct}%"></i><b>${used} / ${limit}</b></div>`;
+}
+function renderGenQuota(o){
+  const tb=$('#genQuotaTable tbody');if(!tb)return;
+  const list=(o.accounts||[]).filter(a=>a.provider==='doubao');
+  $('#gqCount').textContent=list.length?`${list.length} 个豆包账号`:'';
+  $('#gqEmpty').style.display=list.length?'none':'block';
+  const imgFull=a=>{const d=(a.quota&&a.quota.detail)||{};return d.images_limit>0&&(d.images_used_today||0)>=d.images_limit};
+  const vidFull=a=>{const d=(a.quota&&a.quota.detail)||{};return d.videos_limit>0&&(d.videos_used_today||0)>=d.videos_limit};
+  tb.innerHTML=list.map(a=>{
+    const d=(a.quota&&a.quota.detail)||{};
+    const img=d.images_used_today||0,imgL=d.images_limit||0;
+    const vid=d.videos_used_today||0,vidL=d.videos_limit||0;
+    const chat=d.chats_today||0;
+    const byModel=Object.entries(d.by_model||{})
+      .sort((x,y)=>y[1]-x[1])
+      .map(([k,v])=>`<span class="tag plain" style="margin:1px;white-space:nowrap">${esc(k)} ×${v}</span>`).join('')
+      ||'<span class="muted">今日暂无生成</span>';
+    const st=a.disabled?'<span class="tag disabled">已禁用</span>'
+      :(a.quota&&a.quota.healthy===false)?'<span class="tag expired">凭证失效</span>'
+      :(imgFull(a)&&vidFull(a))?'<span class="tag expired">图/视频额度用完</span>'
+      :imgFull(a)?'<span class="tag cooldown">图片额度用完</span>'
+      :vidFull(a)?'<span class="tag cooldown">视频额度用完</span>'
+      :'<span class="tag ok">可用</span>';
+    return `<tr>
+      <td><span class="tag p-doubao">DB</span> <span class="mini">${esc(a.nickname||a.uid)}</span></td>
+      <td style="min-width:140px">${qbar(img,imgL)}</td>
+      <td style="min-width:140px">${qbar(vid,vidL)}</td>
+      <td>${chat||'—'}</td>
+      <td style="max-width:280px;white-space:normal">${byModel}</td>
+      <td>${st}</td>
+    </tr>`;
+  }).join('');
 }
 
 /* 统计卡渲染 + 数字滚动 */
@@ -1228,12 +1326,15 @@ function renderPublish(){
   }
   g.innerHTML=PUB.models.map((m,i)=>{
     const p=m.pricing;
-    const priceHtml=(p&&(p.input>0||p.output>0||p.cache>0))
-      ?`${p.input>0?`<span>输入 <b>$${p.input}</b>/1M</span>`:''}${p.output>0?`<span>输出 <b>$${p.output}</b>/1M</span>`:''}${p.cache>0?`<span>缓存 <b>$${p.cache}</b>/1M</span>`:''}`
+    const media=m.type==='image'||m.type==='video';
+    const typeTag=media?`<span class="tag ${m.type==='image'?'p-qoder':'p-trae'}" style="margin-left:6px">${m.type==='image'?'图片':'视频'}</span>`:'';
+    const priceHtml=(p&&p.input>0)
+      ?(media?`<span><b>$${p.input}</b>/次</span>`
+             :`${p.input>0?`<span>输入 <b>$${p.input}</b>/1M</span>`:''}${p.output>0?`<span>输出 <b>$${p.output}</b>/1M</span>`:''}${p.cache>0?`<span>缓存 <b>$${p.cache}</b>/1M</span>`:''}`)
       :'<span class="muted">未配置单价（费用估算显示「未计价」）</span>';
     return `<div class="pub-card" style="--i:${i}">
       <div class="head">
-        <div><span class="name">${esc(m.id)}</span>${m.note?`<div class="note">${esc(m.note)}</div>`:''}</div>
+        <div><span class="name">${esc(m.id)}</span>${typeTag}${m.note?`<div class="note">${esc(m.note)}</div>`:''}</div>
         <div class="ops">
           <button class="btn sm icon" title="编辑" onclick="openModelEditor(${i})">✎</button>
           <button class="btn sm icon danger" title="删除" onclick="delModel(${i})">✕</button>
@@ -1276,17 +1377,36 @@ async function delModel(i){
 function closeModelEditor(){$('#modelModal').classList.remove('open')}
 function openModelEditor(i){
   ED_IDX=i;
-  ED=i<0?{id:'',note:'',pricing:null,channels:[]}:JSON.parse(JSON.stringify(PUB.models[i]));
+  ED=i<0?{id:'',note:'',type:'',pricing:null,channels:[]}:JSON.parse(JSON.stringify(PUB.models[i]));
+  if(!ED.type)ED.type='';
   $('#mmTitle').innerHTML=`${i<0?'新建发布模型':'编辑模型'} <button class="xbtn" onclick="closeModelEditor()">✕</button>`;
   $('#mmId').value=ED.id;$('#mmNote').value=ED.note||'';
+  $('#mmType').value=ED.type;
   $('#mmIn').value=ED.pricing?ED.pricing.input:'';
   $('#mmOut').value=ED.pricing?ED.pricing.output:'';
   $('#mmCache').value=ED.pricing?ED.pricing.cache||'':'';
   $('#mmStatus').textContent='';
+  applyEdType();
   renderEdChannels();
   $('#modelModal').classList.add('open');
   if(i<0&&!ED.channels.length)addEdChannel();
   setTimeout(()=>$('#mmId').focus(),80);
+}
+/* 类型切换：单价单位 / 端点提示 / 渠道文案（图片视频按次计价，走各自专用端点） */
+function onEdTypeChange(){ED.type=$('#mmType').value;applyEdType();renderEdChannels()}
+function applyEdType(){
+  const media=ED.type==='image'||ED.type==='video';
+  $('#mmPriceLabel').textContent=media
+    ?`单价（$/次，用于费用估算，留空不计价；图片按张、视频按条计）`
+    :'单价（$/1M tokens，用于费用估算，留空不计价；缓存价未填时缓存按输入价计）';
+  $('#mmIn').placeholder=media?'每次调用价，如 0.02':'输入价，如 0.002';
+  $('#mmOutWrap').style.display=media?'none':'';
+  $('#mmCacheWrap').style.display=media?'none':'';
+  $('#mmChLabel').textContent=media
+    ?(ED.type==='image'
+      ?'上游渠道（按优先级排列；客户端调 POST /v1/images/generations，body 写 {"model":"对外名","prompt":"..."}）'
+      :'上游渠道（按优先级排列；客户端调 POST /api/v3/contents/generations/tasks 创建任务后轮询，火山方舟协议）')
+    :'上游渠道（按优先级排列：始终先走第 1 个，失败才切下一个；渠道内多账号按会话黏性分配）';
 }
 function renderEdChannels(){
   $('#mmChannels').innerHTML=ED.channels.map((ch,i)=>`
@@ -1308,13 +1428,18 @@ function creditsOf(pid,mid){
   const m=list.find(x=>x.id===mid);
   return m&&m.credits?m.credits:'';
 }
+/* 渠道候选：按发布类型过滤（图片/视频只列对应类别；老平台模型无 kind 时全列） */
 function fillDatalist(pid){
-  $('#chModels').innerHTML=(((MODELS||{})[pid])||[]).map(m=>
-    `<option value="${esc(m.id)}">${esc(m.name||'')}${m.credits?' · '+esc(m.credits):''}</option>`).join('');
+  let list=((MODELS||{})[pid])||[];
+  if(ED&&ED.type)list=list.filter(m=>!m.kind||m.kind===ED.type);
+  $('#chModels').innerHTML=list.map(m=>
+    `<option value="${esc(m.id)}">${esc(m.name||'')}${m.credits?' · '+esc(m.credits):''}${m.kind&&m.kind!=='chat'?(m.kind==='image'?' · 图片':' · 视频'):''}</option>`).join('');
 }
 function addEdChannel(){
-  const used=ED.channels.map(c=>c.provider);
-  const pid=used.includes('qwen')?'workbuddy':'qwen';
+  const media=ED&&ED.type&&ED.type!=='chat';
+  let pid;
+  if(media){pid='doubao'}
+  else{const used=ED.channels.map(c=>c.provider);pid=used.includes('qwen')?'workbuddy':'qwen'}
   ED.channels.push({provider:pid,model:''});
   renderEdChannels();
   const inputs=document.querySelectorAll('#mmChannels input');
@@ -1328,8 +1453,12 @@ function moveCh(i,d){
 async function saveModelEditor(){
   ED.id=$('#mmId').value.trim();
   ED.note=$('#mmNote').value.trim();
+  ED.type=$('#mmType').value||'';
+  const media=ED.type==='image'||ED.type==='video';
   const pin=parseFloat($('#mmIn').value),pout=parseFloat($('#mmOut').value),pc=parseFloat($('#mmCache').value);
-  ED.pricing=(pin>0||pout>0||pc>0)?{input:pin||0,output:pout||0,cache:pc||0}:null;
+  /* 图片/视频按次计价：单价存 pricing.input（$/次）；对话按 $/1M tokens 三档 */
+  ED.pricing=media?(pin>0?{input:pin||0,output:0,cache:0}:null)
+                  :((pin>0||pout>0||pc>0)?{input:pin||0,output:pout||0,cache:pc||0}:null);
   const err=m=>{$('#mmStatus').className='status-line err';$('#mmStatus').textContent=m};
   if(!ED.id)return err('请填写对外模型名');
   if(PUB.models.some((m,i)=>i!==ED_IDX&&m.id.toLowerCase()===ED.id.toLowerCase()))return err('模型名已存在');
@@ -1359,7 +1488,7 @@ function renderModels(){
   const list=(MODELS&&MODELS[MODEL_TAB])||[];
   const tb=$('#modelTable tbody');
   if(!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">该平台暂无账号或模型列表获取失败（纳管账号后自动拉取）</td></tr>';return}
-  tb.innerHTML=list.map((m,i)=>`<tr style="--r:${i}"><td><code>${esc(m.id)}</code></td><td><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)}</code></td><td class="mini">${esc(m.name||'—')}</td><td>${m.context_window?fmt(m.context_window):'—'}</td><td class="mini">${esc(m.credits||'—')}</td></tr>`).join('');
+  tb.innerHTML=list.map((m,i)=>`<tr style="--r:${i}"><td><code>${esc(m.id)}</code>${m.kind&&m.kind!=='chat'?` <span class="tag plain">${m.kind==='image'?'图':'视频'}</span>`:''}</td><td><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)}</code></td><td class="mini">${esc(m.name||'—')}</td><td>${m.context_window?fmt(m.context_window):'—'}</td><td class="mini">${esc(m.credits||'—')}</td></tr>`).join('');
 }
 
 /* ── 账号操作 ─────────────────────────── */
@@ -1379,6 +1508,15 @@ async function checkinAll(){toast('已发起全部签到');await api('/api/check
 
 /* ── 登录 / 导入 ──────────────────────── */
 function openAdd(){$('#addModal').classList.add('open');$('#loginFlow').innerHTML='';$('#importStatus').textContent=''}
+function presetImport(prov){
+  openAdd();
+  const sel=$('#importProv');if(sel)sel.value=prov;
+  const ta=$('#importCred');
+  const hint=$('#importHint');
+  if(hint&&prov==='qwen')hint.innerHTML='<b style="color:var(--purple)">Qwen 导入方法（三选一）</b>：<br>① 直接粘贴 <code>邮箱:密码</code>（你的 chat.qwen.ai 登录邮箱和密码，冒号分隔）——面板自动登录并取 token，全自动；<br>② 粘贴整串 Cookie（最稳）：F12 → Network → 随便发一条消息 → 点开 <code>chat/completions</code> → 复制 Request Headers 里完整的 <code>Cookie:</code> 值；<br>③ Application → Local Storage → <code>token</code> 的值（对话可能被 WAF 拦）。<br>注：OAuth 设备码授权已被官方下线。';
+  if(hint&&prov==='doubao')hint.innerHTML='<b style="color:var(--accent2)">豆包导入方法</b>：浏览器登录 <code>www.doubao.com</code> → 按 <code>F12</code> 打开开发者工具 → <code>Network</code>（网络）→ 随便发一条消息 → 点开 <code>completion</code> 请求 → 在 <b>Request Headers</b> 里复制完整的 <code>Cookie:</code> 值粘贴到下面。<br>Cookie 必须包含 <code>sessionid</code>（登录态）和 <code>s_v_web_id</code>（风控指纹）。导入后可用：<code>doubao-chat</code> 对话、<code>seedream-5.0-flash</code> 等图片生成（/v1/images/generations）、<code>seedance-2.5</code> 等视频生成（火山方舟任务接口）。';
+  if(ta)ta.focus();
+}
 function closeAdd(){$('#addModal').classList.remove('open');if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}}
 async function startLogin(prov){
   $('#loginFlow').innerHTML='<div class="status-line wait"><span class="spin"></span> 正在发起授权…</div>';
@@ -1387,7 +1525,8 @@ async function startLogin(prov){
   savePending(prov,r.id);
   CUR_LOGIN={prov,id:r.id};
   const html=`<h3 style="margin-top:8px;font-size:15px">${PROV_NAMES[prov]||prov} 授权登录</h3>
-    <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':'在浏览器打开链接完成腾讯账号登录：'}</p>
+    <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':prov==='qwenwork'?'打开链接使用钉钉扫码完成授权（无需回调）：':prov==='doubao'?'用豆包 App 扫描下方二维码（对话 → ＋ → 扫一扫），手机确认后自动回调纳管：':'在浏览器打开链接完成腾讯账号登录：'}</p>
+    ${prov==='doubao'?`<div style="margin:6px auto 4px;width:238px"><img src="/doubao/qrlogin/img?sid=${esc(r.id)}" alt="二维码加载中…" style="width:238px;height:238px;border:1px solid var(--border);border-radius:12px;padding:8px;box-sizing:border-box;background:var(--card)" onerror="this.outerHTML='<div style=\\'color:var(--red);padding:40px 0\\'>二维码加载失败，请点下方链接在新窗口打开</div>'"></div>`:''}
     ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
     <div class="urlbox">${esc(r.url)}</div>
     <button class="btn" onclick="navigator.clipboard.writeText('${esc(r.url)}').then(()=>toast('已复制'))">复制链接</button>

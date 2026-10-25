@@ -83,7 +83,10 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 
 	mux.HandleFunc("/", p.handleIndex)
 	mux.HandleFunc("/trae/callback", p.handleTraeCallback)
-	mux.HandleFunc("/authorize", p.handleTraeCallback) // Trae 官方回调路径
+	mux.HandleFunc("/authorize", p.handleTraeCallback)               // Trae 官方回调路径
+	mux.HandleFunc("/doubao/qrlogin", p.handleDoubaoQRPage)          // 豆包扫码页
+	mux.HandleFunc("/doubao/qrlogin/img", p.handleDoubaoQRImg)       // 二维码图片
+	mux.HandleFunc("/doubao/qrlogin/status", p.handleDoubaoQRStatus) // 扫码状态（驱动登录）
 	mux.HandleFunc("/api/auth", p.handleAuth)
 	mux.HandleFunc("/api/overview", p.authed(p.handleOverview))
 	mux.HandleFunc("/api/accounts", p.authed(p.handleAccounts))
@@ -177,7 +180,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	accounts := p.pool.Accounts()
 	var views []acctView
-	var totalCredits, totalIdeCredits, totalQoderCredits float64
+	var totalCredits, totalIdeCredits, totalQoderCredits, totalQwenWorkCredits float64
 	var qwenRemaining float64
 	providerCount := map[string]int{}
 	for _, a := range accounts {
@@ -229,6 +232,8 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 				qwenRemaining += q.Remaining
 			case "qoder", "qoder-intl":
 				totalQoderCredits += q.Remaining
+			case "qwenwork":
+				totalQwenWorkCredits += q.Remaining
 			}
 		}
 		if ci, ok := p.st.TodayCheckin(a.Provider, a.UID); ok {
@@ -272,24 +277,25 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		"token_refresh_hours":   p.cfg.Schedule.TokenRefreshHours,
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"accounts":          views,
-		"account_total":     len(views),
-		"provider_count":    providerCount,
-		"model_count":       modelCount,
-		"today":             total,
-		"today_by_model":    today,
-		"usage_days":        usageDays,
-		"schedule":          schedule,
-		"total_credits":     totalCredits,
-		"total_ide_credits": totalIdeCredits,
-		"qwen_remaining":    qwenRemaining,
-		"qoder_remaining":   totalQoderCredits,
-		"usd_cny":           p.usage.USDCNY(),
-		"gateway_url":       "/v1",
-		"listen":            p.cfg.Listen,
-		"api_key":           p.cfg.APIKey,
-		"data_dir":          p.cfg.DataDir,
-		"now":               time.Now().Unix(),
+		"accounts":           views,
+		"account_total":      len(views),
+		"provider_count":     providerCount,
+		"model_count":        modelCount,
+		"today":              total,
+		"today_by_model":     today,
+		"usage_days":         usageDays,
+		"schedule":           schedule,
+		"total_credits":      totalCredits,
+		"total_ide_credits":  totalIdeCredits,
+		"qwen_remaining":     qwenRemaining,
+		"qoder_remaining":    totalQoderCredits,
+		"qwenwork_remaining": totalQwenWorkCredits,
+		"usd_cny":            p.usage.USDCNY(),
+		"gateway_url":        "/v1",
+		"listen":             p.cfg.Listen,
+		"api_key":            p.cfg.APIKey,
+		"data_dir":           p.cfg.DataDir,
+		"now":                time.Now().Unix(),
 	})
 }
 
@@ -423,6 +429,7 @@ func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
 		Credits     string `json:"credits,omitempty"`
 		Context     int64  `json:"context_window,omitempty"`
 		MaxTokens   int64  `json:"max_tokens,omitempty"`
+		Kind        string `json:"kind,omitempty"` // chat / image / video
 	}
 	out := map[string][]mv{}
 	for _, pr := range p.pool.Providers() {
@@ -433,7 +440,8 @@ func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
 		}
 		list := make([]mv, 0, len(ms))
 		for _, m := range ms {
-			list = append(list, mv{ID: m.ID, Name: m.Name, Description: m.Description, Credits: m.Credits, Context: m.ContextWindow, MaxTokens: m.MaxTokens})
+			list = append(list, mv{ID: m.ID, Name: m.Name, Description: m.Description,
+				Credits: m.Credits, Context: m.ContextWindow, MaxTokens: m.MaxTokens, Kind: m.Kind})
 		}
 		out[pr.ID()] = list
 	}
@@ -453,7 +461,11 @@ func (p *Panel) deriveCallbackBase(r *http.Request, explicit string) string {
 	if h := r.Host; h != "" {
 		host = hostOnly(h)
 	}
+	// Listen 可能是 ":8318" 或 "127.0.0.1:8318"，都取端口部分
 	port := strings.TrimPrefix(p.cfg.Listen, ":")
+	if _, p2, err := net.SplitHostPort(p.cfg.Listen); err == nil && p2 != "" {
+		port = p2
+	}
 	return "http://" + host + ":" + port
 }
 
@@ -605,6 +617,143 @@ func (p *Panel) traeProvider() traeProviderIface {
 type traeProviderIface interface {
 	HandleCallback(q url.Values) (*model.PollResult, error)
 }
+
+// ── 豆包扫码登录页（sid 即登录票据，无需面板会话）────────
+
+func (p *Panel) handleDoubaoQRPage(w http.ResponseWriter, r *http.Request) {
+	sid := sanitizeSID(r.URL.Query().Get("sid"))
+	if sid == "" {
+		http.Error(w, "missing sid", http.StatusBadRequest)
+		return
+	}
+	// 不用 Fprintf：页面 CSS 含 % 字符（如 calc(100% - 40px)），会被当格式动词
+	page := strings.ReplaceAll(doubaoQRPageHTML, "__SID__", sid)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = w.Write([]byte(page))
+}
+
+func (p *Panel) handleDoubaoQRImg(w http.ResponseWriter, r *http.Request) {
+	qi := p.doubaoQRIface()
+	if qi == nil {
+		http.Error(w, "doubao provider unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	png, remote, ok := qi.QRLoginImage(sanitizeSID(r.URL.Query().Get("sid")))
+	if !ok {
+		http.Error(w, "二维码不存在或已过期", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if len(png) > 0 {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
+		return
+	}
+	http.Redirect(w, r, remote, http.StatusFound)
+}
+
+// handleDoubaoQRStatus 扫码页状态轮询：顺带驱动登录状态机（与面板弹窗轮询
+// 共用 provider 内的会话锁与节流），确认后直接纳管 —— 扫码页独立即可完成登录。
+func (p *Panel) handleDoubaoQRStatus(w http.ResponseWriter, r *http.Request) {
+	qi := p.doubaoQRIface()
+	if qi == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "error", "message": "doubao provider unavailable"})
+		return
+	}
+	sid := sanitizeSID(r.URL.Query().Get("sid"))
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	res, _ := qi.PollLogin(ctx, &model.LoginSession{Provider: "doubao", ID: sid})
+	cancel()
+	state, msg := qi.QRLoginStatus(sid)
+	if state == "confirmed" && res != nil && res.Status == model.LoginDone && res.Account != nil {
+		p.mu.Lock()
+		tk, ok := p.tokens[sid]
+		if ok && !tk.done && tk.provider == "doubao" {
+			if err := p.pool.AddAccount(res.Account); err == nil {
+				go p.sched.CheckinAccount(res.Account)
+				tk.done, tk.result = true, res
+				log.Printf("PANEL: 豆包扫码纳管 %s", res.Account.UID)
+			}
+		}
+		p.mu.Unlock()
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]any{"status": state, "message": msg})
+}
+
+func (p *Panel) doubaoQRIface() doubaoQRIface {
+	pr, ok := p.pool.Provider("doubao")
+	if !ok {
+		return nil
+	}
+	qi, ok := pr.(doubaoQRIface)
+	if !ok {
+		return nil
+	}
+	return qi
+}
+
+// doubaoQRIface 豆包扫码登录展示/驱动能力接口。
+type doubaoQRIface interface {
+	PollLogin(ctx context.Context, s *model.LoginSession) (*model.PollResult, error)
+	QRLoginImage(sid string) ([]byte, string, bool)
+	QRLoginStatus(sid string) (string, string)
+}
+
+// sanitizeSID 会话 ID 白名单（防注入：仅字母数字与连字符）。
+func sanitizeSID(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '-' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// doubaoQRPageHTML 扫码页（__SID__ 占位，写入前 ReplaceAll；sid 已白名单化）。
+const doubaoQRPageHTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>豆包扫码登录 · ChinaCPA</title>
+<style>
+body{background:#faf9f5;color:#1f1e1d;font-family:"Segoe UI","Microsoft YaHei",sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;margin:0}
+.card{background:#fff;border:1px solid #e8e4d9;border-radius:16px;box-shadow:0 2px 8px rgba(31,30,29,.06);padding:32px 36px;text-align:center;max-width:380px;width:calc(100% - 40px)}
+h3{margin:0 0 6px;font-size:17px}
+.sub{color:#8a867b;font-size:13px;margin:0 0 18px;line-height:1.8}
+.qr{border:1px solid #e8e4d9;border-radius:12px;padding:10px;margin-bottom:14px}
+.qr img{width:220px;height:220px;display:block;margin:0 auto}
+.st{font-size:14px;margin:0 0 6px}
+.st.ok{color:#5c8a5e}.st.err{color:#b3564e}
+.tip{color:#aca899;font-size:12px;margin-top:12px;line-height:1.8}
+</style></head><body><div class="card">
+<h3>豆包扫码登录</h3>
+<p class="sub">打开豆包 App → 对话 → 右上角 ＋ → 扫一扫</p>
+<div class="qr"><img id="qr" src="/doubao/qrlogin/img?sid=__SID__" alt="二维码加载中…"></div>
+<p class="st" id="st">请使用豆包 App 扫描二维码</p>
+<p class="tip">手机确认后自动纳管账号，本页可关闭</p>
+</div>
+<script>
+var sid="__SID__";
+function setSt(t,c){var e=document.getElementById('st');e.textContent=t;if(c)e.className='st '+c;}
+function tick(){
+  fetch('/doubao/qrlogin/status?sid='+encodeURIComponent(sid),{cache:'no-store'})
+   .then(function(r){return r.json()}).then(function(j){
+     if(j.status==='confirmed'){
+       setSt('✅ 登录成功，账号已自动纳管，本页可以关闭','ok');
+       try{if(window.opener&&window.opener!==window)window.opener.postMessage({type:'ccpa:login-done'},location.origin)}catch(e){}
+       return;
+     }
+     if(j.status==='scanned'){setSt('已扫码，请在手机上点击确认');}
+     else if(j.status==='expired'){setSt('二维码已过期，请回面板重新发起登录','err');return;}
+     else if(j.status==='error'){setSt('登录失败：'+(j.message||''),'err');return;}
+     else if(j.status==='unknown'){setSt('会话不存在，请回面板重新发起登录','err');return;}
+     else{setSt('请使用豆包 App 扫描二维码');}
+     setTimeout(tick,2000);
+   }).catch(function(){setTimeout(tick,3000);});
+}
+tick();
+</script></body></html>`
 
 // ── 凭证导入 ─────────────────────────────────────────────
 
