@@ -1550,7 +1550,6 @@ function renderOverview(o){
 
 /* ── 图3：实时网关调度拓扑流光动画 ──────────────── */
 let TOPO_TIMER = null;
-let TOPO_REQ_INDEX = 0;
 
 function renderTopology(o){
   const wrap = $('#topoCanvasWrap');
@@ -1562,6 +1561,32 @@ function renderTopology(o){
 
   const acCount = $('#topoAcctCount');
   if(acCount) acCount.textContent = accs.length || 0;
+
+  // 0. 左侧客户端节点：从真实请求来源聚合（by_client），动态渲染
+  const clientCol = $('#topoClients');
+  if(clientCol){
+    const byClient = (REQ && REQ.stats && REQ.stats.by_client) || [];
+    const real = byClient.filter(x=>x.label && x.label !== '未知');
+    if(real.length){
+      clientCol.innerHTML = real.slice(0,5).map((c, i)=>{
+        const icons = {zcode:'Z', 'claude-code':'C', codex:'X', curl:'c', python:'py', go:'go', openai:'O', node:'n', browser:'🌐', postman:'P'};
+        const ico = icons[c.label] || (c.label||'?').slice(0,2);
+        return `<div class="topo-node-client" data-client="${esc(c.label)}" data-idx="${i}">
+          <div class="dot-live"></div>
+          <div class="tn-info">
+            <div class="tn-name">${esc(c.label)}</div>
+            <div class="tn-sub">${c.value} 次调用</div>
+          </div>
+        </div>`;
+      }).join('');
+    } else {
+      // 无真实请求时保留占位说明
+      clientCol.innerHTML = `<div class="topo-node-client" data-client="">
+        <div class="dot-live"></div>
+        <div class="tn-info"><div class="tn-name">等待请求</div><div class="tn-sub">有调用后显示真实客户端</div></div>
+      </div>`;
+    }
+  }
 
   // 1. 动态填充上游目标渠道（WorkBuddy, Trae, Qoder, Doubao, Qwen 等）
   const targetCol = $('#topoTargets');
@@ -1659,70 +1684,116 @@ function updateTopologyWires(){
   svg.innerHTML = paths;
 }
 
-// 调度流光粒子实时发射
+// 调度流光粒子实时发射 —— 用最近真实请求驱动，不再轮巡假数据
 function startTopologyTraffic(o){
   if(TOPO_TIMER) clearInterval(TOPO_TIMER);
 
   const ticker = $('#topoTickerText');
-  const clients = document.querySelectorAll('.topo-node-client');
-  const targets = document.querySelectorAll('.topo-node-target');
-  if(!clients.length || !targets.length) return;
+  const clients = () => document.querySelectorAll('.topo-node-client');
+  const targets = () => document.querySelectorAll('.topo-node-target');
+  if(!clients().length || !targets().length) return;
 
-  const simDecisions = [
-    { client: 'Go-http-client', sub: 'chat/completions', hit: 'WorkBuddy', reason: '会话亲和锁定 · Prompt Cache 命中', lat: '82ms' },
-    { client: 'Cursor IDE Agent', sub: 'deepseek-v3', hit: 'Trae', reason: '会话保持调度 · 首字延迟 104ms', lat: '104ms' },
-    { client: 'OpenAI SDK Client', sub: 'v1/models', hit: 'Qoder', reason: '权重轮询分配 · 实例配额充裕', lat: '76ms' },
-    { client: 'Go-http-client', sub: 'chat/completions', hit: '豆包 Doubao', reason: '协议路由分流 · Seedream 绘图生成', lat: '120ms' },
-  ];
+  let lastReal = null;   // 最近一次真实请求（带 client/provider/model/耗时）
+  let emptyPulses = 0;   // 无真实请求时的兜底计数
 
-  function pulseCycle(){
-    const cIdx = TOPO_REQ_INDEX % clients.length;
-    const tIdx = TOPO_REQ_INDEX % targets.length;
-    TOPO_REQ_INDEX++;
-
-    // 激活对应的节点与连线
-    clients.forEach((c, idx)=> c.classList.toggle('active', idx === cIdx));
-    targets.forEach((t, idx)=> t.classList.toggle('active', idx === tIdx));
-
-    const wClients = document.querySelectorAll('.wire-client');
-    const wTargets = document.querySelectorAll('.wire-target');
-    wClients.forEach((w, idx)=> w.classList.toggle('active', idx === cIdx));
-    wTargets.forEach((w, idx)=> w.classList.toggle('active', idx === tIdx));
-
-    // 粒子动画注入
-    const pGroup = $('#topoParticles');
-    if(pGroup){
-      const activeWireC = document.querySelector(`.wire-c-${cIdx}`);
-      const activeWireT = document.querySelector(`.wire-t-${tIdx}`);
-      if(activeWireC && activeWireT){
-        const d1 = activeWireC.getAttribute('d');
-        const d2 = activeWireT.getAttribute('d');
-        pGroup.innerHTML = `
-          <circle r="4" fill="var(--accent)" filter="drop-shadow(0 0 6px var(--accent))">
-            <animateMotion path="${d1}" dur="0.8s" repeatCount="1" fill="freeze" />
-          </circle>
-          <circle r="4" fill="var(--green)" filter="drop-shadow(0 0 6px var(--green))">
-            <animateMotion path="${d2}" begin="0.8s" dur="0.8s" repeatCount="1" fill="freeze" />
-          </circle>
-        `;
-      }
-    }
-
-    // 调度决策流水文案滚动
-    if(ticker){
-      const d = simDecisions[(TOPO_REQ_INDEX - 1) % simDecisions.length];
-      const targetEl = targets[tIdx];
-      const targetName = targetEl ? (targetEl.querySelector('.t-name')||{}).textContent||d.hit : d.hit;
-      const clientEl = clients[cIdx];
-      const clientName = clientEl ? (clientEl.querySelector('.tn-name')||{}).textContent||d.client : d.client;
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
-      ticker.innerHTML = `[链路事件 ${timeStr}] 客户端: <b>${esc(clientName)}</b> ➔ 调度中枢: ChinaCPA 网关 ➔ 目标实例: <b>${esc(targetName)}</b> ｜ 策略: <span style="color:var(--green)">${esc(d.reason)}</span> ｜ 耗时: ${d.lat}`;
-    }
+  // 取最近一条真实请求作为链路事件
+  function fetchLatestReal(){
+    if(!REQ || !REQ.entries || !REQ.entries.length) return null;
+    return REQ.entries[0]; // entries 已是新→旧
   }
 
+  function pulseCycle(){
+    // 从 overview/请求日志找真实链路：优先用最近请求的 client + provider
+    const e = lastReal || fetchLatestReal();
+    const cList = clients(), tList = targets();
+    if(!cList.length || !tList.length) return;
+
+    let cIdx = -1, tIdx = -1;
+    let tick = '';
+
+    if(e && e.client && e.provider){
+      // 真实请求：client 匹配左侧节点，provider 匹配右侧渠道
+      cList.forEach((c,i)=>{ if((c.dataset.client||'') === e.client) cIdx = i; });
+      tList.forEach((t,i)=>{ if((t.dataset.prov||'') === e.provider) tIdx = i; });
+    }
+
+    if(cIdx >= 0 && tIdx >= 0){
+      // 点亮真实链路
+      lastReal = e;
+      cList.forEach((c,i)=> c.classList.toggle('active', i===cIdx));
+      tList.forEach((t,i)=> t.classList.toggle('active', i===tIdx));
+      const wC = document.querySelectorAll('.wire-client');
+      const wT = document.querySelectorAll('.wire-target');
+      wC.forEach((w,i)=> w.classList.toggle('active', i===cIdx));
+      wT.forEach((w,i)=> w.classList.toggle('active', i===tIdx));
+
+      // 粒子动画沿真实连线流动
+      const pGroup = $('#topoParticles');
+      if(pGroup){
+        const wireC = document.querySelector(`.wire-c-${cIdx}`);
+        const wireT = document.querySelector(`.wire-t-${tIdx}`);
+        if(wireC && wireT){
+          pGroup.innerHTML = `
+            <circle r="4" fill="var(--accent)" filter="drop-shadow(0 0 6px var(--accent))">
+              <animateMotion path="${wireC.getAttribute('d')}" dur="0.8s" repeatCount="1" fill="freeze" />
+            </circle>
+            <circle r="4" fill="var(--green)" filter="drop-shadow(0 0 6px var(--green))">
+              <animateMotion path="${wireT.getAttribute('d')}" begin="0.8s" dur="0.8s" repeatCount="1" fill="freeze" />
+            </circle>`;
+        }
+      }
+
+      // 真实决策文案
+      const clientName = (cList[cIdx].querySelector('.tn-name')||{}).textContent || e.client;
+      const targetName = (tList[tIdx].querySelector('.t-name')||{}).textContent || e.provider;
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+      const lat = e.total_ms? (e.total_ms/1000).toFixed(1)+'s' : (e.first_ms? (e.first_ms/1000).toFixed(1)+'s' : '—');
+      tick = `[真实链路 ${timeStr}] 客户端: <b>${esc(clientName)}</b> ➔ 网关 ➔ 上游: <b>${esc(targetName)}</b> ｜ 模型: <code>${esc(e.model||'')}</code> ｜ 耗时: ${lat} ｜ ${e.ok?'成功':'失败'}`;
+    } else {
+      // 无匹配真实请求：显示等待，不轮巡假数据
+      emptyPulses++;
+      const now = new Date();
+      const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+      tick = `[等待真实请求 ${timeStr}] 当前无匹配链路事件，有新调用将实时点亮对应客户端→上游路径`;
+    }
+    if(ticker) ticker.innerHTML = tick;
+  }
+
+  // 每 2.8 秒刷新一次真实请求日志并驱动动画
   pulseCycle();
-  TOPO_TIMER = setInterval(pulseCycle, 2800);
+  TOPO_TIMER = setInterval(()=>{
+    // 轮询刷新最近请求（保持动画数据最新）
+    if(!REQ){
+      // 尝试加载一次请求日志（静默失败）
+      const model = '', status = '';
+      fetch(`/api/requests?range=all&limit=20&model=&status=&offset=0`)
+        .then(r=>r.json()).then(d=>{ REQ = d; syncClientNodes(); pulseCycle(); }).catch(()=>{ pulseCycle(); });
+    } else {
+      pulseCycle();
+    }
+  }, 2800);
+
+  // 用最新 by_client 更新左侧客户端节点（保持真实来源展示）
+  function syncClientNodes(){
+    const col = $('#topoClients');
+    if(!col) return;
+    const byClient = (REQ && REQ.stats && REQ.stats.by_client) || [];
+    const real = byClient.filter(x=>x.label && x.label !== '未知');
+    if(!real.length) return;
+    col.innerHTML = real.slice(0,5).map((c, i)=>{
+      const icons = {zcode:'Z', 'claude-code':'C', codex:'X', curl:'c', python:'py', go:'go', openai:'O', node:'n', browser:'🌐', postman:'P'};
+      const ico = icons[c.label] || (c.label||'?').slice(0,2);
+      return `<div class="topo-node-client" data-client="${esc(c.label)}" data-idx="${i}">
+        <div class="dot-live"></div>
+        <div class="tn-info">
+          <div class="tn-name">${esc(c.label)}</div>
+          <div class="tn-sub">${c.value} 次调用</div>
+        </div>
+      </div>`;
+    }).join('');
+    updateTopologyWires();
+  }
 }
 
 window.addEventListener('resize', ()=>{
