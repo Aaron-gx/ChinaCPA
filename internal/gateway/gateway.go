@@ -98,10 +98,11 @@ func (g *Gateway) auth(next http.HandlerFunc, key string) http.HandlerFunc {
 
 // openAIStream 一次成功的 provider 调用（body 恒为 OpenAI 兼容 SSE 流）。
 type openAIStream struct {
-	acct     *model.Account
-	pid      string
-	body     io.ReadCloser
-	attempts []string // 渠道尝试链路（含失败转移记录）
+	acct        *model.Account
+	pid         string
+	body        io.ReadCloser
+	contentType string // 上游实际响应类型（text/event-stream / application/json）
+	attempts    []string // 渠道尝试链路（含失败转移记录）
 }
 
 // peekStreamError 探测「HTTP 200 但错误内嵌在流里」的情况：
@@ -243,7 +244,7 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 		if pid == "qwen" && g.qwenProv != nil {
 			g.qwenProv.CountRequest(a.UID)
 		}
-		return &openAIStream{acct: a, pid: pid, body: res.Body}, nil, 0, nil
+		return &openAIStream{acct: a, pid: pid, body: res.Body, contentType: res.ContentType}, nil, 0, nil
 	}
 	if lastErr == nil {
 		lastErr = &provider.Error{Kind: provider.ErrUpstream, Msg: fmt.Sprintf("平台 %s 无可用账号", pid)}
@@ -330,26 +331,42 @@ func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := []om{}
-	seen := map[string]bool{}
-	for pid, ms := range all {
+	// 固定 provider 顺序（按注册序），保证裸名归属确定；同名模型仅暴露带前缀形态
+	bareOwners := map[string]string{}
+	for _, pid := range g.providerOrder() {
+		ms := all[pid]
 		if ms == nil {
 			continue
 		}
 		for _, m := range ms {
-			// 带前缀形态（路由唯一）
 			id := pid + ":" + m.ID
-			if !seen[id] {
-				seen[id] = true
-				data = append(data, om{ID: id, Object: "model", OwnedBy: pid})
-			}
-			// 裸名形态（跨平台唯一时才暴露）
-			if !seen[m.ID] {
-				seen[m.ID] = true
-				data = append(data, om{ID: m.ID, Object: "model", OwnedBy: pid})
+			data = append(data, om{ID: id, Object: "model", OwnedBy: pid})
+			if owner, ok := bareOwners[m.ID]; ok && owner != pid {
+				// 跨平台重名：裸名不暴露（裸名解析会报多命中）
+				bareOwners[m.ID] = "*ambiguous*"
+			} else if bareOwners[m.ID] != "*ambiguous*" {
+				bareOwners[m.ID] = pid
 			}
 		}
 	}
+	// 追加裸名形态（仅唯一归属者）
+	for mid, owner := range bareOwners {
+		if owner == "*ambiguous*" {
+			continue
+		}
+		data = append(data, om{ID: mid, Object: "model", OwnedBy: owner})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
+}
+
+// providerOrder 固定 provider 遍历顺序（注册序），供 /v1/models 确定性输出。
+func (g *Gateway) providerOrder() []string {
+	provs := g.pool.Providers()
+	out := make([]string, 0, len(provs))
+	for _, pr := range provs {
+		out = append(out, pr.ID())
+	}
+	return out
 }
 
 // ── /v1/chat/completions ─────────────────────────────────
@@ -396,7 +413,11 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		return
 	}
-	res := &provider.ChatResult{Body: st.body, ContentType: "text/event-stream"}
+	ct := st.contentType
+	if ct == "" {
+		ct = "text/event-stream" // 上游未声明类型时按流式处理（兼容老通道）
+	}
+	res := &provider.ChatResult{Body: st.body, ContentType: ct}
 	g.serve(w, r, res, st.pid, st.acct.UID, route.Public, cr.Stream, "chat", st.attempts, t0)
 }
 

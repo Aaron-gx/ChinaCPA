@@ -275,3 +275,29 @@ func TestCheckQuota(t *testing.T) {
 		t.Fatalf("按模型明细错误: %v", byModel)
 	}
 }
+
+// TestCounterPersistence 计数器跨重启恢复（SetCounterPersistence + RestoreAccountCounters）。
+func TestCounterPersistence(t *testing.T) {
+	// 模拟 store：内存 map
+	saved := map[string]CounterSnapshot{}
+	SetCounterPersistence(
+		func(uid string, c CounterSnapshot) { saved[uid] = c },
+		func(uid string) (CounterSnapshot, bool) { c, ok := saved[uid]; return c, ok },
+	)
+	defer SetCounterPersistence(nil, nil)
+
+	countImages("u1", "seedream", 3)
+	countVideos("u1", "seedance")
+	countChat("u1")
+
+	// 模拟重启：清空内存计数，再从快照恢复
+	qmu.Lock()
+	qcounters = map[string]*dbDayCounter{}
+	qmu.Unlock()
+
+	RestoreAccountCounters("u1")
+	c := usageToday("u1")
+	if c.images != 3 || c.videos != 1 || c.chats != 1 {
+		t.Fatalf("重启恢复失败: images=%d videos=%d chats=%d", c.images, c.videos, c.chats)
+	}
+}

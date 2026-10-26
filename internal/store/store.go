@@ -23,6 +23,9 @@ type Store struct {
 	quotaCache map[string]*model.QuotaInfo
 	// checkinLog provider:uid:date -> 结果（用于面板展示与幂等提示）
 	checkinLog map[string]model.CheckinResult
+	// counters 进程外每日计数器持久化（键 provider:uid:day:kind -> 值），
+	// 供豆包等无上游额度接口的平台跨重启恢复本地日配额
+	counters map[string]int64
 }
 
 // Open 初始化数据目录并加载既有状态。
@@ -31,6 +34,7 @@ func Open(dir string) (*Store, error) {
 		dir:        dir,
 		quotaCache: map[string]*model.QuotaInfo{},
 		checkinLog: map[string]model.CheckinResult{},
+		counters:   map[string]int64{},
 	}
 	for _, sub := range []string{"", "accounts", "usage"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
@@ -113,6 +117,7 @@ func (s *Store) LoadAccounts() ([]*model.Account, error) {
 type stateFile struct {
 	Quotas     map[string]*model.QuotaInfo    `json:"quotas"`
 	CheckinLog map[string]model.CheckinResult `json:"checkin_log"`
+	Counters   map[string]int64               `json:"counters,omitempty"`
 }
 
 func (s *Store) statePath() string { return filepath.Join(s.dir, "state.json") }
@@ -132,15 +137,46 @@ func (s *Store) loadState() {
 	if st.CheckinLog != nil {
 		s.checkinLog = st.CheckinLog
 	}
+	if st.Counters != nil {
+		s.counters = st.Counters
+	}
 }
 
 func (s *Store) persistStateLocked() {
-	st := stateFile{Quotas: s.quotaCache, CheckinLog: s.checkinLog}
+	st := stateFile{Quotas: s.quotaCache, CheckinLog: s.checkinLog, Counters: s.counters}
 	raw, err := json.MarshalIndent(st, "", "  ")
 	if err != nil {
 		return
 	}
 	_ = atomicWrite(s.statePath(), raw)
+}
+
+// GetCounter 读取跨重启计数器（provider:uid:day:kind）。缺失或过期返回 0。
+func (s *Store) GetCounter(key string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.counters[key]
+}
+
+// SetCounter 更新跨重启计数器并落盘。
+func (s *Store) SetCounter(key string, v int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.counters[key] = v
+	s.persistStateLocked()
+}
+
+// CountersPrefix 读取某前缀下的全部计数器（如 "doubao:<uid>:" 当日各类计数）。
+func (s *Store) CountersPrefix(prefix string) map[string]int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int64{}
+	for k, v := range s.counters {
+		if strings.HasPrefix(k, prefix) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // SetQuota 更新额度快照（内存 + 落盘）。

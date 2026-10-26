@@ -41,8 +41,11 @@ type Account struct {
 	Source string `json:"source,omitempty"`
 
 	Disabled   bool  `json:"disabled,omitempty"`
-	CreatedAt  int64 `json:"created_at,omitempty"`
-	LastUsedAt int64 `json:"last_used_at,omitempty"`
+	// NeedsRelogin 凭证已失效（上游返回鉴权错误）：调度跳过该账号，面板提示重新登录。
+	// 重新导入凭证 / 手动 resume 后清除。
+	NeedsRelogin bool  `json:"needs_relogin,omitempty"`
+	CreatedAt    int64 `json:"created_at,omitempty"`
+	LastUsedAt   int64 `json:"last_used_at,omitempty"`
 }
 
 // QuotaInfo 账号额度快照（各 provider 归一化 + 平台原始字段保留）。

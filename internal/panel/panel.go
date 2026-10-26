@@ -170,13 +170,14 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		UID            string               `json:"uid"`
 		Nickname       string               `json:"nickname"`
 		Disabled       bool                 `json:"disabled"`
+		NeedsRelogin   bool                 `json:"needs_relogin"`
 		ExpiresAt      int64                `json:"expires_at"`
 		TokenDaysLeft  float64              `json:"token_days_left"`
 		CooldownUntil  int64                `json:"cooldown_until"`
 		CooldownModels []string             `json:"cooldown_models,omitempty"` // 冷却中的模型（""=账号级）
 		Quota          *model.QuotaInfo     `json:"quota,omitempty"`
 		CheckinToday   *model.CheckinResult `json:"checkin_today,omitempty"`
-		Status         string               `json:"status"` // ok / cooldown / disabled / expired
+		Status         string               `json:"status"` // ok / relogin / cooldown / disabled / expired
 	}
 	accounts := p.pool.Accounts()
 	var views []acctView
@@ -193,7 +194,10 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		v := acctView{
 			Provider: a.Provider, ProviderName: name,
 			UID: a.UID, Nickname: a.Nickname, Disabled: a.Disabled,
-			ExpiresAt: a.ExpiresAt,
+			NeedsRelogin: a.NeedsRelogin, ExpiresAt: a.ExpiresAt,
+		}
+		if a.NeedsRelogin {
+			v.Status = "relogin"
 		}
 		if a.ExpiresAt > 0 {
 			v.TokenDaysLeft = float64(a.ExpiresAt-time.Now().Unix()) / 86400
@@ -397,6 +401,13 @@ func (p *Panel) handleAccountAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "disabled": newDisabled})
+	case "resume":
+		// 恢复需重新登录的账号（清除标记并重新纳入调度）
+		if !p.pool.ClearNeedsRelogin(a.Provider, a.UID) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "账号无需恢复"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "needs_relogin": false})
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "未知 action"})
 	}
@@ -844,7 +855,7 @@ func (p *Panel) handlePublish(w http.ResponseWriter, r *http.Request) {
 	// 计价热生效（发布模型单价优先于 pricing.json）
 	pub := map[string]usage.PubPrice{}
 	for k, v := range p.pub.PricingMap() {
-		pub[strings.ToLower(k)] = usage.PubPrice{Input: v.Input, Output: v.Output, Cache: v.Cache}
+		pub[strings.ToLower(k)] = usage.PubPrice{Input: v.Input, Output: v.Output, Cache: v.Cache, PerCall: v.PerCall}
 	}
 	p.usage.SetPublishedPricing(pub, p.pub.USDCNY())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(p.pub.Get().Models)})

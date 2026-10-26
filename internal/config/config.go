@@ -123,7 +123,7 @@ func Load(path string) (*Config, error) {
 // normalize 修正非法取值。
 func (c *Config) normalize() {
 	if c.Listen == "" {
-		c.Listen = ":8317"
+		c.Listen = ":8313"
 	}
 	if c.APIKey == "" {
 		c.APIKey = "sk-chinacpa-please-change-me"

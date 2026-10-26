@@ -23,6 +23,9 @@ type Record struct {
 	CompletionTokens int64  `json:"completion_tokens"`
 	TotalTokens      int64  `json:"total_tokens"`
 	CacheTokens      int64  `json:"cache_tokens,omitempty"` // 命中缓存的输入 tokens
+	// Calls 按次计费的数量（图片张数 / 视频条数），0 = 纯 token 计费
+	Calls int64  `json:"calls,omitempty"`
+	Unit  string `json:"unit,omitempty"` // images / videos 等按次单位（仅展示用）
 }
 
 // Tracker 用量记录器与聚合器。
@@ -41,11 +44,12 @@ type Tracker struct {
 	pubUSDCNY  float64
 }
 
-// PubPrice 发布模型单价条目（$/1M tokens）。
+// PubPrice 发布模型单价条目。
 type PubPrice struct {
-	Input  float64
-	Output float64
-	Cache  float64
+	Input   float64
+	Output  float64
+	Cache   float64
+	PerCall float64 // 按次单价（$/张、$/条），图片/视频用；0 = 无按次计费
 }
 
 type agg struct {
@@ -57,6 +61,8 @@ type agg struct {
 	Complete int64  `json:"completion_tokens"`
 	Total    int64  `json:"total_tokens"`
 	Cache    int64  `json:"cache_tokens"`
+	Calls    int64  `json:"calls,omitempty"`
+	Unit     string `json:"unit,omitempty"`
 }
 
 // Pricing 模型单价表（$/1M tokens）。
@@ -115,6 +121,10 @@ func (t *Tracker) Record(r Record) {
 	a.Complete += r.CompletionTokens
 	a.Total += r.TotalTokens
 	a.Cache += r.CacheTokens
+	a.Calls += r.Calls
+	if a.Unit == "" && r.Unit != "" {
+		a.Unit = r.Unit
+	}
 	// 追加落盘
 	f, err := os.OpenFile(t.file(day), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -150,6 +160,10 @@ func (t *Tracker) restoreToday() {
 		a.Complete += r.CompletionTokens
 		a.Total += r.TotalTokens
 		a.Cache += r.CacheTokens
+		a.Calls += r.Calls
+		if a.Unit == "" && r.Unit != "" {
+			a.Unit = r.Unit
+		}
 	}
 }
 
@@ -194,6 +208,7 @@ func (t *Tracker) HistoryDays(n int) []DayTotal {
 				dt.Complete += a.Complete
 				dt.Total += a.Total
 				dt.Cache += a.Cache
+				dt.Calls += a.Calls
 			}
 		} else {
 			dt = t.scanDay(day)
@@ -211,6 +226,7 @@ type DayTotal struct {
 	Complete int64  `json:"completion_tokens"`
 	Total    int64  `json:"total_tokens"`
 	Cache    int64  `json:"cache_tokens"`
+	Calls    int64  `json:"calls,omitempty"`
 }
 
 func (t *Tracker) scanDay(day string) DayTotal {
@@ -232,6 +248,7 @@ func (t *Tracker) scanDay(day string) DayTotal {
 		dt.Complete += r.CompletionTokens
 		dt.Total += r.TotalTokens
 		dt.Cache += r.CacheTokens
+		dt.Calls += r.Calls
 	}
 	return dt
 }
@@ -334,7 +351,35 @@ func (t *Tracker) Cost(model string, prompt, completion int64) float64 {
 }
 
 // CostWithCache 同 Cost，缓存命中的输入按缓存单价计（缓存价未配置时按输入价）。
+// 发布模型配置了按次单价（PerCall）时，优先按次计费（图片/视频模型）。
 func (t *Tracker) CostWithCache(model string, prompt, completion, cached int64) float64 {
+	return t.CostFull(model, prompt, completion, cached, 0, "")
+}
+
+// CostCalls 按次计费（图片/视频）：calls 次数 × 发布模型按次单价。
+// 未配置按次单价时返回 0。
+func (t *Tracker) CostCalls(model string, calls int64) float64 {
+	if calls <= 0 {
+		return 0
+	}
+	t.pricingMu.Lock()
+	pub := t.pubPricing
+	pubCNY := t.pubUSDCNY
+	t.pricingMu.Unlock()
+	name := normalizeModel(model)
+	pp, ok := pub[strings.ToLower(name)]
+	if !ok || pp.PerCall <= 0 {
+		return 0
+	}
+	cny := pubCNY
+	if cny <= 0 {
+		cny = 7.1
+	}
+	return float64(calls) * pp.PerCall * cny
+}
+
+// CostFull 综合计价：token 部分 + 按次部分（发布模型 PerCall 时生效）。
+func (t *Tracker) CostFull(model string, prompt, completion, cached, calls int64, unit string) float64 {
 	t.pricingMu.Lock()
 	p := t.pricing
 	pub := t.pubPricing
@@ -347,6 +392,9 @@ func (t *Tracker) CostWithCache(model string, prompt, completion, cached int64) 
 			cny = 7.1
 		}
 		usd := costUSD(prompt, completion, cached, pp.Input, pp.Output, pp.Cache)
+		if pp.PerCall > 0 && calls > 0 {
+			usd += float64(calls) * pp.PerCall
+		}
 		return usd * cny
 	}
 	if p == nil {
@@ -404,7 +452,7 @@ func (t *Tracker) TodayWithCost() []AggWithCost {
 	base := t.TodayAgg()
 	out := make([]AggWithCost, 0, len(base))
 	for _, a := range base {
-		out = append(out, AggWithCost{agg: a, CostCNY: t.CostWithCache(a.Model, a.Prompt, a.Complete, a.Cache)})
+		out = append(out, AggWithCost{agg: a, CostCNY: t.CostFull(a.Model, a.Prompt, a.Complete, a.Cache, a.Calls, a.Unit)})
 	}
 	return out
 }
@@ -416,6 +464,7 @@ type Totals struct {
 	Complete int64   `json:"completion_tokens"`
 	Total    int64   `json:"total_tokens"`
 	Cache    int64   `json:"cache_tokens"`
+	Calls    int64   `json:"calls,omitempty"`
 	CostCNY  float64 `json:"cost_cny"`
 }
 
@@ -428,6 +477,7 @@ func Sum(items []AggWithCost) Totals {
 		tt.Complete += it.Complete
 		tt.Total += it.Total
 		tt.Cache += it.Cache
+		tt.Calls += it.Calls
 		tt.CostCNY += it.CostCNY
 	}
 	return tt

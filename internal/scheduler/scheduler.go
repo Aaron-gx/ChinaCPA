@@ -5,6 +5,7 @@ package scheduler
 import (
 	"context"
 	"log"
+	"sync"
 	"time"
 
 	"chinacpa/internal/config"
@@ -20,19 +21,23 @@ type Scheduler struct {
 	pool *pool.Pool
 	st   *store.Store
 
-	lastCheckinDay string
-	lastTokenDay   string
-	lastQuotaTick  time.Time
-	quit           chan struct{}
+	// lastCheckin 每 provider 上次成功签到的日期（YYYY-MM-DD）；
+	// 失败的账号不记录，60 秒后由 tick 再次尝试，直至成功或当天结束。
+	lastCheckin   map[string]string
+	lastTokenDay  string
+	lastQuotaTick time.Time
+	quit          chan struct{}
+	stopOnce      sync.Once
 }
 
 // New 构造。
 func New(cfg *config.Config, p *pool.Pool, st *store.Store) *Scheduler {
 	return &Scheduler{
-		cfg:  cfg,
-		pool: p,
-		st:   st,
-		quit: make(chan struct{}),
+		cfg:          cfg,
+		pool:         p,
+		st:           st,
+		lastCheckin:  map[string]string{},
+		quit:         make(chan struct{}),
 	}
 }
 
@@ -54,8 +59,10 @@ func (s *Scheduler) Start() {
 	}()
 }
 
-// Stop 停止。
-func (s *Scheduler) Stop() { close(s.quit) }
+// Stop 停止（幂等）。
+func (s *Scheduler) Stop() {
+	s.stopOnce.Do(func() { close(s.quit) })
+}
 
 func (s *Scheduler) tick(now time.Time) {
 	cfg := s.cfg.Schedule
@@ -66,10 +73,9 @@ func (s *Scheduler) tick(now time.Time) {
 	}
 	hour := now.Hour()
 	day := now.Format("2006-01-02")
-	// 2) 每日签到（在配置小时内的第一次 tick 执行一次）
-	if cfg.CheckinEnabled && s.lastCheckinDay != day && containsHour(cfg.CheckinHours, hour) {
-		s.lastCheckinDay = day
-		go s.runAllCheckins()
+	// 2) 每日签到：配置小时窗口内启动；失败的账号不记日期，下个 tick 自动重试
+	if cfg.CheckinEnabled && containsHour(cfg.CheckinHours, hour) {
+		s.tickCheckins(day)
 	}
 	// 3) token 保活
 	if s.lastTokenDay != day && containsHour(cfg.TokenRefreshHours, hour) {
@@ -87,10 +93,29 @@ func containsHour(hours []int, h int) bool {
 	return false
 }
 
-// runAllCheckins 全账号签到（跳过禁用）。
+// tickCheckins 对「今天还没签到成功」的账号发起签到（跨 provider 去重）。
+func (s *Scheduler) tickCheckins(day string) {
+	// 只处理存在且当日未成功的账号，避免每次 tick 全量空转
+	for _, a := range s.pool.Accounts() {
+		if a.Disabled || a.NeedsRelogin {
+			continue
+		}
+		if s.lastCheckin[a.Provider] == day {
+			continue
+		}
+		// 面板手动签到成功会写 lastCheckin（CheckinAccount 内更新）
+		if r, ok := s.st.TodayCheckin(a.Provider, a.UID); ok && r.OK {
+			s.lastCheckin[a.Provider] = day
+			continue
+		}
+		go s.CheckinAccount(a)
+	}
+}
+
+// runAllCheckins 全账号签到（跳过禁用与需重新登录）。
 func (s *Scheduler) runAllCheckins() {
 	for _, a := range s.pool.Accounts() {
-		if a.Disabled {
+		if a.Disabled || a.NeedsRelogin {
 			continue
 		}
 		s.CheckinAccount(a)
@@ -132,6 +157,10 @@ func (s *Scheduler) CheckinAccount(a *model.Account) *model.CheckinResult {
 		}
 	}
 	s.st.RecordCheckin(a.Provider, a.UID, *res)
+	// 成功或已签：记当天完成（避免同一小时窗口内反复触发）
+	if res.OK || res.Already {
+		s.lastCheckin[a.Provider] = time.Now().Format("2006-01-02")
+	}
 	log.Printf("SCHED: [%s] 签到: %s", a.Provider+"/"+label(a), res.Message)
 	// 签到后立刻刷新额度
 	go s.refreshQuota(a)

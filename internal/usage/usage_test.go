@@ -84,3 +84,42 @@ func TestPricingFile(t *testing.T) {
 		t.Fatalf("自定义计价错误: %f", c)
 	}
 }
+
+// TestCallsPerUnit 按次计费（图片/视频）：Calls/Unit 记账、聚合、重启回放与计价。
+func TestCallsPerUnit(t *testing.T) {
+	dir := t.TempDir()
+	tr, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+	// 发布模型按次单价 $0.02/张
+	tr.SetPublishedPricing(map[string]PubPrice{
+		"seedream": {PerCall: 0.02},
+	}, 7.0)
+	tr.Record(Record{Provider: "doubao", Account: "u1", Model: "seedream", Calls: 3, Unit: "images"})
+	items := tr.TodayWithCost()
+	if len(items) != 1 || items[0].Calls != 3 {
+		t.Fatalf("聚合错误: %+v", items)
+	}
+	// 3 张 * $0.02 * 7 = ¥0.42
+	if items[0].CostCNY < 0.41 || items[0].CostCNY > 0.43 {
+		t.Fatalf("按次计价错误: %f", items[0].CostCNY)
+	}
+	if c := tr.CostCalls("seedream", 3); c < 0.41 || c > 0.43 {
+		t.Fatalf("CostCalls 错误: %f", c)
+	}
+	// 重启回放保留 Calls/Unit
+	tr2, err := New(dir, "")
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	items2 := tr2.TodayWithCost()
+	if len(items2) != 1 || items2[0].Calls != 3 || items2[0].Unit != "images" {
+		t.Fatalf("重启回放失败: %+v", items2)
+	}
+	// HistoryDays 带 Calls
+	h := tr2.HistoryDays(1)
+	if h[0].Calls != 3 {
+		t.Fatalf("HistoryDays 丢失 Calls: %+v", h)
+	}
+}

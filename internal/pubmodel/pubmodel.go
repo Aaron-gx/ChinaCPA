@@ -19,11 +19,13 @@ type Channel struct {
 	Note     string `json:"note,omitempty"`
 }
 
-// Pricing 单价（$/1M tokens）。
+// Pricing 单价。对话模型用 Input/Output/Cache（$/1M tokens）；
+// 图片/视频模型用 PerCall（$/次）。
 type Pricing struct {
-	Input  float64 `json:"input"`
-	Output float64 `json:"output"`
-	Cache  float64 `json:"cache,omitempty"` // 缓存 token 单价（$/1M），0 = 缓存按输入价计
+	Input   float64 `json:"input"`
+	Output  float64 `json:"output"`
+	Cache   float64 `json:"cache,omitempty"` // 缓存 token 单价（$/1M），0 = 缓存按输入价计
+	PerCall float64 `json:"per_call,omitempty"` // 按次单价（$/张、$/条），0 = 无
 }
 
 // Model 一个对外发布的模型。
@@ -32,7 +34,25 @@ type Model struct {
 	Note     string    `json:"note,omitempty"`    // 备注/显示名
 	Type     string    `json:"type,omitempty"`    // 类别：chat（默认）/ image / video
 	Pricing  *Pricing  `json:"pricing,omitempty"` // 单价；空 = 不计价
-	Channels []Channel `json:"channels"`          // 上游渠道（按序失败转移，轮询起点轮转）
+	Channels []Channel `json:"channels"`          // 上游渠道（按序失败转移）
+	// Strategy 渠道选路策略：priority（默认，严格按配置顺序，免费额度优先）/ round_robin（轮询起点轮转）
+	Strategy string `json:"strategy,omitempty"`
+}
+
+// 渠道选路策略常量。
+const (
+	StrategyPriority   = "priority"
+	StrategyRoundRobin = "round_robin"
+)
+
+// normalizeStrategy 归一化渠道策略（空/非法回落 priority）。
+func normalizeStrategy(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case StrategyRoundRobin:
+		return StrategyRoundRobin
+	default:
+		return StrategyPriority
+	}
 }
 
 // normalizeType 归一化类别（空 = chat）。
@@ -150,6 +170,7 @@ func (m *Manager) Save(cfg *Config) error {
 		}
 		seen[key] = true
 		mo.Type = normalizeType(mo.Type)
+		mo.Strategy = normalizeStrategy(mo.Strategy)
 		if len(mo.Channels) == 0 {
 			return fmt.Errorf("模型 %q 至少需要一个渠道", mo.ID)
 		}
@@ -205,7 +226,7 @@ func (m *Manager) PricingMap() map[string]Pricing {
 	defer m.mu.RUnlock()
 	out := map[string]Pricing{}
 	for _, mo := range m.cfg.Models {
-		if mo.Pricing != nil && (mo.Pricing.Input > 0 || mo.Pricing.Output > 0) {
+		if mo.Pricing != nil && (mo.Pricing.Input > 0 || mo.Pricing.Output > 0 || mo.Pricing.PerCall > 0) {
 			out[strings.ToLower(mo.ID)] = *mo.Pricing
 		}
 	}

@@ -348,6 +348,14 @@ func (p *Provider) setHeaders(req *http.Request, a *model.Account, stream bool) 
 // 做三处改写：无 tools 时注入防"投毒"占位工具；stream=true 时补 stream_options.include_usage；
 // model 覆盖为实际模型名。
 func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName string, body []byte) (*provider.ChatResult, error) {
+	// 每日免费额度硬上限：本地计数达到上限直接返回配额错误，
+	// 由账号池冷却并切到下一个账号/渠道。
+	if p.DailyLimit > 0 && p.usedToday(a.UID) >= p.DailyLimit {
+		return nil, &provider.Error{
+			Kind: provider.ErrQuota,
+			Msg:  fmt.Sprintf("今日免费额度已用完（%d/%d 次，本地计数，明日重置）", p.usedToday(a.UID), p.DailyLimit),
+		}
+	}
 	if a.Source == "web" {
 		return p.webChatStream(ctx, a, modelName, body)
 	}

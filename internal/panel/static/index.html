@@ -630,7 +630,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
             <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 新建模型</button>
           </span>
         </h2>
-        <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>（严格按优先级：始终先走第 1 个渠道，失败才切下一个；渠道内多账号按会话黏性分配（同一会话固定同一账号保上游缓存），国内/海外等渠道各自独立）。客户端写 <code>{"model":"发布模型名"}</code> 即可，单价（$/1M tokens）用于费用估算，缓存命中部分按缓存价计。未配置发布模型时默认暴露全部内部模型。<br>类型选<b>图片</b>/<b>视频</b>可发布生成类模型（如豆包 Seedream/Seedance）：图片走 <code>POST /v1/images/generations</code>，视频走 <code>POST /api/v3/contents/generations/tasks</code>（火山方舟任务协议），单价按 $/次 计。</div>
+        <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>。渠道策略可选「优先级」（默认，始终先走第 1 个渠道，失败才切下一个）或「轮询均衡」（每次请求按渠道轮转起点）；渠道内多账号按会话黏性分配（同一会话固定同一账号保上游缓存）。客户端写 <code>{"model":"发布模型名"}</code> 即可，对话模型单价（$/1M tokens）用于费用估算，图片/视频模型按 $/次 计。未配置发布模型时默认暴露全部内部模型。<br>类型选<b>图片</b>/<b>视频</b>可发布生成类模型（如豆包 Seedream/Seedance）：图片走 <code>POST /v1/images/generations</code>，视频走 <code>POST /api/v3/contents/generations/tasks</code>（火山方舟任务协议，视频按任务成功计费）。</div>
         <div class="pub-grid" id="pubGrid"></div>
       </section>
     </div>
@@ -726,6 +726,13 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
           <option value="">对话 chat</option>
           <option value="image">图片 image</option>
           <option value="video">视频 video</option>
+        </select>
+      </div>
+      <div style="width:220px">
+        <label class="f">渠道策略</label>
+        <select id="mmStrategy" style="width:100%">
+          <option value="priority">优先级（默认）</option>
+          <option value="round_robin">轮询均衡</option>
         </select>
       </div>
     </div>
@@ -1027,6 +1034,7 @@ function renderAcctTable(o){
     if(a.status==='cooldown'){cls='cooldown';const cm=(a.cooldown_models||[]).join('、');txt=`冷却中${cm?`（${esc(cm)}）`:''}`}
     if(a.status==='disabled'){cls='disabled';txt='已禁用'}
     if(a.status==='expired'){cls='expired';txt='Token 过期'}
+    if(a.status==='relogin'){cls='expired';txt='需重新登录'}
     let chk='<span class="muted">—</span>';
     if(a.checkin_today){chk=a.checkin_today.ok?`<span class="tag ok">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span class="tag cooldown">${esc(a.checkin_today.message||'未签')}</span>`}
     const days=a.token_days_left;
@@ -1046,6 +1054,7 @@ function renderAcctTable(o){
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','checkin')">签到</button>
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','quota')">刷额度</button>
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','toggle')">${a.disabled?'启用':'禁用'}</button>
+        ${a.needs_relogin?`<button class="btn sm" onclick="act('${a.provider}','${a.uid}','resume')">恢复</button>`:''}
         <button class="btn sm danger" onclick="delAcct('${a.provider}','${a.uid}')">删除</button>
       </td></tr>`);
   });
@@ -1259,7 +1268,7 @@ function renderChannelStats(){
 /* 该模型是否配置了发布单价 */
 function hasPrice(model){
   const m=(model||'').toLowerCase();
-  return (PUB.models||[]).some(x=>(x.id||'').toLowerCase()===m&&x.pricing&&(x.pricing.input>0||x.pricing.output>0));
+  return (PUB.models||[]).some(x=>(x.id||'').toLowerCase()===m&&x.pricing&&(x.pricing.input>0||x.pricing.output>0||x.pricing.per_call>0));
 }
 
 function renderUsage(us){
@@ -1328,13 +1337,16 @@ function renderPublish(){
     const p=m.pricing;
     const media=m.type==='image'||m.type==='video';
     const typeTag=media?`<span class="tag ${m.type==='image'?'p-qoder':'p-trae'}" style="margin-left:6px">${m.type==='image'?'图片':'视频'}</span>`:'';
-    const priceHtml=(p&&p.input>0)
-      ?(media?`<span><b>$${p.input}</b>/次</span>`
+    const strategyTag=m.strategy==='round_robin'
+      ?`<span class="mini" style="margin-left:6px;color:var(--accent)" title="渠道轮询均衡分配">轮询</span>`
+      :'';
+    const priceHtml=(p&&(p.input>0||p.output>0||p.per_call>0))
+      ?(media?`<span><b>$${p.per_call||p.input||0}</b>/次</span>`
              :`${p.input>0?`<span>输入 <b>$${p.input}</b>/1M</span>`:''}${p.output>0?`<span>输出 <b>$${p.output}</b>/1M</span>`:''}${p.cache>0?`<span>缓存 <b>$${p.cache}</b>/1M</span>`:''}`)
       :'<span class="muted">未配置单价（费用估算显示「未计价」）</span>';
     return `<div class="pub-card" style="--i:${i}">
       <div class="head">
-        <div><span class="name">${esc(m.id)}</span>${typeTag}${m.note?`<div class="note">${esc(m.note)}</div>`:''}</div>
+        <div><span class="name">${esc(m.id)}</span>${typeTag}${strategyTag}${m.note?`<div class="note">${esc(m.note)}</div>`:''}</div>
         <div class="ops">
           <button class="btn sm icon" title="编辑" onclick="openModelEditor(${i})">✎</button>
           <button class="btn sm icon danger" title="删除" onclick="delModel(${i})">✕</button>
@@ -1382,7 +1394,8 @@ function openModelEditor(i){
   $('#mmTitle').innerHTML=`${i<0?'新建发布模型':'编辑模型'} <button class="xbtn" onclick="closeModelEditor()">✕</button>`;
   $('#mmId').value=ED.id;$('#mmNote').value=ED.note||'';
   $('#mmType').value=ED.type;
-  $('#mmIn').value=ED.pricing?ED.pricing.input:'';
+  $('#mmStrategy').value=ED.strategy||'priority';
+  $('#mmIn').value=ED.pricing?(ED.type==='image'||ED.type==='video'?ED.pricing.per_call:ED.pricing.input):'';
   $('#mmOut').value=ED.pricing?ED.pricing.output:'';
   $('#mmCache').value=ED.pricing?ED.pricing.cache||'':'';
   $('#mmStatus').textContent='';
@@ -1454,10 +1467,11 @@ async function saveModelEditor(){
   ED.id=$('#mmId').value.trim();
   ED.note=$('#mmNote').value.trim();
   ED.type=$('#mmType').value||'';
+  ED.strategy=$('#mmStrategy').value||'priority';
   const media=ED.type==='image'||ED.type==='video';
   const pin=parseFloat($('#mmIn').value),pout=parseFloat($('#mmOut').value),pc=parseFloat($('#mmCache').value);
-  /* 图片/视频按次计价：单价存 pricing.input（$/次）；对话按 $/1M tokens 三档 */
-  ED.pricing=media?(pin>0?{input:pin||0,output:0,cache:0}:null)
+  /* 图片/视频按次计价：单价存 pricing.per_call（$/次）；对话按 $/1M tokens 三档 */
+  ED.pricing=media?(pin>0?{per_call:pin||0,output:0,cache:0}:null)
                   :((pin>0||pout>0||pc>0)?{input:pin||0,output:pout||0,cache:pc||0}:null);
   const err=m=>{$('#mmStatus').className='status-line err';$('#mmStatus').textContent=m};
   if(!ED.id)return err('请填写对外模型名');

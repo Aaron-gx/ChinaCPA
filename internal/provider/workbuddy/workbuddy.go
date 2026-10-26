@@ -9,7 +9,6 @@
 package workbuddy
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -1052,6 +1051,7 @@ func rewriteChatBody(body []byte, modelName, uid string) []byte {
 		obj["model"] = modelName
 	}
 	obj["stream"] = true
+	obj["stream_options"] = map[string]any{"include_usage": true} // 让上游 SSE 带 usage，费用统计才不为 0
 	if _, exists := obj["prompt_cache_key"]; !exists {
 		obj["prompt_cache_key"] = "chinacpa:" + uid
 	}
@@ -1064,70 +1064,6 @@ func rewriteChatBody(body []byte, modelName, uid string) []byte {
 
 // aggregateOpenAISSE 聚合 OpenAI 格式 SSE 流为完整 chat.completion JSON。
 func aggregateOpenAISSE(body io.Reader, modelName string) ([]byte, error) {
-	sc := bufio.NewScanner(body)
-	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
-	var content, reasoning strings.Builder
-	var toolCalls []any
-	var usage map[string]any
-	finish := "stop"
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if payload == "" {
-			continue
-		}
-		if payload == "[DONE]" {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content          string `json:"content"`
-					ReasoningContent string `json:"reasoning_content"`
-					ToolCalls        []any  `json:"tool_calls"`
-				} `json:"delta"`
-				FinishReason *string `json:"finish_reason"`
-			} `json:"choices"`
-			Usage map[string]any `json:"usage"`
-		}
-		if json.Unmarshal([]byte(payload), &chunk) != nil {
-			continue
-		}
-		if chunk.Usage != nil {
-			usage = chunk.Usage
-		}
-		for _, c := range chunk.Choices {
-			content.WriteString(c.Delta.Content)
-			reasoning.WriteString(c.Delta.ReasoningContent)
-			toolCalls = append(toolCalls, c.Delta.ToolCalls...)
-			if c.FinishReason != nil && *c.FinishReason != "" {
-				finish = *c.FinishReason
-			}
-		}
-	}
-	msg := map[string]any{"role": "assistant", "content": content.String()}
-	if reasoning.Len() > 0 {
-		msg["reasoning_content"] = reasoning.String()
-	}
-	if len(toolCalls) > 0 {
-		msg["tool_calls"] = toolCalls
-	}
-	resp := map[string]any{
-		"id":      "chatcmpl-" + randHex(8),
-		"object":  "chat.completion",
-		"created": time.Now().Unix(),
-		"model":   modelName,
-		"choices": []any{map[string]any{
-			"index":         0,
-			"message":       msg,
-			"finish_reason": finish,
-		}},
-	}
-	if usage != nil {
-		resp["usage"] = usage
-	}
-	return json.Marshal(resp)
+	out, _, _, err := provider.AggregateOpenAISSE(body, modelName)
+	return out, err
 }

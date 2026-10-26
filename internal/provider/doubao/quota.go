@@ -42,7 +42,70 @@ func (s *dbUsageSnapshot) videosLeft() int64 { return s.VideosLimit - s.VideosUs
 var (
 	qmu       sync.Mutex
 	qcounters = map[string]*dbDayCounter{}
+
+	// persistSave / persistRestore 跨重启持久化钩子（main 接线 store）。
+	// save 在计数变更后持锁内调用（实现只读快照）；restore 用于启动时恢复今日计数。
+	persistSave    func(uid string, c CounterSnapshot)
+	persistRestore func(uid string) (CounterSnapshot, bool)
 )
+
+// CounterSnapshot 跨重启持久化的计数器快照（可安全跨包传递）。
+type CounterSnapshot struct {
+	Day     string
+	Chats   int64
+	Images  int64
+	Videos  int64
+	ByModel map[string]int64
+}
+
+// SetCounterPersistence 注入持久化钩子（nil = 不持久化）。
+func SetCounterPersistence(save func(uid string, c CounterSnapshot), restore func(uid string) (CounterSnapshot, bool)) {
+	qmu.Lock()
+	defer qmu.Unlock()
+	persistSave = save
+	persistRestore = restore
+}
+
+// persistLocked 把今日计数推给持久化钩子（调用方持 qmu）。
+func persistLocked() {
+	if persistSave == nil {
+		return
+	}
+	t := today()
+	for uid, c := range qcounters {
+		if c.day != t {
+			continue
+		}
+		snap := CounterSnapshot{Day: c.day, Chats: c.chats, Images: c.images, Videos: c.videos}
+		if len(c.byModel) > 0 {
+			snap.ByModel = make(map[string]int64, len(c.byModel))
+			for k, v := range c.byModel {
+				snap.ByModel[k] = v
+			}
+		}
+		persistSave(uid, snap)
+	}
+}
+
+// RestoreAccountCounters 启动时按账号恢复今日计数（main 对每个账号调用）。
+func RestoreAccountCounters(uid string) {
+	qmu.Lock()
+	defer qmu.Unlock()
+	if persistRestore == nil {
+		return
+	}
+	snap, ok := persistRestore(uid)
+	if !ok || snap.Day != today() {
+		return
+	}
+	c := &dbDayCounter{day: snap.Day, chats: snap.Chats, images: snap.Images, videos: snap.Videos, byModel: map[string]int64{}}
+	if snap.ByModel != nil {
+		for k, v := range snap.ByModel {
+			c.byModel[k] = v
+		}
+	}
+	qcounters[uid] = c
+}
 
 func today() string { return time.Now().Format("2006-01-02") }
 
@@ -68,6 +131,7 @@ func countChat(uid string) {
 		qcounters[uid] = c
 	}
 	c.chats++
+	persistLocked()
 }
 
 // countImages 图片 +n 张（按模型记明细）。
@@ -84,6 +148,7 @@ func countImages(uid, modelName string, n int64) {
 	}
 	c.images += n
 	c.byModel[modelName] += n
+	persistLocked()
 }
 
 // countVideos 视频 +1 条。
@@ -97,6 +162,7 @@ func countVideos(uid, modelName string) {
 	}
 	c.videos++
 	c.byModel[modelName]++
+	persistLocked()
 }
 
 // usageToday 当日快照。

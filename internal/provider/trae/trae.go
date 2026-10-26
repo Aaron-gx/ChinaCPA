@@ -835,17 +835,18 @@ func (p *Provider) Checkin(ctx context.Context, a *model.Account) (*model.Checki
 	if _, err := p.doJSON(creq); err != nil {
 		pe := provider.AsError(err)
 		if strings.Contains(pe.Msg, "9074") || strings.Contains(pe.Msg, "人数太多") {
-			return &model.CheckinResult{OK: false, Message: "签到人数过多（9074），稍后自动重试"}, nil
+			return &model.CheckinResult{OK: false, Message: "签到人数过多（9074），明日 9 点自动再试"}, nil
 		}
 		return nil, err
 	}
 	// claim 返回 code 0 不代表记上（设备指纹被拒也返回 0）：回查状态确认。
 	after, afterChecked := p.freeCredits(ctx, a)
 	if afterChecked == nil || !*afterChecked {
-		// 回查失败或未翻真：无法确认，按未生效处理（下次定时再试）
-		return &model.CheckinResult{OK: false, Message: "签到未确认生效（设备指纹被拒或已领过），稍后自动重试"}, nil
+		// 回查失败或未翻真：无法确认，按未生效处理（调度层当日还会重试）
+		return &model.CheckinResult{OK: false, Message: "签到未确认生效（设备指纹被拒或已领过），明日 9 点自动再试"}, nil
 	}
-	earned := int64(200)
+	// 奖励额以实际差额为准；无法确认差额时不臆造 200
+	earned := int64(0)
 	if after > before {
 		earned = after - before
 	}

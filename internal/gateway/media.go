@@ -29,6 +29,8 @@ import (
 	"chinacpa/internal/model"
 	"chinacpa/internal/pool"
 	"chinacpa/internal/provider"
+	"chinacpa/internal/reqlog"
+	"chinacpa/internal/usage"
 )
 
 // registerMedia 挂载媒体端点（由 Register 调用）。
@@ -82,6 +84,8 @@ func (g *Gateway) handleImages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t0 := time.Now()
+	var lastErr error
+	var lastAcct *model.Account
 	for _, ch := range route.Channels {
 		pr, ok := g.pool.Provider(ch.PID)
 		if !ok {
@@ -95,17 +99,51 @@ func (g *Gateway) handleImages(w http.ResponseWriter, r *http.Request) {
 		if res != nil {
 			g.bumpChannel(route, ch, true)
 			g.pool.MarkSuccess(acct, ch.Model)
-			g.logReq("image", route.Public, ch.PID, acct.UID, false, nil, true, "", nil, 0, time.Since(t0).Milliseconds(), "", "")
+			// 按次计费：生成成功即按张数记账（模型单价走发布模型 per_call）
+			g.recordMedia(route.Public, ch.PID, acct.UID, int64(len(res.URLs)), "images")
+			g.logReqMedia("image", route.Public, ch.PID, acct.UID, true, int64(len(res.URLs)), t0)
 			g.writeImagesResp(w, r, res, req)
 			return
-		} else if aerr != nil {
-			g.bumpChannel(route, ch, false)
-			g.logReq("image", route.Public, ch.PID, "", false, nil, false, aerr.Error(), nil, 0, time.Since(t0).Milliseconds(), "", "")
-			writeErr(w, http.StatusBadGateway, "image_failed", aerr.Error())
-			return
 		}
+		// 该渠道失败：记录并继续尝试下一个渠道（跨渠道失败转移）
+		lastErr, lastAcct = aerr, acct
+		g.bumpChannel(route, ch, false)
+		g.logReqMedia("image", route.Public, ch.PID, "", false, 0, t0)
 	}
-	writeErr(w, http.StatusBadGateway, "image_failed", "所选渠道均不支持图片生成（当前仅豆包 Seedream 提供）")
+	msg := "所选渠道均不支持图片生成（当前仅豆包 Seedream 提供）"
+	if lastErr != nil {
+		msg = lastErr.Error()
+	}
+	if lastAcct != nil {
+		_ = lastAcct
+	}
+	writeErr(w, http.StatusBadGateway, "image_failed", msg)
+}
+
+// recordMedia 媒体按次用量记账（图片张数 / 视频条数）。
+func (g *Gateway) recordMedia(pubModel, pid, uid string, calls int64, unit string) {
+	if calls <= 0 {
+		return
+	}
+	g.usage.Record(usage.Record{
+		Provider: pid, Account: uid, Model: pubModel,
+		Calls: calls, Unit: unit,
+	})
+}
+
+// logReqMedia 媒体请求日志（费用按次计费口径）。
+func (g *Gateway) logReqMedia(proto, pubModel, pid, uid string, ok bool, calls int64, start time.Time) {
+	var cost float64
+	if ok && calls > 0 {
+		cost = g.usage.CostCalls(pubModel, calls)
+	}
+	if g.rlog == nil {
+		return
+	}
+	g.rlog.Add(reqlog.Entry{
+		Protocol: proto, Model: pubModel, Provider: pid, Account: uid,
+		OK: ok, CostCNY: cost, TotalMS: time.Since(start).Milliseconds(),
+	})
 }
 
 // tryImage 单渠道图片生成：账号轮询失败转移。
@@ -247,7 +285,13 @@ func (s *videoTaskStore) put(t *videoTask) {
 func (s *videoTaskStore) get(id string) *videoTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.tasks[id]
+	t, ok := s.tasks[id]
+	if !ok {
+		return nil
+	}
+	// 返回深拷贝快照：调用方（videoTaskView）在锁外读，避免与后台轮询 update 竞态
+	cp := *t
+	return &cp
 }
 
 func (s *videoTaskStore) update(id string, fn func(t *videoTask)) {
@@ -368,6 +412,7 @@ func (g *Gateway) handleVideoCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	g.ensureVideoTasks()
 	t0 := time.Now()
+	var lastErr error
 	for _, ch := range route.Channels {
 		pr, ok := g.pool.Provider(ch.PID)
 		if !ok {
@@ -379,15 +424,15 @@ func (g *Gateway) handleVideoCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		handle, acct, cerr := g.tryVideoCreate(r.Context(), vg, ch, prompt, ratio, duration)
 		if cerr != nil {
-			g.bumpChannel(route, ch, false)
-			lastErr := cerr.Error()
+			// 该渠道提交失败：记录并尝试下一个渠道（跨渠道失败转移）
+			lastErr = cerr
 			uid := ""
 			if acct != nil {
 				uid = acct.UID
 			}
-			g.logReq("video", route.Public, ch.PID, uid, false, nil, false, lastErr, nil, 0, time.Since(t0).Milliseconds(), "", "")
-			writeErr(w, http.StatusBadGateway, "video_create_failed", lastErr)
-			return
+			g.bumpChannel(route, ch, false)
+			g.logReqMedia("video", route.Public, ch.PID, uid, false, 0, t0)
+			continue
 		}
 		if handle == nil {
 			continue
@@ -404,7 +449,11 @@ func (g *Gateway) handleVideoCreate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, g.videoTaskView(t, nil))
 		return
 	}
-	writeErr(w, http.StatusBadGateway, "video_create_failed", "所选渠道均不支持视频生成（当前仅豆包 Seedance 提供）")
+	msg := "所选渠道均不支持视频生成（当前仅豆包 Seedance 提供）"
+	if lastErr != nil {
+		msg = lastErr.Error()
+	}
+	writeErr(w, http.StatusBadGateway, "video_create_failed", msg)
 }
 
 // tryVideoCreate 单渠道提交：账号轮询失败转移。返回句柄与账号
@@ -512,7 +561,7 @@ func (g *Gateway) pollVideoTask(t *videoTask) {
 					v.Status = "failed"
 					v.Error = "凭证失效: " + pe.Error()
 				})
-				g.logReq("video", t.Public, t.PID, t.AcctUID, false, nil, false, pe.Error(), nil, 0, time.Since(t0).Milliseconds(), "", "")
+				g.logReqMedia("video", t.Public, t.PID, t.AcctUID, false, 0, t0)
 				return
 			}
 			continue // 网络/上游抖动：下轮再试
@@ -526,14 +575,16 @@ func (g *Gateway) pollVideoTask(t *videoTask) {
 				v.Unwatermarked = st.Unwatermarked
 			})
 			g.pool.MarkSuccess(t.Acct, t.Handle.Model)
-			g.logReq("video", t.Public, t.PID, t.AcctUID, false, nil, true, "", nil, 0, time.Since(t0).Milliseconds(), "", "")
+			// 按次计费：任务 succeeded 才记 1 条（豆包本地日配额仍在提交时计数，口径分开）
+			g.recordMedia(t.Public, t.PID, t.AcctUID, 1, "videos")
+			g.logReqMedia("video", t.Public, t.PID, t.AcctUID, true, 1, t0)
 			return
 		case "failed":
 			g.videoTasks.update(t.ID, func(v *videoTask) {
 				v.Status = "failed"
 				v.Error = st.Error
 			})
-			g.logReq("video", t.Public, t.PID, t.AcctUID, false, nil, false, st.Error, nil, 0, time.Since(t0).Milliseconds(), "", "")
+			g.logReqMedia("video", t.Public, t.PID, t.AcctUID, false, 0, t0)
 			return
 		}
 	}
@@ -541,7 +592,7 @@ func (g *Gateway) pollVideoTask(t *videoTask) {
 		v.Status = "failed"
 		v.Error = "视频生成超时（20 分钟）"
 	})
-	g.logReq("video", t.Public, t.PID, t.AcctUID, false, nil, false, "timeout", nil, 0, time.Since(t0).Milliseconds(), "", "")
+	g.logReqMedia("video", t.Public, t.PID, t.AcctUID, false, 0, t0)
 }
 
 // newVideoTaskID Ark 风格任务 ID：cgt-<24hex>。

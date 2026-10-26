@@ -4,6 +4,7 @@ package pool
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -15,17 +16,22 @@ import (
 )
 
 // 冷却时长：按「账号 + 模型」粒度冷却，单个模型失败不影响同账号其他模型。
+// 冷却是软性的：全部账号都在冷却时仍会尝试（避免冷却窗口内请求被硬拒），
+// 但 auth 冷却时长远大于其他类型，配合 NeedsRelogin 标记停用失效账号。
 const (
-	rateCooldown  = 5 * time.Second // 软限流
-	upstreamCool  = 5 * time.Second // 上游故障
-	quotaCooldown = 5 * time.Second // 配额耗尽
-	authCooldown  = 5 * time.Second // 凭证失效
+	rateCooldown  = 5 * time.Second  // 软限流
+	upstreamCool  = 5 * time.Second  // 上游故障
+	quotaCooldown = 30 * time.Second // 配额耗尽
+	authCooldown  = 30 * time.Minute // 凭证失效（账号将被标记需重新登录）
 )
 
 // coolKey 冷却键：model 为空 = 账号级冷却（如 token 刷新失败），对该账号全部模型生效。
 func coolKey(providerID, uid, model string) string {
 	return providerID + "|" + uid + "|" + model
 }
+
+// rrKey 轮询游标键：provider|model。
+func rrKey(providerID, model string) string { return providerID + "|" + model }
 
 // Pool 全 provider 账号池。
 type Pool struct {
@@ -38,7 +44,9 @@ type Pool struct {
 	// sticky 会话黏性：provider|sessionKey -> 会话条目（同一会话固定同一账号，保上游前缀缓存）
 	stickyMu sync.Mutex
 	sticky   map[string]*stickyEntry
-	sessSeq  int // 新会话分配账号的轮询游标
+	// rr 轮询游标：provider|model -> 下一分配序号（sessionKey 为空时按此分摊）
+	rrMu sync.Mutex
+	rr   map[string]uint64
 	// refreshMu 单账号串行刷新（WorkBuddy 有防重放，并发刷新会被拒）
 	refreshMu  sync.Mutex
 	refreshers map[string]*sync.Mutex
@@ -74,6 +82,7 @@ func New(st *store.Store, provs []provider.Provider) (*Pool, error) {
 		provs:        map[string]provider.Provider{},
 		cooldown:     map[string]time.Time{},
 		sticky:       map[string]*stickyEntry{},
+		rr:           map[string]uint64{},
 		refreshers:   map[string]*sync.Mutex{},
 		modelAliases: map[string]string{},
 		models:       map[string]*modelCache{},
@@ -89,12 +98,13 @@ func New(st *store.Store, provs []provider.Provider) (*Pool, error) {
 	return p, nil
 }
 
-// Providers 返回全部 provider 实例。
+// Providers 返回全部 provider 实例（按 ID 排序，保证遍历顺序确定）。
 func (p *Pool) Providers() []provider.Provider {
 	out := make([]provider.Provider, 0, len(p.provs))
 	for _, pr := range p.provs {
 		out = append(out, pr)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID() < out[j].ID() })
 	return out
 }
 
@@ -106,7 +116,8 @@ func (p *Pool) Provider(id string) (provider.Provider, bool) {
 
 func key(a *model.Account) string { return a.Provider + "|" + a.UID }
 
-// AddAccount 纳管账号（落盘 + 入池）。
+// AddAccount 纳管账号（落盘 + 入池）。重新导入同一账号时视为凭证更新，
+// 清除「需重新登录」标记与冷却。
 func (p *Pool) AddAccount(a *model.Account) error {
 	if err := p.store.SaveAccount(a); err != nil {
 		return err
@@ -116,12 +127,14 @@ func (p *Pool) AddAccount(a *model.Account) error {
 	replaced := false
 	for i, ex := range p.accts {
 		if ex.Provider == a.Provider && ex.UID == a.UID {
+			a.NeedsRelogin = false
 			p.accts[i] = a
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
+		a.NeedsRelogin = false
 		p.accts = append(p.accts, a)
 	}
 	p.clearCooldownLocked(a.Provider, a.UID)
@@ -164,7 +177,7 @@ func (p *Pool) Accounts() []*model.Account {
 	return out
 }
 
-// AccountsBy 某 provider 的可用账号（未禁用、无账号级冷却）。
+// AccountsBy 某 provider 的可用账号（未禁用、未标记需重新登录、无账号级冷却）。
 // 忽略按模型的冷却：模型探测/面板场景不知道具体模型。
 func (p *Pool) AccountsBy(providerID string) []*model.Account {
 	now := time.Now()
@@ -172,7 +185,7 @@ func (p *Pool) AccountsBy(providerID string) []*model.Account {
 	defer p.mu.RUnlock()
 	var out []*model.Account
 	for _, a := range p.accts {
-		if a.Provider != providerID || a.Disabled {
+		if a.Provider != providerID || a.Disabled || a.NeedsRelogin {
 			continue
 		}
 		if until, ok := p.cooldown[coolKey(providerID, a.UID, "")]; ok && until.After(now) {
@@ -190,7 +203,7 @@ func (p *Pool) AccountsByModel(providerID, modelName string) []*model.Account {
 	defer p.mu.RUnlock()
 	var out []*model.Account
 	for _, a := range p.accts {
-		if a.Provider != providerID || a.Disabled {
+		if a.Provider != providerID || a.Disabled || a.NeedsRelogin {
 			continue
 		}
 		if until, ok := p.cooldown[coolKey(providerID, a.UID, "")]; ok && until.After(now) {
@@ -238,18 +251,19 @@ func (p *Pool) SetDisabled(providerID, uid string, disabled bool) error {
 // Pick 按 provider + 模型取一个可用账号；无可用返回错误。
 // 黏性会话：sessionKey（prompt_cache_key / metadata.user_id）相同的请求固定同一账号，
 // 保住上游提示词前缀缓存；新会话按轮询分摊到各账号；黏住的账号进入冷却/禁用时
-// 自动换下一个并重新黏住。sessionKey 为空（简单调用）时固定用第一个可用账号。
-// 冷却是软性的：所有账号都在冷却中时仍照常尝试，避免冷却窗口内的请求被硬拒。
+// 自动换下一个并重新黏住。sessionKey 为空（简单调用）时按 provider+model 轮询分摊，
+// 避免全部流量压到第一个账号。冷却是软性的：所有账号都在冷却中时仍照常尝试，
+// 避免冷却窗口内的请求被硬拒。
 func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, error) {
 	avail := p.AccountsByModel(providerID, modelName)
 	if len(avail) == 0 {
-		avail = p.EnabledAccounts(providerID)
+		avail = p.AccountsBy(providerID)
 	}
 	if len(avail) == 0 {
-		return nil, fmt.Errorf("provider %s 无可用账号（未添加或已禁用）", providerID)
+		return nil, fmt.Errorf("provider %s 无可用账号（未添加、已禁用或需重新登录）", providerID)
 	}
 	if sessionKey == "" {
-		return avail[0], nil
+		return p.roundRobin(providerID, modelName, avail), nil
 	}
 	mapKey := providerID + "|" + sessionKey
 	now := time.Now()
@@ -272,19 +286,28 @@ func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, e
 		}
 	}
 	// 新会话或黏住的账号当前不可用：轮询取下一个并重新黏住
-	p.sessSeq++
-	a := avail[p.sessSeq%len(avail)]
+	a := p.roundRobin(providerID, modelName, avail)
 	p.sticky[mapKey] = &stickyEntry{uid: a.UID, lastSeen: now}
 	return a, nil
 }
 
-// EnabledAccounts 某 provider 全部启用中的账号（忽略冷却）。
+// roundRobin 按 provider|model 轮询游标从 avail 中取账号（调用方保证 avail 非空）。
+func (p *Pool) roundRobin(providerID, modelName string, avail []*model.Account) *model.Account {
+	key := rrKey(providerID, modelName)
+	p.rrMu.Lock()
+	n := p.rr[key]
+	p.rr[key] = n + 1
+	p.rrMu.Unlock()
+	return avail[n%uint64(len(avail))]
+}
+
+// EnabledAccounts 某 provider 全部启用中的账号（忽略冷却，但排除需重新登录的账号）。
 func (p *Pool) EnabledAccounts(providerID string) []*model.Account {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	var out []*model.Account
 	for _, a := range p.accts {
-		if a.Provider == providerID && !a.Disabled {
+		if a.Provider == providerID && !a.Disabled && !a.NeedsRelogin {
 			out = append(out, a)
 		}
 	}
@@ -307,6 +330,8 @@ func (p *Pool) MarkSuccess(a *model.Account, modelName string) {
 
 // MarkError 调用失败：按「账号 + 模型」粒度冷却（modelName 为空 = 账号级，
 // 对该账号全部模型生效，用于 token 刷新失败这类账号本身的问题）。
+// 凭证失效（ErrAuth）额外把账号标记为需重新登录：调度层直接跳过，
+// 避免坏账号被无限复用；回调在锁外触发，防止持锁调用 SaveAccount。
 func (p *Pool) MarkError(a *model.Account, modelName string, err error) {
 	pe := provider.AsError(err)
 	var d time.Duration
@@ -322,8 +347,13 @@ func (p *Pool) MarkError(a *model.Account, modelName string, err error) {
 	default:
 		return
 	}
+	relogin := false
 	p.mu.Lock()
 	p.cooldown[coolKey(a.Provider, a.UID, modelName)] = time.Now().Add(d)
+	if pe.Kind == provider.ErrAuth && !a.NeedsRelogin {
+		a.NeedsRelogin = true
+		relogin = true
+	}
 	// 顺带清理已解冻的冷却条目（直连 provider:model 的模型名不受配置约束，防 map 无限增长）
 	if len(p.cooldown) > 128 {
 		now := time.Now()
@@ -334,6 +364,30 @@ func (p *Pool) MarkError(a *model.Account, modelName string, err error) {
 		}
 	}
 	p.mu.Unlock()
+	if relogin && p.OnAccountChanged != nil {
+		p.OnAccountChanged(a)
+	}
+}
+
+// ClearNeedsRelogin 清除需重新登录标记（重新导入凭证 / 手动恢复时调用）。
+func (p *Pool) ClearNeedsRelogin(providerID, uid string) bool {
+	p.mu.Lock()
+	var target *model.Account
+	for _, a := range p.accts {
+		if a.Provider == providerID && a.UID == uid && a.NeedsRelogin {
+			a.NeedsRelogin = false
+			target = a
+			break
+		}
+	}
+	p.mu.Unlock()
+	if target == nil {
+		return false
+	}
+	if p.OnAccountChanged != nil {
+		p.OnAccountChanged(target)
+	}
+	return true
 }
 
 // CooldownUntil 查询账号冷却截止时刻（含全部按模型冷却，取最晚者；未冷却返回零值）。
@@ -472,7 +526,7 @@ type Route struct {
 }
 
 // ResolveRoute 解析请求模型名为路由：
-//   - 发布模型命中 → 渠道列表（轮询起点轮转，实现渠道间负载均衡）
+//   - 发布模型命中 → 渠道列表（priority 严格按配置顺序；round_robin 轮询起点轮转）
 //   - 别名表命中 → 替换后继续
 //   - "provider:model" → 单渠道
 //   - 裸名 → 全平台模型表唯一命中
@@ -493,7 +547,11 @@ func (p *Pool) ResolveRoute(ctx context.Context, name string) (*Route, error) {
 			if len(chs) == 0 {
 				return nil, fmt.Errorf("模型 %q 的渠道均不可用（平台未注册）", name)
 			}
-			// 渠道按用户配置的优先级严格排序（如：国内优先，国际兜底），不做起点轮转
+			if mo.Strategy == pubmodel.StrategyRoundRobin {
+				// 轮询起点轮转：把渠道列表按游标旋转，实现渠道间负载均衡
+				chs = p.rotateChannels(chs)
+			}
+			// priority 策略：严格按用户配置的优先级排序（如：国内优先，国际兜底）
 			return &Route{Public: mo.ID, Channels: chs, Published: true, Type: mo.Type}, nil
 		}
 	}
@@ -506,6 +564,30 @@ func (p *Pool) ResolveRoute(ctx context.Context, name string) (*Route, error) {
 		return nil, err
 	}
 	return &Route{Public: public, Channels: []ChannelTarget{{PID: pid, Model: mname}}}, nil
+}
+
+// rotateChannels 按发布模型级轮询游标旋转渠道列表。
+func (p *Pool) rotateChannels(chs []ChannelTarget) []ChannelTarget {
+	var sb strings.Builder
+	for i, c := range chs {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(c.PID + "/" + c.Model)
+	}
+	key := "chan:" + sb.String()
+	p.rrMu.Lock()
+	n := p.rr[key]
+	p.rr[key] = n + 1
+	p.rrMu.Unlock()
+	rot := int(n % uint64(len(chs)))
+	if rot == 0 {
+		return chs
+	}
+	out := make([]ChannelTarget, 0, len(chs))
+	out = append(out, chs[rot:]...)
+	out = append(out, chs[:rot]...)
+	return out
 }
 
 // ResolveModel 模型名解析：
@@ -576,8 +658,12 @@ func (p *Pool) EnsureFreshToken(ctx context.Context, a *model.Account) (bool, er
 		p.MarkError(a, "", err) // token 刷新失败是账号级问题，冷却整个账号
 		return false, err
 	}
-	if changed && p.OnAccountChanged != nil {
-		p.OnAccountChanged(a)
+	if changed {
+		// 刷新成功说明凭证仍是有效的：清除之前的「需重新登录」标记
+		p.ClearNeedsRelogin(a.Provider, a.UID)
+		if p.OnAccountChanged != nil {
+			p.OnAccountChanged(a)
+		}
 	}
 	return changed, nil
 }
