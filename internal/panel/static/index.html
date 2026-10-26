@@ -952,6 +952,7 @@ section h2{letter-spacing:0.04em !important}
       <div class="req-charts">
         <section><h2>模型分布</h2><div id="donutModels"></div></section>
         <section><h2>线路分布</h2><div id="donutLines"></div></section>
+        <section><h2>来源分布</h2><div id="donutClient"></div></section>
         <section><h2>状态分布</h2><div id="donutStatus"></div></section>
       </div>
       <section>
@@ -1959,7 +1960,8 @@ async function loadRequests(){
 function renderRequests(){
   if(!REQ)return;
   const s=REQ.stats||{};
-  $('#reqSub').textContent=`${REQ_RANGE_NAMES[REQ_RANGE]||REQ_RANGE} · 累计请求 ${fmt(s.total)} 次 · 成功率 ${s.total?((s.ok/s.total)*100).toFixed(1):100}%（成功 ${fmt(s.ok)} / 失败 ${fmt(s.fail)}）· 基于持久化审计日志`;
+  const clientDist=(s.by_client||[]).map(x=>`${esc(x.label)} ${x.value}`).join(' · ');
+  $('#reqSub').textContent=`${REQ_RANGE_NAMES[REQ_RANGE]||REQ_RANGE} · 累计请求 ${fmt(s.total)} 次 · 成功率 ${s.total?((s.ok/s.total)*100).toFixed(1):100}%（成功 ${fmt(s.ok)} / 失败 ${fmt(s.fail)}）${clientDist?` · 来源：${clientDist}`:''}· 基于持久化审计日志`;
   renderCards($('#reqCards'),[
     {l:'请求数',n:s.total||0,c:'',s:`成功 ${fmt(s.ok)} · 失败 ${fmt(s.fail)}`},
     {l:'Token 用量',n:s.total_tokens||0,c:'blue',s:`输入 ${fmt(s.prompt_tokens)} / 输出 ${fmt(s.completion_tokens)}${s.cache_tokens>0?` / 缓存 ${fmt(s.cache_tokens)}`:''}`},
@@ -1969,6 +1971,7 @@ function renderRequests(){
   // 环形分布图（服务端按筛选范围聚合）
   renderDonut('donutModels',(s.by_model||[]).map(x=>({label:x.label,value:x.value})));
   renderDonut('donutLines',(s.by_line||[]).map(x=>({label:PROV_NAMES[x.label]||x.label,value:x.value})));
+  renderDonut('donutClient',(s.by_client||[]).map(x=>({label:x.label,value:x.value})));
   renderDonut('donutStatus',(s.by_status||[]).map(x=>({label:x.label,value:x.value,color:x.label==='成功'?'#5c8a5e':'#b3564e'})));
   // 明细卡片列表
   const entries=REQ.entries||[];
@@ -1999,7 +2002,7 @@ function renderRequests(){
         ${rep}${att}${attFail}
         <div class="rc-time">${new Date(e.ts*1000).toLocaleString('zh-CN',{hour12:false})}${e.provider?' · '+(PROV_NAMES[e.provider]||esc(e.provider)):''}${e.account?' · '+esc(e.account.slice(0,8)):''}</div>
       </div>
-      <div class="rc-type">${e.stream?'流':'非流'}${speed?`<div class="mini">${speed} t/s</div>`:'<div class="mini">—</div>'}${proto?`<div class="mini">${proto}</div>`:''}</div>
+      <div class="rc-type">${e.stream?'流':'非流'}${speed?`<div class="mini">${speed} t/s</div>`:'<div class="mini">—</div>'}${proto?`<div class="mini">${proto}</div>`:''}${e.client?`<div class="mini" style="color:var(--accent)">来源：${esc(e.client)}</div>`:''}</div>
       <div class="rc-io">${fmt(e.prompt_tokens)} / ${fmt(e.completion_tokens)}${cache}</div>
       <div>${e.cost_cny>0?`<span class="cost-pill">${fmtCNY(e.cost_cny)}</span>`:'<span class="cost-pill" style="color:var(--faint)">—</span>'}</div>
       <div class="rc-lat">${lat}</div>

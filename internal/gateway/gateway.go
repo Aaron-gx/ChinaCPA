@@ -52,8 +52,8 @@ func (g *Gateway) SetQwenCounter(c qwenCounter) { g.qwenProv = c }
 // SetReqLog 注入请求日志（nil = 不记录）。
 func (g *Gateway) SetReqLog(l *reqlog.DB) { g.rlog = l }
 
-// logReq 记录一条请求日志（费用按对外模型单价估算）。
-func (g *Gateway) logReq(proto, pubModel, pid, uid string, stream bool, u *usageSnapshot, ok bool, errMsg string, attempts []string, firstMS, totalMS int64, reported, finish string) {
+// logReq 记录一条请求日志（费用按对外模型单价估算）。client 为请求来源客户端类型。
+func (g *Gateway) logReq(proto, pubModel, pid, uid, client string, stream bool, u *usageSnapshot, ok bool, errMsg string, attempts []string, firstMS, totalMS int64, reported, finish string) {
 	if g.rlog == nil {
 		return
 	}
@@ -61,6 +61,7 @@ func (g *Gateway) logReq(proto, pubModel, pid, uid string, stream bool, u *usage
 		Protocol: proto, Model: pubModel, Provider: pid, Account: uid,
 		Stream: stream, OK: ok, Error: errMsg, Attempts: attempts,
 		FirstMS: firstMS, TotalMS: totalMS, ReportedModel: reported, Finish: finish,
+		Client: client,
 	}
 	if u != nil {
 		e.PromptTokens = u.PromptTokens
@@ -303,7 +304,7 @@ func uidShort(uid string) string {
 
 // callRoutedStream 多渠道失败转移：按路由顺序尝试渠道，每渠道内部再账号轮询。
 // proto: chat / responses / messages（请求日志用）。失败时已写错误响应，返回 nil。
-func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, route *pool.Route, body []byte, proto string, sessionKey string) *openAIStream {
+func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, route *pool.Route, body []byte, proto, sessionKey, client string) *openAIStream {
 	t0 := time.Now()
 	var lastErr *provider.Error
 	var lastStatus int
@@ -341,7 +342,7 @@ func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, r
 		status = lastStatus
 	}
 	writeErr(w, status, "upstream_error", msg)
-	g.logReq(proto, route.Public, "", "", false, nil, false, msg, attempts, 0, time.Since(t0).Milliseconds(), "", "")
+	g.logReq(proto, route.Public, "", "", client, false, nil, false, msg, attempts, 0, time.Since(t0).Milliseconds(), "", "")
 	return nil
 }
 
@@ -358,7 +359,7 @@ func (g *Gateway) bumpChannel(route *pool.Route, ch pool.ChannelTarget, ok bool)
 // callOpenAIStream 兼容旧签名：单渠道调用（失败已写响应）。
 func (g *Gateway) callOpenAIStream(ctx context.Context, w http.ResponseWriter, pid, mname string, body []byte) *openAIStream {
 	route := &pool.Route{Public: mname, Channels: []pool.ChannelTarget{{PID: pid, Model: mname}}}
-	return g.callRoutedStream(ctx, w, route, body, "chat", sessionKeyOf(body))
+	return g.callRoutedStream(ctx, w, route, body, "chat", sessionKeyOf(body), "")
 }
 
 func (g *Gateway) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +465,7 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t0 := time.Now()
-	st := g.callRoutedStream(r.Context(), w, route, body, "chat", sessionKeyOf(body))
+	st := g.callRoutedStream(r.Context(), w, route, body, "chat", sessionKeyOf(body), clientFromUA(r.Header.Get("User-Agent")))
 	if st == nil {
 		return
 	}
@@ -484,6 +485,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, res *provider.Ch
 	if ct == "" {
 		ct = "application/json"
 	}
+	client := clientFromUA(r.Header.Get("User-Agent"))
 	if strings.Contains(ct, "event-stream") || wantStream {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -526,7 +528,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, res *provider.Ch
 				}
 			}
 		}()
-		g.logReq(proto, model, pid, uid, true, rc.captured, true, "", attempts, rc.firstMS, time.Since(start).Milliseconds(), mr.reported, rc.finish)
+		g.logReq(proto, model, pid, uid, client, true, rc.captured, true, "", attempts, rc.firstMS, time.Since(start).Milliseconds(), mr.reported, rc.finish)
 		return
 	}
 	// 非流式 JSON
@@ -560,9 +562,9 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request, res *provider.Ch
 	totalMS := time.Since(start).Milliseconds()
 	if json.Unmarshal(raw, &resp) == nil && resp.Usage != nil {
 		g.record(pid, uid, model, resp.Usage)
-		g.logReq(proto, model, pid, uid, false, resp.Usage, true, "", attempts, totalMS, totalMS, reported, finish)
+		g.logReq(proto, model, pid, uid, client, false, resp.Usage, true, "", attempts, totalMS, totalMS, reported, finish)
 	} else {
-		g.logReq(proto, model, pid, uid, false, nil, true, "", attempts, totalMS, totalMS, reported, finish)
+		g.logReq(proto, model, pid, uid, client, false, nil, true, "", attempts, totalMS, totalMS, reported, finish)
 	}
 }
 

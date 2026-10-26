@@ -41,6 +41,7 @@ type Entry struct {
 	Attempts         []string `json:"attempts,omitempty"`       // 渠道尝试链路，如 qoder/dfmodel ✗
 	ReportedModel    string   `json:"reported_model,omitempty"` // 上游自报模型名（与请求名比对）
 	Finish           string   `json:"finish,omitempty"`         // 结束原因：stop / length（截断）/ tool_calls…
+	Client           string   `json:"client,omitempty"`         // 请求来源客户端类型（zcode/claude-code/codex/openai-sdk/curl/其他）
 }
 
 // Stats 查询范围的聚合结果（含分布，供面板环形图直接使用）。
@@ -59,6 +60,7 @@ type Stats struct {
 	ByModel  []Dist `json:"by_model"`
 	ByLine   []Dist `json:"by_line"`
 	ByStatus []Dist `json:"by_status"`
+	ByClient []Dist `json:"by_client,omitempty"` // 按请求来源客户端聚合
 }
 
 // Dist 分布条目。
@@ -254,6 +256,11 @@ func aggregate(s *Stats, e *Entry) {
 	} else {
 		inc(&s.ByStatus, "失败")
 	}
+	client := e.Client
+	if client == "" {
+		client = "未知"
+	}
+	inc(&s.ByClient, client)
 }
 
 // finalize 计算均值并按量排序分布。
@@ -270,6 +277,7 @@ func finalize(s *Stats) {
 	sortDist(s.ByModel)
 	sortDist(s.ByLine)
 	sortDist(s.ByStatus)
+	sortDist(s.ByClient)
 }
 
 // DeleteBefore 删除指定时刻之前的日志，返回删除条数。

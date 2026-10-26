@@ -69,7 +69,8 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t0 := time.Now()
-	st := g.callRoutedStream(r.Context(), w, route, streamBody, "responses", sessionKeyOf(inbound))
+	client := clientFromUA(r.Header.Get("User-Agent"))
+	st := g.callRoutedStream(r.Context(), w, route, streamBody, "responses", sessionKeyOf(inbound), client)
 	if st == nil {
 		return
 	}
@@ -84,7 +85,7 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 		}, t0)
 		defer rc.Close()
 		pumpStream(w, rc)
-		g.logReq("responses", pub, st.pid, st.acct.UID, true, rc.captured, true, "", st.attempts, rc.firstMS, time.Since(t0).Milliseconds(), rc.reported, rc.finish)
+		g.logReq("responses", pub, st.pid, st.acct.UID, client, true, rc.captured, true, "", st.attempts, rc.firstMS, time.Since(t0).Milliseconds(), rc.reported, rc.finish)
 		return
 	}
 	full, reported, afinish, aerr := aggregateOpenAIJSON(st.body, pub)
@@ -95,7 +96,7 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 	}
 	u := g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
 	totalMS := time.Since(t0).Milliseconds()
-	g.logReq("responses", pub, st.pid, st.acct.UID, false, u, true, "", st.attempts, totalMS, totalMS, reported, afinish)
+	g.logReq("responses", pub, st.pid, st.acct.UID, client, false, u, true, "", st.attempts, totalMS, totalMS, reported, afinish)
 	out := responsestl.ConvertOpenAIChatCompletionsResponseToOpenAIResponsesNonStream(
 		context.Background(), pub, inbound, openAIBody, full, &param)
 	w.Header().Set("Content-Type", "application/json")
@@ -139,7 +140,8 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t0 := time.Now()
-	st := g.callRoutedStream(r.Context(), w, route, streamBody, "messages", sessionKeyOf(inbound))
+	client := clientFromUA(r.Header.Get("User-Agent"))
+	st := g.callRoutedStream(r.Context(), w, route, streamBody, "messages", sessionKeyOf(inbound), client)
 	if st == nil {
 		return
 	}
@@ -154,7 +156,7 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 		}, t0)
 		defer rc.Close()
 		pumpStream(w, rc)
-		g.logReq("messages", pub, st.pid, st.acct.UID, true, rc.captured, true, "", st.attempts, rc.firstMS, time.Since(t0).Milliseconds(), rc.reported, rc.finish)
+		g.logReq("messages", pub, st.pid, st.acct.UID, client, true, rc.captured, true, "", st.attempts, rc.firstMS, time.Since(t0).Milliseconds(), rc.reported, rc.finish)
 		return
 	}
 	full, reported, afinish, aerr := aggregateOpenAIJSON(st.body, pub)
@@ -165,7 +167,7 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	u := g.recordFromJSON(st.pid, st.acct.UID, probe.Model, full)
 	totalMS := time.Since(t0).Milliseconds()
-	g.logReq("messages", pub, st.pid, st.acct.UID, false, u, true, "", st.attempts, totalMS, totalMS, reported, afinish)
+	g.logReq("messages", pub, st.pid, st.acct.UID, client, false, u, true, "", st.attempts, totalMS, totalMS, reported, afinish)
 	out := claudetl.ConvertOpenAIResponseToClaudeNonStream(
 		context.Background(), pub, inbound, openAIBody, full, &param)
 	w.Header().Set("Content-Type", "application/json")
