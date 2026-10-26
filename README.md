@@ -5,7 +5,7 @@
 
 | 平台 | 登录方式 | 免费额度 | 每日签到 |
 |---|---|---|---|
-| **WorkBuddy / CodeBuddy**（腾讯） | OAuth 浏览器授权 | 积分制（资源包） | ✅ 每日签到 + 任务中心自动领奖 |
+| **WorkBuddy / CodeBuddy**（腾讯，CN codebuddy.cn / 国际 workbuddy.ai） | OAuth 浏览器授权（双区独立登录） | 积分制（资源包） | ✅ 每日签到 + 任务中心自动领奖 |
 | **Qwen 通义千问**（chat.qwen.ai） | 粘贴网页 token（OAuth 免费层 2026-04 已下线） | 网页会话免费额度 | —（无签到体系，本地自动计数） |
 | **Trae**（字节 SOLO 免费通道，CN/国际） | PKCE 授权码回调 | ide_credits | ✅ 每日 +200 积分 |
 | **Qoder**（阿里，CN qoder.com.cn / 国际 qoder.sh） | 控制台 PAT 导入 | credits（套餐+加购+组织） | ✅ 每日积分活动自动领取 |
@@ -13,13 +13,14 @@
 | **豆包**（字节，www.doubao.com） | 豆包 App 扫码自动回调 / Cookie 兜底 | 网页通道（文 / 图 / 视频按豆包 App 权益） | —（无签到体系） |
 
 > Trae 2026-10 起切换到 PKCE 授权码登录（客户端 3.3.62），本项目已跟进新流程；旧版 refreshToken 凭证仍可粘贴导入。
+> WorkBuddy 分区：国内版（codebuddy.cn）与国际版（workbuddy.ai）面板各一张卡片，账号、额度、签到、模型完全独立；模型前缀 `workbuddy:` / `workbuddy-intl:`。
 > Qoder 分区：国内版 PAT 直接粘贴；国际版加前缀 `global:`。
 > 千问办公：面板发起后用钉钉扫码完成授权；挡位模型 `flash` / `pro` / `qwen3.8-max-preview`（云端目录自动拉取），也可粘贴 `ory_rt_` 开头的 refresh token 导入。
 
 ## ✨ 功能
 
 - **凭证即用**：面板 OAuth 授权 / 扫码 / PAT / refreshToken / Cookie 多种纳管方式，不需要安装官方 IDE/CLI
-- **六大平台**：WorkBuddy、Qwen、Trae（CN/国际）、Qoder（CN/国际）、千问办公、豆包，模型前缀 `workbuddy:` `qwen:` `trae:` `qoder:` `qwenwork:` `doubao:`
+- **六大平台**：WorkBuddy（CN/国际）、Qwen、Trae（CN/国际）、Qoder（CN/国际）、千问办公、豆包，模型前缀 `workbuddy:` `workbuddy-intl:` `qwen:` `trae:` `qoder:` `qwenwork:` `doubao:`
 - **豆包文 / 图 / 视频**：App 扫码自动回调纳管（字节 passport 协议）；`doubao-chat` 网页助手对话（OpenAI 兼容流式）、Seedream 图片生成（OpenAI Images 协议）、Seedance 视频生成（火山方舟 Ark 异步任务协议，自动解析无水印原片）
 - **自动签到积分**：每日 9 点、21 点自动签到（可配），WorkBuddy 任务中心自动接受任务+领取奖励
 - **额度自动获取**：每 10 分钟自动刷新各账号剩余额度（WorkBuddy 积分 / Trae ide_credits / Qwen 今日剩余次数）

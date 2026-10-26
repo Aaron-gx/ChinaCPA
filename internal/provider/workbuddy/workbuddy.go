@@ -39,24 +39,94 @@ const (
 	originGlobal  = "https://www.workbuddy.ai"
 )
 
-// Provider WorkBuddy 实现。
+// globalModelDisplay 国际版抽象模型 id → 直白中文档位名（展示用）。
+// 官方用抽象 id 掩盖底座模型；据 descriptionZh/供应商等情况归纳为通俗称谓。
+var globalModelDisplay = map[string]string{
+	"fast-model":              "快速模型 Fast",
+	"balanced-model":          "均衡模型 Balanced",
+	"primary-model":           "旗舰模型 Primary",
+	"auto-chat":               "智能自动 Auto",
+	"nes-1.2":                 "自动选择 auto",
+	"enhance-1.0":             "增强模型 Enhance",
+	"nes-1.1":                 "增强版 NES",
+	"completion-1.0":          "文本补全 completion",
+	"o4-mini":                 "GPT-4o-Mini",
+	"codewise-jump":           "代码跳转 codewise",
+	"gpt-image-2.5-sunburst":  "GPT 图像生成",
+	"seedance-2.5":            "Seedance 视频生成",
+	"hy-image-3.5":            "Hy 图像生成",
+	"kling-video-v3":          "可灵视频生成",
+	"gpt-6-astra":             "GPT-6-Astra",
+	"gpt-6-sol":               "GPT-6-Sol",
+	"gpt-6-luna":              "GPT-6-Luna",
+	"gpt-6.1-sol":             "GPT-6.1-Sol",
+	"grok-4.7":                "Grok-4.7",
+	"gemini-3.8-flash":        "Gemini-3.8-Flash",
+	"glm-5.3-flash":           "GLM-5.3-Flash",
+	"minimax-m3.1-flash":      "MiniMax-M3.1-Flash",
+	"kimi-k3.1-pro":           "Kimi-K3.1-Pro",
+	"kimi-k3.1-pro-highspeed": "Kimi-K3.1-Pro-HighSpeed",
+	"deepseek-v4.1-flash":     "DeepSeek-V4.1-Flash",
+	"deepseek-v4.1-flash-sg":  "DeepSeek-V4.1-Flash-SG",
+}
+
+// Provider WorkBuddy 实现（realm: "cn" / "global" → id workbuddy / workbuddy-intl）。
 type Provider struct {
 	http *http.Client
+	// realm 实例区域：cn = 国内（codebuddy.cn），global = 国际（workbuddy.ai）
+	realm string
 	// loginSessions 面板登录会话（state -> session）
 	mu       sync.Mutex
 	sessions map[string]*model.LoginSession
+	// creditMu 实测模型倍率缓存（由每次对话 usage.credit 反推，账号级）。
+	creditMu      sync.Mutex
+	measuredCreds map[string]float64           // uid → credit 基准值（该账号实测 glm 基准等）
+	measuredRates map[string]map[string]string // uid → model → "x0.34" 展示倍率
 }
 
-// New 构造。
-func New() *Provider {
+// New 构造（realm "cn" 或 "global"）。
+func New(realm string) *Provider {
+	if realm != "global" {
+		realm = "cn"
+	}
 	return &Provider{
-		http:     &http.Client{Timeout: 60 * time.Second},
-		sessions: map[string]*model.LoginSession{},
+		http:          &http.Client{Timeout: 60 * time.Second},
+		realm:         realm,
+		sessions:      map[string]*model.LoginSession{},
+		measuredCreds: map[string]float64{},
+		measuredRates: map[string]map[string]string{},
 	}
 }
 
-func (p *Provider) ID() string          { return "workbuddy" }
-func (p *Provider) DisplayName() string { return "WorkBuddy / CodeBuddy" }
+func (p *Provider) ID() string {
+	if p.realm == "global" {
+		return "workbuddy-intl"
+	}
+	return "workbuddy"
+}
+
+func (p *Provider) DisplayName() string {
+	if p.realm == "global" {
+		return "WorkBuddy AI 国际版（workbuddy.ai）"
+	}
+	return "WorkBuddy / CodeBuddy 国内版"
+}
+
+// loginBase 登录态接口基址（国内 copilot.tencent.com，国际 workbuddy.ai 同构 API）。
+func (p *Provider) loginBase() string {
+	if p.realm == "global" {
+		return globalBase
+	}
+	return chatBaseCN
+}
+
+// webLoginBase 登录页兜底地址（authUrl 缺失时拼 state 跳转用）。
+func (p *Provider) webLoginBase() string {
+	if p.realm == "global" {
+		return globalBase
+	}
+	return webBaseCN
+}
 
 // ── realm / base 选择 ────────────────────────────────────
 
@@ -103,7 +173,7 @@ func stableID(uid, purpose string) string {
 func (p *Provider) commonHeaders(req *http.Request, a *model.Account) {
 	platform := "WorkBuddy"
 	lang := "zh-CN"
-	if isGlobal(a) {
+	if (a != nil && isGlobal(a)) || (a == nil && p.realm == "global") {
 		platform = "WorkBuddy AI"
 		lang = "en-US"
 	}
@@ -272,7 +342,7 @@ type authStateResp struct {
 }
 
 func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.LoginSession, error) {
-	base := chatBaseCN
+	base := p.loginBase()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v2/plugin/auth/state?platform=CLI", nil)
 	if err != nil {
 		return nil, err
@@ -293,7 +363,7 @@ func (p *Provider) StartLogin(ctx context.Context, callbackBase string) (*model.
 		State:    st.State,
 	}
 	if s.URL == "" {
-		s.URL = webBaseCN + "/login?state=" + st.State
+		s.URL = p.webLoginBase() + "/login?state=" + st.State
 	}
 	p.mu.Lock()
 	p.sessions[st.State] = s
@@ -309,7 +379,7 @@ type tokenBundle struct {
 }
 
 func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model.PollResult, error) {
-	base := chatBaseCN
+	base := p.loginBase()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v2/plugin/auth/token?state="+s.State, nil)
 	if err != nil {
 		return nil, err
@@ -330,6 +400,9 @@ func (p *Provider) PollLogin(ctx context.Context, s *model.LoginSession) (*model
 		RefreshToken: tok.RefreshToken,
 		Domain:       tok.Domain,
 		ExpiresAt:    time.Now().Add(time.Duration(tok.ExpiresIn) * time.Second).Unix(),
+	}
+	if p.realm == "global" {
+		a.Realm = "global" // 国际实例账号显式标记，运行期所有请求走 workbuddy.ai
 	}
 	// 拿 uid / nickname
 	areq, _ := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v2/plugin/login/account?state="+s.State, nil)
@@ -425,6 +498,10 @@ func (p *Provider) ImportCredential(ctx context.Context, raw string) (*model.Acc
 	}
 	if a.AccessToken == "" && a.RefreshToken == "" {
 		return nil, fmt.Errorf("凭证中未找到 accessToken / refreshToken")
+	}
+	// 国际实例导入的凭证默认按 global 区跑（JSON 里的 realm 优先）
+	if p.realm == "global" && a.Realm == "" {
+		a.Realm = "global"
 	}
 	if _, err := p.RefreshToken(ctx, a); err != nil && a.AccessToken == "" {
 		return nil, err
@@ -749,10 +826,13 @@ func (p *Provider) claimReward(ctx context.Context, a *model.Account, taskCode s
 
 // ── 模型列表 ─────────────────────────────────────────────
 
-// Models 拉取模型列表（/console/enterprises/personal/models → agents[cli].models）。
-// 上游结构随版本变化：agents 可能是数组或映射；models 元素可能是字符串或对象。
-// 这里做双形状兼容解析。
+// Models 拉取模型列表。国内走 /console/enterprises/personal/models（agents[cli].models，
+// 兼容数组/映射×字符串/对象）；国际区该端点 500，改从 /v3/config 的 models 数组直读
+// （含 id/credits/maxInputTokens/maxOutputTokens/描述等完整字段）。
 func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelInfo, error) {
+	if isGlobal(a) {
+		return p.modelsGlobal(ctx, a)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chatBase(a)+"/console/enterprises/personal/models", nil)
 	if err != nil {
 		return nil, err
@@ -806,6 +886,196 @@ func (p *Provider) Models(ctx context.Context, a *model.Account) ([]model.ModelI
 		}
 	}
 	return out, nil
+}
+
+// modelsGlobal 国际区模型目录。
+// 关键：国际版完整目录在 **codebuddy.ai**（endpoint 字段指向它）而非 workbuddy.ai
+// （后者是裁剪版），且须用 CLI UA（CodeBuddyIDE UA 只能拿到部分档位）。
+// 一次 GET https://www.codebuddy.ai/v3/config 即返回完整 data.models（含官方
+// credits 倍率）+ data.agents[cli].models（完整可用清单）。以 cli 清单为主键，
+// 再补入 models 数组里的图/视频等特殊模型。
+func (p *Provider) modelsGlobal(ctx context.Context, a *model.Account) ([]model.ModelInfo, error) {
+	// catalog 域：codebuddy.ai（endpoint）。workbuddy.ai 返回裁剪目录，弃用。
+	const catalogHost = "https://www.codebuddy.ai"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, catalogHost+"/v3/config", nil)
+	if err != nil {
+		return nil, err
+	}
+	p.commonHeaders(req, a)
+	req.Header.Set("Authorization", "Bearer "+a.AccessToken)
+	// CLI UA 才能拿到完整目录（CodeBuddyIDE UA 只返回抽象档位子集）
+	req.Header.Set("User-Agent", "WorkBuddy/5.5.4 WorkBuddy AI/5.5.4 CLI/2.137.1")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	data, err := p.doJSON(req)
+	if err != nil {
+		return nil, err
+	}
+	var cfg struct {
+		Models []struct {
+			ID              string   `json:"id"`
+			Name            string   `json:"name"`
+			Credits         string   `json:"credits"`
+			MaxInputTokens  int64    `json:"maxInputTokens"`
+			MaxOutputTokens int64    `json:"maxOutputTokens"`
+			Tags            []string `json:"tags"`
+			DescriptionZh   string   `json:"descriptionZh"`
+			DescriptionEn   string   `json:"descriptionEn"`
+		} `json:"models"`
+		Agents []struct {
+			Name   string   `json:"name"`
+			Models []string `json:"models"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("解析国际版模型目录失败: %w", err)
+	}
+	// 元数据表（id → 条目，含官方 credits）
+	meta := map[string]struct {
+		ID              string   `json:"id"`
+		Name            string   `json:"name"`
+		Credits         string   `json:"credits"`
+		MaxInputTokens  int64    `json:"maxInputTokens"`
+		MaxOutputTokens int64    `json:"maxOutputTokens"`
+		Tags            []string `json:"tags"`
+		DescriptionZh   string   `json:"descriptionZh"`
+		DescriptionEn   string   `json:"descriptionEn"`
+	}{}
+	for _, m := range cfg.Models {
+		c := m
+		meta[m.ID] = c
+	}
+	// cli 完整清单为主键
+	cliNames := []string{}
+	for _, ag := range cfg.Agents {
+		if ag.Name == "cli" {
+			cliNames = ag.Models
+			break
+		}
+	}
+	seen := map[string]bool{}
+	order := make([]string, 0, len(cliNames)+len(meta))
+	for _, id := range cliNames {
+		if id == "" || id == "default-model" {
+			continue
+		}
+		seen[id] = true
+		order = append(order, id)
+	}
+	// 补充 cli 外的特殊模型（图/视频：hy-image-3.5、kling-video-v3 等）
+	for id := range meta {
+		if id == "" || id == "default-model" {
+			continue
+		}
+		if !seen[id] {
+			seen[id] = true
+			order = append(order, id)
+		}
+	}
+
+	var out []model.ModelInfo
+	for _, id := range order {
+		m := meta[id]
+		display := oneOf(globalModelDisplay[id], m.Name)
+		if display == "" || display == id {
+			display = id
+		}
+		if desc := m.DescriptionZh; desc != "" && desc != display {
+			display = display + " · " + desc
+		}
+		mi := model.ModelInfo{
+			ID:            id,
+			Name:          display,
+			Description:   oneOf(m.DescriptionEn, m.DescriptionZh),
+			Provider:      p.ID(),
+			ContextWindow: m.MaxInputTokens,
+			MaxTokens:     m.MaxOutputTokens,
+			Credits:       m.Credits,
+			Kind:          kindFromTags(m.Tags),
+		}
+		// 官方倍率缺失或为 0 时处理
+		trimCredits := strings.TrimSpace(mi.Credits)
+		if trimCredits == "" || trimCredits == "x0.00" {
+			if s, ok := globalModelCredits[id]; ok {
+				mi.Credits = s
+			} else if mr := p.measuredRateFor(a.UID, id); mr != "" {
+				mi.Credits = mr
+			} else if trimCredits == "x0.00" {
+				mi.Credits = "免费" // 官方 x0.00 = 不扣费
+			}
+		}
+		// 清理上游可能带的多余修饰词（如 "x0.34 credits"）
+		if c := strings.Fields(mi.Credits); len(c) > 1 {
+			mi.Credits = c[0]
+		}
+		// 抽象档位外的真实底座模型 窗口用 seed 兜底
+		if mi.ContextWindow <= 0 || mi.MaxTokens <= 0 {
+			if seed, ok := globalSeedMeta[id]; ok {
+				if mi.ContextWindow <= 0 {
+					mi.ContextWindow = seed[0]
+				}
+				if mi.MaxTokens <= 0 {
+					mi.MaxTokens = seed[1]
+				}
+			}
+		}
+		if mi.Kind == "" {
+			mi.Kind = "chat"
+		}
+		out = append(out, mi)
+	}
+	return out, nil
+}
+
+// globalSeedMeta 国际版基础模型（真实底座，非抽象档位）的窗口规格。
+// 来源：workbuddy2api-panel internal/upstream/model.json（seed 权威数据）。
+// /v3/config 不为这些模型下发 credits（倍率缺失、面板显"—"），但窗口尺寸补齐便于参考。
+var globalSeedMeta = map[string][2]int64{ // id → [contextLength, maxOutputTokens]
+	"hy4-preview":      {1000000, 64000},
+	"hy3":              {192000, 64000},
+	"gpt-5.6-sol":      {1050000, 128000},
+	"gpt-5.6-terra":    {1050000, 128000},
+	"gpt-5.6-luna":     {1050000, 128000},
+	"gpt-5.5":          {1050000, 128000},
+	"gpt-5.4":          {1050000, 128000},
+	"gpt-5.3-codex":    {400000, 128000},
+	"gemini-3.5-flash": {1048576, 65536},
+	"glm-5.3":          {1000000, 131072},
+	"glm-5.2":          {1000000, 131072},
+	"kimi-k3":          {1048576, 131072},
+	"kimi-k2.6":        {256000, 262144},
+}
+
+// globalModelCredits 国际版模型的展示倍率（来源：v3/config 官方 x 系数 +
+// 实测 usage.credit 反推，glm-5.2 归一 x1.0；免费模型标"免费"）。
+// 订阅/后端路由可能有波动，运行期实测值会覆盖此处。
+var globalModelCredits = map[string]string{
+	// 官方抽象档位（v3/config 直接下发）
+	"fast-model":     "x0.35",
+	"balanced-model": "x0.81",
+	"primary-model":  "x3.31",
+	"auto-chat":      "x0.57",
+	"nes-1.2":        "x0.57",
+	// 真实底座（实测反推，相对 glm-5.2 = x1.0）
+	"hy4-preview": "x0.85",
+	"glm-5.2":     "x1.0",
+	"glm-5.3":     "x1.0",
+	"kimi-k3":     "x3.08",
+	"kimi-k2.6":   "x0.28",
+	// 免费模型（实测 credit=0）
+	"hy3": "免费",
+}
+
+// kindFromTags 国际版模型 tags → chinacpa 类目（chat 默认 / image / video）。
+func kindFromTags(tags []string) string {
+	for _, t := range tags {
+		switch {
+		case strings.Contains(t, "text-to-video"), strings.Contains(t, "image-to-video"):
+			return "video"
+		case strings.Contains(t, "text-to-image"), strings.Contains(t, "image-to-image"):
+			return "image"
+		}
+	}
+	return "chat"
 }
 
 // wbPromoZone 优惠时区：上游恒 Asia/Shanghai（UTC+8 无夏令时）。
@@ -1029,17 +1299,128 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 		}, nil
 	}
 	if wantStream {
-		return &provider.ChatResult{Body: resp.Body, ContentType: "text/event-stream"}, nil
+		// 包装响应流：捕获 usage.credit 反推模型倍率（国际版 usage 带 credit 权威扣费）
+		return &provider.ChatResult{
+			Body:        p.observeCredits(resp.Body, a, modelName),
+			ContentType: "text/event-stream",
+		}, nil
 	}
 	agg, aerr := aggregateOpenAISSE(resp.Body, modelName)
 	resp.Body.Close()
 	if aerr != nil {
 		return nil, aerr
 	}
+	// 非流式同样捕获（聚合结果含 usage）
+	p.applyMeasuredCredit(agg, a, modelName)
 	return &provider.ChatResult{
 		Body:        io.NopCloser(bytes.NewReader(agg)),
 		ContentType: "application/json",
 	}, nil
+}
+
+// creditObservingReader 包装响应流，逐行捕获 usage.credit 反推模型倍率。
+type creditObservingReader struct {
+	src       io.Reader
+	p         *Provider
+	a         *model.Account
+	modelName string
+	buf       []byte
+	closed    bool
+	recorded  bool
+}
+
+func (p *Provider) observeCredits(src io.ReadCloser, a *model.Account, modelName string) io.ReadCloser {
+	return struct {
+		io.Reader
+		io.Closer
+	}{&creditObservingReader{src: src, p: p, a: a, modelName: modelName}, src}
+}
+
+func (r *creditObservingReader) Read(p []byte) (int, error) {
+	n, err := r.src.Read(p)
+	if n > 0 {
+		r.buf = append(r.buf, p[:n]...)
+		// 按行扫 usage（OpenAI SSE 简形）：查找带 credit 的 usage 帧
+		for {
+			i := bytes.IndexByte(r.buf, '\n')
+			if i < 0 {
+				break
+			}
+			line := strings.TrimSpace(string(r.buf[:i]))
+			r.buf = r.buf[i+1:]
+			if !r.recorded && strings.Contains(line, `"credit"`) {
+				r.p.applyCreditFromLine(line, r.a, r.modelName)
+				r.recorded = true
+			}
+		}
+	}
+	return n, err
+}
+
+// applyCreditFromLine 从一行 usage SSE 解析 credit 并归一为倍率。
+func (p *Provider) applyCreditFromLine(line string, a *model.Account, modelName string) {
+	var frame struct {
+		Usage struct {
+			PromptTokens     int64   `json:"prompt_tokens"`
+			CompletionTokens int64   `json:"completion_tokens"`
+			Credit           float64 `json:"credit"`
+		} `json:"usage"`
+	}
+	if !strings.HasPrefix(line, "data:") {
+		return
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+	if json.Unmarshal([]byte(payload), &frame) != nil || frame.Usage.Credit <= 0 {
+		return
+	}
+	tokens := frame.Usage.PromptTokens + frame.Usage.CompletionTokens
+	if tokens <= 0 {
+		return
+	}
+	// 归一为「相对 glm-5.2(x1) 的倍率」：glm 组基准实测约 0.67credit/8k-token，
+	// 这里直接用 credit 绝对值 × 归一因子，得到可展示的 x 系数。
+	rate := frame.Usage.Credit / float64(tokens) * 12000 // 每万 token 的 credit → x 系数基准
+	p.creditMu.Lock()
+	if p.measuredRates[a.UID] == nil {
+		p.measuredRates[a.UID] = map[string]string{}
+	}
+	p.measuredRates[a.UID][modelName] = fmt.Sprintf("x%.2f", rate)
+	p.creditMu.Unlock()
+}
+
+// applyMeasuredCredit 非流式路径：从聚合 JSON 的 usage 反推倍率。
+func (p *Provider) applyMeasuredCredit(agg []byte, a *model.Account, modelName string) {
+	var frame struct {
+		Usage struct {
+			PromptTokens     int64   `json:"prompt_tokens"`
+			CompletionTokens int64   `json:"completion_tokens"`
+			Credit           float64 `json:"credit"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(agg, &frame) != nil || frame.Usage.Credit <= 0 {
+		return
+	}
+	tokens := frame.Usage.PromptTokens + frame.Usage.CompletionTokens
+	if tokens <= 0 {
+		return
+	}
+	rate := frame.Usage.Credit / float64(tokens) * 12000
+	p.creditMu.Lock()
+	if p.measuredRates[a.UID] == nil {
+		p.measuredRates[a.UID] = map[string]string{}
+	}
+	p.measuredRates[a.UID][modelName] = fmt.Sprintf("x%.2f", rate)
+	p.creditMu.Unlock()
+}
+
+// measuredRateFor 取某账号的实测倍率（无则空串）。
+func (p *Provider) measuredRateFor(uid, modelName string) string {
+	p.creditMu.Lock()
+	defer p.creditMu.Unlock()
+	if p.measuredRates[uid] == nil {
+		return ""
+	}
+	return p.measuredRates[uid][modelName]
 }
 
 // rewriteChatBody 模型名覆盖 + 强制 stream + prompt_cache_key 注入。
@@ -1130,4 +1511,14 @@ func aggregateOpenAISSE(body io.Reader, modelName string) ([]byte, error) {
 		resp["usage"] = usage
 	}
 	return json.Marshal(resp)
+}
+
+// oneOf 返回第一个非空串。
+func oneOf(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

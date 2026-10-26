@@ -224,7 +224,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		if q := p.st.GetQuota(a.Provider, a.UID); q != nil {
 			v.Quota = q
 			switch a.Provider {
-			case "workbuddy":
+			case "workbuddy", "workbuddy-intl":
 				totalCredits += float64(q.Credits)
 			case "trae":
 				totalIdeCredits += q.Remaining

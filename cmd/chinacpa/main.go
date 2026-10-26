@@ -49,7 +49,8 @@ func main() {
 	}
 
 	// providers
-	wb := workbuddy.New()
+	wb := workbuddy.New("cn")
+	wbi := workbuddy.New("global")
 	qw := qwen.New(cfg.Qwen.DailyRequestLimit)
 	tr := trae.New()
 	qd := qoder.New("cn")
@@ -58,7 +59,7 @@ func main() {
 	db := doubao.New(cfg.Doubao.ImageDailyLimit, cfg.Doubao.VideoDailyLimit)
 
 	// pool
-	provs := []provider.Provider{wb, qw, tr, qd, qdi, qww, db}
+	provs := []provider.Provider{wb, wbi, qw, tr, qd, qdi, qww, db}
 	pl, err := pool.New(st, provs)
 	if err != nil {
 		log.Fatalf("加载账号失败: %v", err)

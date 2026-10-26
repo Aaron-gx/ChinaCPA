@@ -185,15 +185,21 @@ func sessionKeyOf(body []byte) string {
 }
 
 // tryProviderStream 单渠道调用：该 provider 内账号轮询直到成功。
-// 失败返回聚合错误信息（不写响应，供上层跨渠道重试）。
-func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey string) (*openAIStream, *provider.Error, int, []byte) {
+// 失败返回聚合错误信息与账号级尝试轨迹（不写响应，供上层跨渠道重试）。
+// trail 形如 "a4ad5f80 ✗429…; f029fc7a ✗429…"，写入请求日志的失败转移链路，
+// 让「渠道内切账号」在面板上可见。
+func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey string) (*openAIStream, *provider.Error, int, []byte, string) {
 	pr, ok := g.pool.Provider(pid)
 	if !ok {
-		return nil, &provider.Error{Kind: provider.ErrClient, Msg: "未知平台 " + pid}, 0, nil
+		return nil, &provider.Error{Kind: provider.ErrClient, Msg: "未知平台 " + pid}, 0, nil, ""
 	}
 	var lastStatus int
 	var lastBody []byte
 	var lastErr *provider.Error
+	var failTrail []string
+	addTrail := func(uid string, note string) {
+		failTrail = append(failTrail, uidShort(uid)+" ✗"+note)
+	}
 	tried := map[string]bool{}
 	for {
 		a, perr := g.pool.Pick(pid, mname, sessionKey)
@@ -206,23 +212,33 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 		tried[a.UID] = true
 		if _, terr := g.pool.EnsureFreshToken(ctx, a); terr != nil {
 			lastErr = provider.AsError(terr)
+			addTrail(a.UID, lastErr.Error())
 			continue
 		}
 		res, cerr := pr.ChatStream(ctx, a, mname, body)
 		if cerr != nil {
 			g.pool.MarkError(a, mname, cerr)
 			lastErr = provider.AsError(cerr)
+			addTrail(a.UID, lastErr.Error())
 			continue
 		}
 		if res.Err != nil || res.Status >= 400 {
+			note := ""
 			if res.Err != nil {
 				g.pool.MarkError(a, mname, res.Err)
 				lastErr = res.Err
+				note = res.Err.Error()
+			} else {
+				note = fmt.Sprintf("HTTP %d", res.Status)
+				if lastErr == nil {
+					lastErr = &provider.Error{Kind: provider.ErrUpstream, Status: res.Status, Msg: note}
+				}
 			}
 			if res.Body != nil {
 				res.Body.Close()
 			}
 			lastStatus, lastBody = res.Status, res.RespBody
+			addTrail(a.UID, note)
 			continue
 		}
 		// 200 但错误内嵌流首行（Qoder 等）：探测以实现账号/渠道级失败转移
@@ -233,6 +249,7 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 				g.pool.MarkError(a, mname, pe)
 				lastErr = pe
 				res.Body.Close()
+				addTrail(a.UID, pe.Error())
 				continue
 			}
 			if len(peeked) > 0 {
@@ -243,12 +260,28 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 		if pid == "qwen" && g.qwenProv != nil {
 			g.qwenProv.CountRequest(a.UID)
 		}
-		return &openAIStream{acct: a, pid: pid, body: res.Body}, nil, 0, nil
+		trail := ""
+		if len(failTrail) > 0 {
+			trail = "账号 " + uidShort(a.UID) + "（跳过: " + strings.Join(failTrail, "; ") + "）"
+		}
+		return &openAIStream{acct: a, pid: pid, body: res.Body}, nil, 0, nil, trail
 	}
 	if lastErr == nil {
 		lastErr = &provider.Error{Kind: provider.ErrUpstream, Msg: fmt.Sprintf("平台 %s 无可用账号", pid)}
 	}
-	return nil, lastErr, lastStatus, lastBody
+	trail := ""
+	if len(failTrail) > 0 {
+		trail = "账号尝试: " + strings.Join(failTrail, "; ")
+	}
+	return nil, lastErr, lastStatus, lastBody, trail
+}
+
+// uidShort 账号短标识（日志用）。
+func uidShort(uid string) string {
+	if len(uid) > 8 {
+		return uid[:8]
+	}
+	return uid
 }
 
 // callRoutedStream 多渠道失败转移：按路由顺序尝试渠道，每渠道内部再账号轮询。
@@ -260,16 +293,22 @@ func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, r
 	var lastBody []byte
 	var attempts []string
 	for _, ch := range route.Channels {
-		st, err, status, respBody := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey)
+		st, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey)
 		if st != nil {
 			g.bumpChannel(route, ch, true)
-			st.attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, true, ""))
+			st.attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, true, trail))
 			return st
 		}
 		g.bumpChannel(route, ch, false)
 		note := ""
 		if err != nil {
 			note = err.Error()
+		}
+		if trail != "" {
+			if note != "" {
+				note += "｜"
+			}
+			note += trail
 		}
 		attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, false, note))
 		lastErr, lastStatus, lastBody = err, status, respBody
