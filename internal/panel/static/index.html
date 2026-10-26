@@ -457,6 +457,7 @@ code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;bo
 .tag.disabled{color:var(--muted);background:var(--bg-soft)}
 .tag.expired{color:var(--red);background:var(--red-soft)}
 .tag.p-wb{color:var(--blue);background:var(--blue-soft)}
+.tag.p-wb-intl{color:var(--teal);background:var(--teal-soft)}
 .tag.p-qwen{color:var(--purple);background:var(--purple-soft)}
 .tag.p-trae{color:var(--accent);background:var(--accent-soft)}
 .tag.p-qoder{color:var(--teal);background:var(--teal-soft)}
@@ -1025,7 +1026,10 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
     <div class="m-sub">选择平台发起授权，或直接粘贴已有凭证</div>
     <div class="prov-grid">
       <div class="prov-card" onclick="startLogin('workbuddy')">
-        <div class="t" style="color:var(--blue)">WorkBuddy</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
+        <div class="t" style="color:var(--blue)">WorkBuddy 国内版</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
+      </div>
+      <div class="prov-card" onclick="startLogin('workbuddy-intl')">
+        <div class="t" style="color:var(--blue)">WorkBuddy 国际版</div><div class="d">workbuddy.ai<br>WorkBuddy AI 授权登录</div>
       </div>
       <div class="prov-card" onclick="presetImport('qwen')">
         <div class="t" style="color:var(--purple)">Qwen 通义</div><div class="d">chat.qwen.ai<br>粘贴 token 导入（OAuth 已下线）</div>
@@ -1049,9 +1053,10 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
     <div id="loginFlow"></div>
     <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:16px">
       <div style="font-weight:600;margin-bottom:4px;font-size:13px">或直接粘贴登录凭证</div>
-      <p class="hint" id="importHint">WorkBuddy：refreshToken / auth 文件 JSON；Qwen：<code>邮箱:密码</code> 自动登录（最省事）或整串 Cookie（最稳，含 token=）；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）；千问办公：ory_rt_ 开头的 refresh token；豆包：www.doubao.com 任一请求的完整 Cookie 头（需含 s_v_web_id 与 sessionid）。</p>
+      <p class="hint" id="importHint">WorkBuddy：refreshToken / auth 文件 JSON（国际版选「WorkBuddy 国际」）；Qwen：<code>邮箱:密码</code> 自动登录（最省事）或整串 Cookie（最稳，含 token=）；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）；千问办公：ory_rt_ 开头的 refresh token；豆包：www.doubao.com 任一请求的完整 Cookie 头（需含 s_v_web_id 与 sessionid）。</p>
       <select id="importProv" style="margin-right:8px">
-        <option value="workbuddy">WorkBuddy</option>
+        <option value="workbuddy">WorkBuddy 国内</option>
+        <option value="workbuddy-intl">WorkBuddy 国际</option>
         <option value="qwen">Qwen</option>
         <option value="trae">Trae</option>
         <option value="qoder">Qoder 国内</option>
@@ -1117,8 +1122,8 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 <script>
 let OVERVIEW=null, MODELS=null, PUB={models:[],usd_cny:0}, MODEL_TAB='workbuddy', POLL_TIMER=null, CUR_LOGIN=null;
 let ED=null, ED_IDX=-1, TOAST_T=null, CUR_VIEW='dash';
-const PROV_NAMES={workbuddy:'WorkBuddy',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际',qwenwork:'千问办公',doubao:'豆包 Doubao'};
-const PROV_TAG={workbuddy:'p-wb',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl',qwenwork:'p-qwenwork',doubao:'p-doubao'};
+const PROV_NAMES={workbuddy:'WorkBuddy 国内','workbuddy-intl':'WorkBuddy 国际',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际',qwenwork:'千问办公',doubao:'豆包 Doubao'};
+const PROV_TAG={workbuddy:'p-wb','workbuddy-intl':'p-wb-intl',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl',qwenwork:'p-qwenwork',doubao:'p-doubao'};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
@@ -1762,8 +1767,8 @@ function renderAcctTable(o){
     if(a.checkin_today){chk=a.checkin_today.ok?`<span class="tag ok">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span class="tag cooldown">${esc(a.checkin_today.message||'未签')}</span>`}
     const days=a.token_days_left;
     const exp=a.expires_at>0?(days>0?days.toFixed(1)+' 天':'<span style="color:var(--red)">已过期</span>'):'长期';
-    const intl=(a.realm==='global')?'·国际':'';
-    const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${({workbuddy:'WB',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD',qwenwork:'QWW',doubao:'DB'})[a.provider]||a.provider}${intl}</span>`;
+    const intl=(a.realm==='global'&&a.provider!=='workbuddy-intl'&&a.provider!=='qoder-intl')?'·国际':'';
+    const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${({workbuddy:'WB',  'workbuddy-intl':'WB·INTL',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD',qwenwork:'QWW',doubao:'DB'})[a.provider]||a.provider}${intl}</span>`;
     tb.insertAdjacentHTML('beforeend',`<tr style="--r:${ri}">
       <td>${provTag} <span class="mini">${esc(a.provider_name)}</span></td>
       <td>${esc(a.nickname||a.uid)}</td>

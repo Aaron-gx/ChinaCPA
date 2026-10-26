@@ -48,6 +48,26 @@ type openAIUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	// 上游 token_usage 帧的缓存字段（Anthropic 命名），转 OpenAI 形态输出
+	CacheReadTokens  int64 `json:"-"`
+	CacheWriteTokens int64 `json:"-"`
+}
+
+// toMap 输出 OpenAI 兼容 usage：缓存命中放 prompt_tokens_details.cached_tokens
+// （网关 usageSnapshot 与标准客户端都认这个字段）。
+func (u *openAIUsage) toMap() map[string]any {
+	m := map[string]any{
+		"prompt_tokens":     u.PromptTokens,
+		"completion_tokens": u.CompletionTokens,
+		"total_tokens":      u.TotalTokens,
+	}
+	if u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+		m["prompt_tokens_details"] = map[string]any{
+			"cached_tokens":     u.CacheReadTokens,
+			"cache_write_tokens": u.CacheWriteTokens,
+		}
+	}
+	return m
 }
 
 func (s *soloToOpenAIStream) chunk(delta map[string]any, finish any, usage *openAIUsage) []byte {
@@ -67,7 +87,7 @@ func (s *soloToOpenAIStream) chunk(delta map[string]any, finish any, usage *open
 		}},
 	}
 	if usage != nil {
-		obj["usage"] = usage
+		obj["usage"] = usage.toMap()
 	}
 	raw, _ := json.Marshal(obj)
 	return append(raw, '\n')
@@ -177,17 +197,7 @@ func (s *soloToOpenAIStream) handleEvent(evName string, dataLine string) []byte 
 		}
 	case "token_usage":
 		u := &openAIUsage{}
-		if v, ok := raw["prompt_tokens"].(float64); ok {
-			u.PromptTokens = int64(v)
-		}
-		if v, ok := raw["completion_tokens"].(float64); ok {
-			u.CompletionTokens = int64(v)
-		}
-		if v, ok := raw["total_tokens"].(float64); ok {
-			u.TotalTokens = int64(v)
-		} else {
-			u.TotalTokens = u.PromptTokens + u.CompletionTokens
-		}
+		applyTraeUsage(u, raw)
 		s.usage = u
 		// 倒数第二块：带 usage 的空 delta（OpenAI 惯例 stream_options.include_usage）
 		out = append(out, sseWrap(s.chunk(map[string]any{}, nil, u))...)
@@ -310,15 +320,7 @@ func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([
 				}
 			}
 		case "token_usage":
-			if v, ok := raw["prompt_tokens"].(float64); ok {
-				usage.PromptTokens = int64(v)
-			}
-			if v, ok := raw["completion_tokens"].(float64); ok {
-				usage.CompletionTokens = int64(v)
-			}
-			if v, ok := raw["total_tokens"].(float64); ok {
-				usage.TotalTokens = int64(v)
-			}
+			applyTraeUsage(&usage, raw)
 		case "notify_usage":
 			if info, ok := raw["cn_credits_remain_info"].(map[string]any); ok {
 				ide, _ := info["ide_credits"].(float64)
@@ -379,9 +381,31 @@ func aggregateSolo(body io.Reader, uid string, p *Provider, modelName string) ([
 			"message":       msg,
 			"finish_reason": finish,
 		}},
-		"usage": usage,
+		"usage": usage.toMap(),
 	}
 	return json.Marshal(resp)
+}
+
+// applyTraeUsage 解析上游 token_usage 帧：基础三件套 + 缓存字段（多命名兼容）。
+// 实测帧形如 {"cache_creation_input_tokens":N,"cache_read_input_tokens":N,
+// "prompt_tokens":N,"completion_tokens":N,"total_tokens":N,...}。
+func applyTraeUsage(u *openAIUsage, raw map[string]any) {
+	num := func(keys ...string) int64 {
+		for _, k := range keys {
+			if v, ok := raw[k].(float64); ok {
+				return int64(v)
+			}
+		}
+		return 0
+	}
+	u.PromptTokens = num("prompt_tokens")
+	u.CompletionTokens = num("completion_tokens")
+	u.TotalTokens = num("total_tokens")
+	if u.TotalTokens == 0 {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+	u.CacheReadTokens = num("cache_read_input_tokens", "cached_tokens", "input_cached_tokens", "prompt_cache_hit_tokens")
+	u.CacheWriteTokens = num("cache_creation_input_tokens", "cache_write_tokens")
 }
 
 // ── 工具 ─────────────────────────────────────────────────
