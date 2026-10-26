@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,9 @@ type Gateway struct {
 	qwenProv   qwenCounter
 	rlog       *reqlog.DB
 	videoTasks *videoTaskStore // 视频生成任务表（内存态）
+
+	// OnUsageRecorded 成功记录用量后的回调（用于触发 SSE 实时推流）
+	OnUsageRecorded func()
 }
 
 // qwenCounter Qwen 本地请求计数的最小接口（解耦）。
@@ -101,8 +105,18 @@ type openAIStream struct {
 	acct        *model.Account
 	pid         string
 	body        io.ReadCloser
-	contentType string // 上游实际响应类型（text/event-stream / application/json）
+	contentType string  // 上游实际响应类型（text/event-stream / application/json）
 	attempts    []string // 渠道尝试链路（含失败转移记录）
+	rel         *pool.Pool // 负载计数释放目标（nil = 不计负载）
+	releaseOnce sync.Once
+}
+
+// release 释放账号负载计数（幂等，覆盖所有消费出口）。
+func (s *openAIStream) release() {
+	if s.rel == nil || s.acct == nil {
+		return
+	}
+	s.releaseOnce.Do(func() { s.rel.Release(s.acct) })
 }
 
 // peekStreamError 探测「HTTP 200 但错误内嵌在流里」的情况：
@@ -265,7 +279,9 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 		if len(failTrail) > 0 {
 			trail = "账号 " + uidShort(a.UID) + "（跳过: " + strings.Join(failTrail, "; ") + "）"
 		}
-		return &openAIStream{acct: a, pid: pid, body: res.Body, contentType: res.ContentType}, nil, 0, nil, trail
+		// 标记账号占用：Pick 的实时负载信号依赖此计数，请求结束由 releaseOnce 释放
+		g.pool.Acquire(a)
+		return &openAIStream{acct: a, pid: pid, body: res.Body, contentType: res.ContentType, rel: g.pool}, nil, 0, nil, trail
 	}
 	if lastErr == nil {
 		lastErr = &provider.Error{Kind: provider.ErrUpstream, Msg: fmt.Sprintf("平台 %s 无可用账号", pid)}
@@ -456,6 +472,7 @@ func (g *Gateway) handleChat(w http.ResponseWriter, r *http.Request) {
 	if ct == "" {
 		ct = "text/event-stream" // 上游未声明类型时按流式处理（兼容老通道）
 	}
+	defer st.release() // 请求结束释放账号负载计数
 	res := &provider.ChatResult{Body: st.body, ContentType: ct}
 	g.serve(w, r, res, st.pid, st.acct.UID, route.Public, cr.Stream, "chat", st.attempts, t0)
 }
@@ -653,13 +670,16 @@ func (u *usageSnapshot) cacheTokens() int64 {
 func (g *Gateway) record(pid, uid, model string, u *usageSnapshot) {
 	if u == nil {
 		g.usage.Record(usage.Record{Provider: pid, Account: uid, Model: model})
-		return
+	} else {
+		g.usage.Record(usage.Record{
+			Provider: pid, Account: uid, Model: model,
+			PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+			TotalTokens: u.TotalTokens, CacheTokens: u.cacheTokens(),
+		})
 	}
-	g.usage.Record(usage.Record{
-		Provider: pid, Account: uid, Model: model,
-		PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
-		TotalTokens: u.TotalTokens, CacheTokens: u.cacheTokens(),
-	})
+	if g.OnUsageRecorded != nil {
+		g.OnUsageRecorded()
+	}
 }
 
 // usageRecorder 包装响应流：按行扫 usage（OpenAI chunk.usage / 已转换流），

@@ -6,6 +6,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,6 +170,53 @@ func (c *Client) fetchOnce() (*Overview, error) {
 		return nil, fmt.Errorf("解析总览失败: %w", err)
 	}
 	return &ov, nil
+}
+
+// Stream 建立 SSE 长连接监听服务端变动。收到 update 事件时触发 onUpdate。
+// 该连接不设 HTTP 请求级超时，断线时返回 error 供上层重连。
+func (c *Client) Stream(ctx context.Context, onUpdate func()) error {
+	if !c.ready {
+		if err := c.login(); err != nil {
+			return err
+		}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/stream/events", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	// 必须使用无 Timeout 的专属 Client（c.http 带有 short timeout）
+	streamCli := &http.Client{
+		Jar: c.http.Jar,
+	}
+	resp, err := streamCli.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		c.ready = false
+		return fmt.Errorf("会话失效")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("stream 返回状态码 %d", resp.StatusCode)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "event: update") || strings.HasPrefix(line, "data: refresh") {
+			if onUpdate != nil {
+				onUpdate()
+			}
+		}
+	}
 }
 
 // Metric 浮动栏上的一个圆环。

@@ -44,6 +44,9 @@ type Panel struct {
 
 	mu     sync.Mutex
 	tokens map[string]*loginTicket // 登录票据（轮询用）
+
+	eventMu   sync.Mutex
+	eventSubs map[chan struct{}]struct{} // SSE 订阅者集合
 }
 
 type loginTicket struct {
@@ -73,7 +76,8 @@ func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sc
 		sched:  sched,
 		pub:    pub,
 		rlog:   rl,
-		tokens: map[string]*loginTicket{},
+		tokens:    map[string]*loginTicket{},
+		eventSubs: map[chan struct{}]struct{}{},
 	}
 }
 
@@ -100,6 +104,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 	mux.HandleFunc("/api/refresh_all_quotas", p.authed(p.handleRefreshAllQuotas))
 	mux.HandleFunc("/api/publish", p.authed(p.handlePublish))
 	mux.HandleFunc("/api/requests", p.authed(p.handleRequests))
+	mux.HandleFunc("/api/stream/events", p.authed(p.handleStreamEvents))
 }
 
 // ── 面板鉴权 ─────────────────────────────────────────────
@@ -136,6 +141,64 @@ func (p *Panel) authed(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "未登录"})
+	}
+}
+
+// Broadcast 广播事件给所有订阅的 SSE 客户端（如桌面浮动栏）。
+func (p *Panel) Broadcast(event string) {
+	p.eventMu.Lock()
+	defer p.eventMu.Unlock()
+	for ch := range p.eventSubs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// handleStreamEvents 处理 SSE 长连接，实现额度与用量变动的毫秒级推送。
+func (p *Panel) handleStreamEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	ch := make(chan struct{}, 4)
+	p.eventMu.Lock()
+	p.eventSubs[ch] = struct{}{}
+	p.eventMu.Unlock()
+
+	defer func() {
+		p.eventMu.Lock()
+		delete(p.eventSubs, ch)
+		p.eventMu.Unlock()
+	}()
+
+	// 首包响应，确认连通
+	fmt.Fprintf(w, "event: connected\ndata: ok\n\n")
+	flusher.Flush()
+
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	ctx := r.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ch:
+			fmt.Fprintf(w, "event: update\ndata: refresh\n\n")
+			flusher.Flush()
+		case <-ticker.C:
+			// 保持长连接心跳，防止中间层断链
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
+		}
 	}
 }
 
@@ -178,6 +241,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		CooldownModels []string             `json:"cooldown_models,omitempty"` // 冷却中的模型（""=账号级）
 		Quota          *model.QuotaInfo     `json:"quota,omitempty"`
 		CheckinToday   *model.CheckinResult `json:"checkin_today,omitempty"`
+		Inflight       int64                `json:"inflight"` // 当前进行中的请求数（实时负载）
 		Status         string               `json:"status"` // ok / relogin / cooldown / disabled / expired
 	}
 	accounts := p.pool.Accounts()
@@ -196,6 +260,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 			Provider: a.Provider, ProviderName: name,
 			UID: a.UID, Nickname: a.Nickname, Disabled: a.Disabled,
 			NeedsRelogin: a.NeedsRelogin, ExpiresAt: a.ExpiresAt,
+			Inflight: p.pool.Inflight(a.Provider, a.UID),
 		}
 		if a.NeedsRelogin {
 			v.Status = "relogin"

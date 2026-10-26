@@ -26,6 +26,9 @@ type Store struct {
 	// counters 进程外每日计数器持久化（键 provider:uid:day:kind -> 值），
 	// 供豆包等无上游额度接口的平台跨重启恢复本地日配额
 	counters map[string]int64
+
+	// OnQuotaChanged 额度快照变更回调（通知 SSE / 浮动栏实时刷新）
+	OnQuotaChanged func(q *model.QuotaInfo)
 }
 
 // Open 初始化数据目录并加载既有状态。
@@ -183,9 +186,13 @@ func (s *Store) CountersPrefix(prefix string) map[string]int64 {
 func (s *Store) SetQuota(q *model.QuotaInfo) {
 	q.FetchedAt = time.Now().Unix()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.quotaCache[q.Provider+":"+q.UID] = q
 	s.persistStateLocked()
+	fn := s.OnQuotaChanged
+	s.mu.Unlock()
+	if fn != nil {
+		fn(q)
+	}
 }
 
 // GetQuota 读取额度快照（无缓存返回 nil）。

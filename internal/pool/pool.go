@@ -47,6 +47,9 @@ type Pool struct {
 	// rr 轮询游标：provider|model -> 下一分配序号（sessionKey 为空时按此分摊）
 	rrMu sync.Mutex
 	rr   map[string]uint64
+	// inflight 账号实时负载：provider|uid -> 当前进行中的请求数（路由/面板用）
+	inflightMu sync.Mutex
+	inflight   map[string]int64
 	// refreshMu 单账号串行刷新（WorkBuddy 有防重放，并发刷新会被拒）
 	refreshMu  sync.Mutex
 	refreshers map[string]*sync.Mutex
@@ -83,6 +86,7 @@ func New(st *store.Store, provs []provider.Provider) (*Pool, error) {
 		cooldown:     map[string]time.Time{},
 		sticky:       map[string]*stickyEntry{},
 		rr:           map[string]uint64{},
+		inflight:     map[string]int64{},
 		refreshers:   map[string]*sync.Mutex{},
 		modelAliases: map[string]string{},
 		models:       map[string]*modelCache{},
@@ -251,9 +255,9 @@ func (p *Pool) SetDisabled(providerID, uid string, disabled bool) error {
 // Pick 按 provider + 模型取一个可用账号；无可用返回错误。
 // 黏性会话：sessionKey（prompt_cache_key / metadata.user_id）相同的请求固定同一账号，
 // 保住上游提示词前缀缓存；新会话按轮询分摊到各账号；黏住的账号进入冷却/禁用时
-// 自动换下一个并重新黏住。sessionKey 为空（简单调用）时按 provider+model 轮询分摊，
-// 避免全部流量压到第一个账号。冷却是软性的：所有账号都在冷却中时仍照常尝试，
-// 避免冷却窗口内的请求被硬拒。
+// 自动换下一个并重新黏住。sessionKey 为空（简单调用）时优先选「实时负载最低」的账号
+// （进行中请求数最少），负载相同再按 provider+model 轮询，避免全部流量压到第一个账号。
+// 冷却是软性的：所有账号都在冷却中时仍照常尝试，避免冷却窗口内的请求被硬拒。
 func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, error) {
 	avail := p.AccountsByModel(providerID, modelName)
 	if len(avail) == 0 {
@@ -263,7 +267,7 @@ func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, e
 		return nil, fmt.Errorf("provider %s 无可用账号（未添加、已禁用或需重新登录）", providerID)
 	}
 	if sessionKey == "" {
-		return p.roundRobin(providerID, modelName, avail), nil
+		return p.pickLeastInflight(providerID, modelName, avail), nil
 	}
 	mapKey := providerID + "|" + sessionKey
 	now := time.Now()
@@ -285,8 +289,8 @@ func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, e
 			}
 		}
 	}
-	// 新会话或黏住的账号当前不可用：轮询取下一个并重新黏住
-	a := p.roundRobin(providerID, modelName, avail)
+	// 新会话或黏住的账号当前不可用：选负载最低的账号并重新黏住
+	a := p.pickLeastInflight(providerID, modelName, avail)
 	p.sticky[mapKey] = &stickyEntry{uid: a.UID, lastSeen: now}
 	return a, nil
 }
@@ -299,6 +303,66 @@ func (p *Pool) roundRobin(providerID, modelName string, avail []*model.Account) 
 	p.rr[key] = n + 1
 	p.rrMu.Unlock()
 	return avail[n%uint64(len(avail))]
+}
+
+// pickLeastInflight 从 avail 中选「实时负载最低」的账号（进行中请求数最少），
+// 负载相同时按 provider|model 轮询分摊。调用方保证 avail 非空。
+func (p *Pool) pickLeastInflight(providerID, modelName string, avail []*model.Account) *model.Account {
+	best := avail[0]
+	bestN := p.Inflight(providerID, best.UID)
+	ties := []*model.Account{best}
+	for _, a := range avail[1:] {
+		n := p.Inflight(providerID, a.UID)
+		if n < bestN {
+			best, bestN = a, n
+			ties = []*model.Account{a}
+		} else if n == bestN {
+			ties = append(ties, a)
+		}
+	}
+	if len(ties) == 1 {
+		return best
+	}
+	// 负载相同：在并列集合里轮询，保证不扎堆到第一个
+	return p.roundRobin(providerID, modelName, ties)
+}
+
+// Acquire 标记一次请求占用账号（路由选中后调用，请求结束调用 Release）。
+func (p *Pool) Acquire(a *model.Account) {
+	key := a.Provider + "|" + a.UID
+	p.inflightMu.Lock()
+	p.inflight[key]++
+	p.inflightMu.Unlock()
+}
+
+// Release 标记一次请求结束（与 Acquire 配对）。
+func (p *Pool) Release(a *model.Account) {
+	key := a.Provider + "|" + a.UID
+	p.inflightMu.Lock()
+	if n := p.inflight[key]; n > 1 {
+		p.inflight[key] = n - 1
+	} else {
+		delete(p.inflight, key)
+	}
+	p.inflightMu.Unlock()
+}
+
+// Inflight 查询账号当前进行中的请求数（0 = 空闲）。
+func (p *Pool) Inflight(providerID, uid string) int64 {
+	p.inflightMu.Lock()
+	defer p.inflightMu.Unlock()
+	return p.inflight[providerID+"|"+uid]
+}
+
+// InflightAll 全部账号实时负载快照（面板展示用）。
+func (p *Pool) InflightAll() map[string]int64 {
+	p.inflightMu.Lock()
+	defer p.inflightMu.Unlock()
+	out := make(map[string]int64, len(p.inflight))
+	for k, v := range p.inflight {
+		out[k] = v
+	}
+	return out
 }
 
 // EnabledAccounts 某 provider 全部启用中的账号（忽略冷却，但排除需重新登录的账号）。

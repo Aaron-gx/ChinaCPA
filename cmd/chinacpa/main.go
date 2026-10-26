@@ -163,6 +163,14 @@ func main() {
 	sched.Start()
 	pn := panel.New(cfg, pl, st, u, sched, pub, rl)
 
+	// 当用量记录或额度刷新时，通过 SSE 实时广播给桌面浮动栏
+	gw.OnUsageRecorded = func() {
+		pn.Broadcast("usage")
+	}
+	st.OnQuotaChanged = func(q *model.QuotaInfo) {
+		pn.Broadcast("quota")
+	}
+
 	mux := http.NewServeMux()
 	pn.Register(mux, gw)
 

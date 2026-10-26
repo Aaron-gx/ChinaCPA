@@ -73,6 +73,7 @@ func (g *Gateway) handleResponses(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		return
 	}
+	defer st.release() // 请求结束释放账号负载计数
 	pub := route.Public
 	var param any
 	if probe.Stream {
@@ -142,6 +143,7 @@ func (g *Gateway) handleClaudeMessages(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		return
 	}
+	defer st.release() // 请求结束释放账号负载计数
 	pub := route.Public
 	var param any
 	if probe.Stream {

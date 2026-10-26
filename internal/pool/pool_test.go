@@ -219,3 +219,70 @@ func TestResolveRoutePriority(t *testing.T) {
 		}
 	}
 }
+
+// TestPickLeastInflight 实时负载路由：繁忙账号（inflight 高）被跳过，选最空闲的。
+func TestPickLeastInflight(t *testing.T) {
+	p, _ := newTestPool(t)
+	// 给 a1 压上 5 个进行中请求，a2 空闲
+	p.Acquire(&model.Account{Provider: "test", UID: "a1"})
+	p.Acquire(&model.Account{Provider: "test", UID: "a1"})
+	p.Acquire(&model.Account{Provider: "test", UID: "a1"})
+	p.Acquire(&model.Account{Provider: "test", UID: "a1"})
+	p.Acquire(&model.Account{Provider: "test", UID: "a1"})
+	// 连续选 6 次，应全部命中空闲的 a2
+	for i := 0; i < 6; i++ {
+		a, err := p.Pick("test", "m1", "")
+		if err != nil {
+			t.Fatalf("pick: %v", err)
+		}
+		if a.UID != "a2" {
+			t.Fatalf("应选最空闲账号 a2，实际 %s", a.UID)
+		}
+	}
+	// 释放 a1 一个后，a1 仍比 a2 忙（4 vs 0），继续选 a2
+	p.Release(&model.Account{Provider: "test", UID: "a1"})
+	a, _ := p.Pick("test", "m1", "")
+	if a.UID != "a2" {
+		t.Fatalf("a1 仍忙，应选 a2，实际 %s", a.UID)
+	}
+	// 全部释放后两者负载相同，应能分配到 a1
+	p.Release(&model.Account{Provider: "test", UID: "a1"})
+	p.Release(&model.Account{Provider: "test", UID: "a1"})
+	p.Release(&model.Account{Provider: "test", UID: "a1"})
+	p.Release(&model.Account{Provider: "test", UID: "a1"})
+	found := false
+	for i := 0; i < 10; i++ {
+		a, _ := p.Pick("test", "m1", "")
+		if a.UID == "a1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("负载相同后应能选到 a1（轮询兜底）")
+	}
+}
+
+// TestAcquireRelease 计数正确增减。
+func TestAcquireRelease(t *testing.T) {
+	p, _ := newTestPool(t)
+	a := &model.Account{Provider: "test", UID: "a1"}
+	if n := p.Inflight("test", "a1"); n != 0 {
+		t.Fatalf("初始应 0，实际 %d", n)
+	}
+	p.Acquire(a)
+	p.Acquire(a)
+	if n := p.Inflight("test", "a1"); n != 2 {
+		t.Fatalf("acquire 后应 2，实际 %d", n)
+	}
+	p.Release(a)
+	p.Release(a)
+	if n := p.Inflight("test", "a1"); n != 0 {
+		t.Fatalf("release 后应 0，实际 %d", n)
+	}
+	// 过度 release 不应变负数
+	p.Release(a)
+	if n := p.Inflight("test", "a1"); n != 0 {
+		t.Fatalf("过度 release 应保持 0，实际 %d", n)
+	}
+}

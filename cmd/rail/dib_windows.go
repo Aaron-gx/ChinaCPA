@@ -100,9 +100,7 @@ func newDIB(w, h int32) (*dib, error) {
 func (d *dib) clear() {
 	n := int(d.w) * int(d.h)
 	p := (*[1 << 26]uint32)(unsafe.Pointer(d.mem))[:n:n]
-	for i := range p {
-		p[i] = 0
-	}
+	clear(p)
 }
 
 // commit 用 UpdateLayeredWindow 把整块位图提交到窗口。

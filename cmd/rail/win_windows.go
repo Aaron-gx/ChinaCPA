@@ -84,6 +84,7 @@ const (
 	wmMouseMove = 0x0200
 	wmLButtonDown = 0x0201
 	wmLButtonUp = 0x0202
+	wmLButtonDblClk = 0x0203
 	wmRButtonUp = 0x0205
 	wmMouseLeave = 0x02A3
 	wmNCHitTest   = 0x0084
@@ -161,6 +162,7 @@ type Rail struct {
 	hwnd     windows.Handle
 	opts     Options
 	metrics  []Metric
+	dib      *dib // 缓存的内存位图表面，尺寸未变时跨帧复用，避免频繁创建/销毁 GDI 对象
 	edge     string // 吸附边：left/right/top/bottom
 	isVertical bool // 竖排（贴左/右）还是横排（贴上/下）
 	expanded bool
@@ -232,6 +234,7 @@ func (r *Rail) registerClass() error {
 	cursor, _, _ := pLoadCursorW.Call(0, 32512) // IDC_ARROW
 	wc := wndClassEx{
 		Size:      uint32(unsafe.Sizeof(wndClassEx{})),
+		Style:     0x0008, // CS_DBLCLKS 支持双击直接打开面板
 		WndProc:   syscall.NewCallback(railWndProc),
 		ClassName: cls,
 		Cursor:    windows.Handle(cursor),
@@ -355,6 +358,11 @@ func railWndProc(hwnd windows.Handle, msg uint32, wParam, lParam uintptr) uintpt
 			r.onLUp()
 		}
 		return 0
+	case wmLButtonDblClk:
+		if r != nil {
+			openURL(r.opts.BaseURL)
+		}
+		return 0
 	case wmRButtonUp:
 		if r != nil {
 			r.showMenu()
@@ -380,6 +388,10 @@ func railWndProc(hwnd windows.Handle, msg uint32, wParam, lParam uintptr) uintpt
 		}
 		return uintptr(htTransparent)
 	case wmDestroy:
+		if r != nil && r.dib != nil {
+			r.dib.Close()
+			r.dib = nil
+		}
 		delete(railInstances, hwnd)
 		pPostQuitMessage.Call(0)
 		return 0

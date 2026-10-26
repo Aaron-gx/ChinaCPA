@@ -53,7 +53,7 @@ const (
 	// 分层窗口上必须用灰度抗锯齿。ClearType 做的是子像素渲染，
 	// 会把字拆成 RGB 三个通道的偏移，写到带 alpha 的位图上就成了
 	// 彩色镶边（放大后能明显看到橙/蓝边）。
-	textRenderingAntiAlias = 4 // TextRenderingHintAntiAliasGridFit
+	textRenderingAntiAlias = 3 // TextRenderingHintAntiAliasGridFit（网格对齐，小字号清晰无发虚）
 	penAlignmentCenter  = 0
 	lineCapRound        = 2
 	fillModeAlternate   = 0

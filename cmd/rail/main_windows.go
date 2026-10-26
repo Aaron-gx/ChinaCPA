@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -111,6 +112,22 @@ func main() {
 			}
 		}
 		tick()
+
+		// 启动 SSE 实时推流监听：模型调用扣费/签到完成/额度刷新时即刻响应
+		go func() {
+			for {
+				err := cli.Stream(context.Background(), func() {
+					select {
+					case trigger <- struct{}{}:
+					default:
+					}
+				})
+				if err != nil {
+					time.Sleep(3 * time.Second) // 断开重连退避
+				}
+			}
+		}()
+
 		t := time.NewTicker(time.Duration(*interval) * time.Second)
 		defer t.Stop()
 		for {
@@ -118,7 +135,7 @@ func main() {
 			case <-t.C:
 				tick()
 			case <-trigger:
-				// 右键「立即刷新」
+				// 右键「立即刷新」或 SSE 实时推送
 				tick()
 			}
 		}

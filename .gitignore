@@ -10,3 +10,6 @@ models.json
 # 浮动栏产物与日志；源码在 cmd/rail
 rail.exe
 rail.log
+
+# rail-rs（Rust 浮动栏）构建产物
+rail-rs/target/

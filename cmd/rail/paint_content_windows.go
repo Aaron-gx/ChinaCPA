@@ -228,11 +228,18 @@ func (r *Rail) paint() {
 		return
 	}
 
-	dib, err := newDIB(w, h)
-	if err != nil {
-		return
+	// 复用内存位图表面，尺寸未变时不重复分配，消除 60fps 频繁创建/销毁 GDI 对象
+	if r.dib == nil || r.dib.w != w || r.dib.h != h {
+		if r.dib != nil {
+			r.dib.Close()
+		}
+		var err error
+		r.dib, err = newDIB(w, h)
+		if err != nil {
+			return
+		}
 	}
-	defer dib.Close()
+	dib := r.dib
 	dib.clear()
 
 	p, err := newPainter(windows.Handle(dib.dc))

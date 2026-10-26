@@ -54,16 +54,18 @@
 
 /* ── Apple Liquid Glass（苹果极光晶透液态玻璃） ── */
 [data-theme="glass"]{
-  --bg:#f0f3f8; --bg-soft:rgba(255,255,255,.55); --card:rgba(255,255,255,.68);
-  --border:rgba(255,255,255,.82); --border2:rgba(255,255,255,.95);
+  --serif:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC","Helvetica Neue",sans-serif;
+  --bg:#edf2f7; --bg-soft:rgba(255,255,255,.55); --card:rgba(255,255,255,.72);
+  --border:rgba(255,255,255,.75); --border2:rgba(255,255,255,.92);
   --text:#0f172a; --text2:#334155; --muted:#64748b; --faint:#94a3b8;
-  --accent:#2563eb; --accent2:#3b82f6; --accent-soft:rgba(37,99,235,.12);
-  --green:#059669; --green-soft:rgba(5,150,105,.14); --red:#dc2626; --red-soft:rgba(220,38,38,.14);
-  --yellow:#d97706; --yellow-soft:rgba(217,119,6,.14); --purple:#7c3aed; --purple-soft:rgba(124,58,237,.14);
-  --blue:#2563eb; --blue-soft:rgba(37,99,235,.14); --teal:#0d9488; --teal-soft:rgba(13,148,136,.14);
-  --pink:#db2777; --pink-soft:rgba(219,39,119,.14);
-  --shadow:0 8px 30px -4px rgba(100,116,139,.12),0 2px 8px rgba(100,116,139,.06);
-  --shadow-lift:0 16px 42px -6px rgba(100,116,139,.2),0 4px 16px rgba(100,116,139,.08);
+  --accent:#0071e3; --accent2:#2563eb; --accent-soft:rgba(0,113,227,.12);
+  --green:#34c759; --green-soft:rgba(52,199,89,.14); --red:#ff3b30; --red-soft:rgba(255,59,48,.14);
+  --yellow:#ff9500; --yellow-soft:rgba(255,149,0,.14); --purple:#af52de; --purple-soft:rgba(175,82,222,.14);
+  --blue:#0071e3; --blue-soft:rgba(0,113,227,.14); --teal:#30b0c7; --teal-soft:rgba(48,176,199,.14);
+  --pink:#ff2d55; --pink-soft:rgba(255,45,85,.14);
+  --shadow:0 8px 32px -4px rgba(100,116,139,.1),0 2px 8px rgba(100,116,139,.04);
+  --shadow-lift:0 16px 44px -6px rgba(15,23,42,.15),0 4px 16px rgba(15,23,42,.06);
 }
 [data-theme="glass"] body{
   background-color:#eff2f7;
@@ -76,22 +78,58 @@
   background-attachment:fixed;
   color:#0f172a;
 }
-[data-theme="glass"] .sidebar,
+/* ── Apple 多层级透光材质 (WWDC 材质深度与层级规范) ── */
+[data-theme="glass"] .sidebar{
+  background:rgba(255,255,255,.62) !important;
+  backdrop-filter:blur(36px) saturate(190%) !important;
+  -webkit-backdrop-filter:blur(36px) saturate(190%) !important;
+  border-right:1px solid rgba(255,255,255,.75) !important;
+  box-shadow:1px 0 24px rgba(100,116,139,.06) !important;
+}
+
 [data-theme="glass"] section,
 [data-theme="glass"] .card,
 [data-theme="glass"] .kpi-card,
 [data-theme="glass"] .gw-strip,
-[data-theme="glass"] .cap-card,
-[data-theme="glass"] .pub-card,
-[data-theme="glass"] .modal .box,
-[data-theme="glass"] #loginMask .box{
-  background:rgba(255,255,255,.68) !important;
+[data-theme="glass"] .pub-card{
+  background:rgba(255,255,255,.72) !important;
   backdrop-filter:blur(32px) saturate(190%) !important;
   -webkit-backdrop-filter:blur(32px) saturate(190%) !important;
-  border:1px solid rgba(255,255,255,.82) !important;
+  border:1px solid rgba(255,255,255,.8) !important;
   border-top:1.5px solid #ffffff !important;
-  box-shadow:inset 0 1px 1px 0 rgba(255,255,255,.95),0 8px 28px -6px rgba(100,116,139,.12),0 2px 8px rgba(100,116,139,.06) !important;
+  box-shadow:inset 0 1px 1px 0 rgba(255,255,255,.98),0 8px 28px -4px rgba(100,116,139,.08),0 2px 6px rgba(100,116,139,.03) !important;
+  border-radius:18px !important;
 }
+[data-theme="glass"] .modal{
+  background:rgba(15,23,42,.26) !important;
+  backdrop-filter:blur(16px) saturate(160%) !important;
+  -webkit-backdrop-filter:blur(16px) saturate(160%) !important;
+}
+[data-theme="glass"] .modal .box,
+[data-theme="glass"] #loginMask .box{
+  background:rgba(255,255,255,.88) !important;
+  backdrop-filter:blur(48px) saturate(200%) !important;
+  -webkit-backdrop-filter:blur(48px) saturate(200%) !important;
+  border:1px solid rgba(255,255,255,.95) !important;
+  border-top:2px solid #ffffff !important;
+  box-shadow:inset 0 1px 1.5px 0 #ffffff,0 24px 64px -12px rgba(15,23,42,.22),0 8px 24px -4px rgba(15,23,42,.1) !important;
+  border-radius:22px !important;
+}
+[data-theme="glass"] .cap-card,
+[data-theme="glass"] .chk,
+[data-theme="glass"] .topo-rule-banner,
+[data-theme="glass"] .urlbox{
+  background:rgba(241,245,249,.58) !important;
+  border:1px solid rgba(255,255,255,.75) !important;
+  backdrop-filter:blur(14px) !important;
+  border-radius:12px !important;
+}
+[data-theme="glass"] .cap-card:hover,
+[data-theme="glass"] .chk:hover{
+  background:rgba(255,255,255,.75) !important;
+  border-color:rgba(255,255,255,.9) !important;
+}
+
 [data-theme="glass"] input,
 [data-theme="glass"] select,
 [data-theme="glass"] textarea{
@@ -115,10 +153,10 @@
   box-shadow:0 4px 14px rgba(37,99,235,.18) !important;
 }
 [data-theme="glass"] .btn.primary{
-  background:linear-gradient(135deg,#2563eb,#3b82f6) !important;
+  background:linear-gradient(135deg,#0071e3,#2563eb) !important;
   border:1px solid rgba(255,255,255,.5) !important;
   color:#fff !important;
-  box-shadow:0 4px 14px rgba(37,99,235,.35) !important;
+  box-shadow:0 4px 14px rgba(0,113,227,.35) !important;
 }
 [data-theme="glass"] .btn.accent{
   background:linear-gradient(135deg,#e27b58,#ed8e6d) !important;
@@ -149,16 +187,16 @@
   backdrop-filter:blur(14px) !important;
 }
 [data-theme="glass"] .theme-segmented{
-  background:rgba(255,255,255,.5) !important;
+  background:rgba(15,23,42,.06) !important;
   border-color:rgba(255,255,255,.8) !important;
 }
 [data-theme="glass"] .ts-btn.active{
-  background:rgba(255,255,255,.95) !important;
+  background:#ffffff !important;
   color:#0f172a !important;
-  box-shadow:0 2px 8px rgba(0,0,0,.08) !important;
+  box-shadow:0 1px 3px rgba(15,23,42,.1),0 4px 12px -2px rgba(15,23,42,.08) !important;
 }
 [data-theme="glass"] .chk{
-  background:rgba(255,255,255,.5) !important;
+  background:rgba(15,23,42,.06) !important;
   border-color:rgba(255,255,255,.7) !important;
 }
 [data-theme="glass"] .chk .chk-ico{
@@ -179,24 +217,24 @@
 }
 
 /* Apple 弹簧触感缩放 (Tactile Spring Feedback) */
-.btn,.nav-item,.chip,.tab{
-  transition:transform .2s cubic-bezier(.2,.8,.25,1),box-shadow .2s cubic-bezier(.2,.8,.25,1),border-color .16s,background .16s,color .16s;
+.btn,.nav-item,.chip,.tab,.ts-btn,.prov-card,.copy-btn,.xbtn{
+  transition:transform .18s cubic-bezier(.16,1,.3,1),box-shadow .18s cubic-bezier(.16,1,.3,1),border-color .14s,background .14s,color .14s;
 }
-.btn:active,.nav-item:active,.chip:active,.tab:active{
-  transform:scale(.965) !important;
+.btn:active,.nav-item:active,.chip:active,.tab:active,.ts-btn:active,.prov-card:active,.copy-btn:active,.xbtn:active{
+  transform:scale(.965) !important;transition:transform 80ms cubic-bezier(.2,0,0,1) !important;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html{scroll-behavior:smooth}
-body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.55;
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;text-rendering:optimizeLegibility;
   background-image:radial-gradient(1200px 500px at 85% -10%,rgba(217,119,87,.06),transparent 60%)}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 ::selection{background:var(--accent-soft)}
 
 /* ── 动画 ─────────────────────────────── */
-@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-@keyframes modalIn{from{opacity:0;transform:translateY(10px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
-@keyframes toastIn{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:translateX(0)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes modalIn{from{opacity:0;transform:scale(.94) translateY(10px)}to{opacity:1;transform:scale(1) translateY(0)}}
+@keyframes toastIn{from{opacity:0;transform:translateY(14px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 @keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
 @keyframes spin{to{transform:rotate(360deg)}}
 
@@ -628,12 +666,12 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 .tab.active{color:var(--accent);background:var(--accent-soft);border-color:#eccdbd;font-weight:500}
 
 /* ── 主题分段切换器 (Segmented Control) ─── */
-.theme-segmented{display:flex;background:var(--bg-soft);border:1px solid var(--border);border-radius:10px;padding:2px;gap:2px}
-.ts-btn{flex:1;background:transparent;border:none;color:var(--muted);font-size:11px;padding:4px 6px;border-radius:8px;
-  cursor:pointer;transition:all .18s cubic-bezier(.2,.8,.25,1);font-family:var(--sans);white-space:nowrap;text-align:center}
+.theme-segmented{display:flex;background:rgba(0,0,0,.05);border:1px solid rgba(0,0,0,.04);border-radius:10px;padding:3px;gap:3px}
+.ts-btn{flex:1;background:transparent;border:none;color:var(--muted);font-size:11.5px;padding:4px 6px;border-radius:7px;
+  cursor:pointer;transition:all .18s cubic-bezier(.16,1,.3,1);font-family:var(--sans);white-space:nowrap;text-align:center;font-weight:500}
 .ts-btn:hover{color:var(--text)}
-.ts-btn.active{background:var(--card);color:var(--text);font-weight:600;box-shadow:var(--shadow)}
-[data-theme="glass"] .ts-btn.active{background:rgba(255,255,255,.95) !important;color:#0f172a !important;box-shadow:0 2px 8px rgba(0,0,0,.08) !important}
+.ts-btn.active{background:#fff;color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08),0 3px 8px -2px rgba(0,0,0,.06)}
+[data-theme="glass"] .ts-btn.active{background:#ffffff !important;color:#0f172a !important;box-shadow:0 1px 3px rgba(15,23,42,.1),0 4px 12px -2px rgba(15,23,42,.08) !important;border:0.5px solid rgba(255,255,255,.9) !important}
 
 /* ── Toast ────────────────────────────── */
 #toast{position:fixed;bottom:26px;right:26px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--green);
@@ -641,6 +679,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 #toast.show{display:block;animation:toastIn .3s cubic-bezier(.2,.8,.25,1) both}
 #toast.hide{animation:toastOut .25s both}
 #toast.err{border-left-color:var(--red)}
+[data-theme="glass"] #toast{background:rgba(255,255,255,.86) !important;backdrop-filter:blur(36px) saturate(200%) !important;-webkit-backdrop-filter:blur(36px) saturate(200%) !important;border:1px solid rgba(255,255,255,.92) !important;border-top:1.5px solid #ffffff !important;box-shadow:inset 0 1px 1px #fff,0 16px 40px -8px rgba(15,23,42,.18),0 4px 12px rgba(15,23,42,.08) !important;border-radius:99px !important;color:#0f172a !important}
 
 .empty{text-align:center;color:var(--faint);padding:28px;font-size:13px}
 .muted{color:var(--muted)}
@@ -666,6 +705,29 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 }
 @media (max-width:540px){
   .kpi-grid{grid-template-columns:1fr}
+}
+/* ── Apple 光学排版字偶距规范 (WWDC UI Typography) ── */
+.view-title,.modal h3{letter-spacing:-0.02em !important}
+.kpi-val,.cap-num,.card .value{letter-spacing:-0.025em !important;font-variant-numeric:tabular-nums}
+section h2{letter-spacing:0.04em !important}
+
+/* ── Apple 原生极简晶润滚动条 ── */
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(148,163,184,.35);border-radius:99px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(148,163,184,.55);border:2px solid transparent;background-clip:content-box}
+
+/* ── Apple 无障碍规范支持 (Reduced Motion & Reduced Transparency) ── */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important;scroll-behavior:auto !important}
+  .modal.open .box,#toast.show{transform:none !important}
+}
+@media (prefers-reduced-transparency:reduce){
+  [data-theme="glass"] section,
+  [data-theme="glass"] .sidebar,
+  [data-theme="glass"] .card,
+  [data-theme="glass"] .kpi-card,
+  [data-theme="glass"] .modal .box{background:#fff !important;backdrop-filter:none !important;-webkit-backdrop-filter:none !important}
 }
 </style>
 </head>
@@ -760,16 +822,16 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
             <div class="topo-header">
               <div class="topo-title">
                 <span class="live-dot" style="background:#10b981;box-shadow:0 0 0 3px rgba(16,185,129,.25)"></span>
-                <span>路由 · 实时：网关正在做的决定</span>
+                <span>智能路由调度 · 实时链路决策引擎</span>
               </div>
               <div class="topo-meta">
-                <span class="topo-badge" id="topoModelBadge">DeepSeek-V3 · 动态路由组</span>
-                <span class="topo-subtext">启用 <b id="topoAcctCount">7</b> 个账号 · 实时多 Agent 并发就绪</span>
+                <span class="topo-badge" id="topoModelBadge">DeepSeek-V3 · 动态路由拓扑</span>
+                <span class="topo-subtext">纳管 <b id="topoAcctCount">7</b> 个上游实例 · 多客户端并发接入就绪</span>
               </div>
             </div>
             <div class="topo-rule-banner">
               <span class="ico">🔄</span>
-              <span class="txt"><b>轮流调度策略</b>：会话的下一轮交给上一轮回答者的下一个账号，新会话递增轮询；一轮之内锁定账号保持提示词缓存 (Prompt Cache)。</span>
+              <span class="txt"><b>负载均衡与会话亲和策略</b>：新会话采用实例轮询（Round-Robin）分配；多轮交互启用会话亲和（Session Affinity）锁定，以最大化提示词缓存（Prompt Cache）命中率。</span>
             </div>
 
             <div class="topo-canvas-wrap" id="topoCanvasWrap">
@@ -809,7 +871,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
                     </div>
                     <div class="th-name">ChinaCPA 网关</div>
                     <div class="th-addr" id="topoHubAddr">127.0.0.1:8313</div>
-                    <div class="th-badge">轮询调度 · 亲和缓存</div>
+                    <div class="th-badge">负载均衡 · 会话亲和</div>
                   </div>
                 </div>
 
@@ -822,23 +884,23 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 
             <!-- 底部实时决策流水滚动条 -->
             <div class="topo-ticker">
-              <span class="tt-tag">实时决定</span>
-              <span class="tt-log" id="topoTickerText">网关就绪 · 等待 Agent 请求或自动保活调度…</span>
+              <span class="tt-tag">链路决策</span>
+              <span class="tt-log" id="topoTickerText">网关服务就绪 · 实时监听上游链路调度与保活心跳…</span>
             </div>
           </section>
 
           <section style="margin-bottom:0">
-            <h2>各平台额度与剩余能力 <span class="h2-extra">支持全部 6 大平台 · 自动刷新</span></h2>
+            <h2>各服务商配额与实时容量 <span class="h2-extra">纳管主流上游服务商 · 实时同步</span></h2>
             <div class="cap-grid" id="dashCap"></div>
           </section>
 
           <section style="margin-bottom:0">
-            <h2>今日模型调用分布 <span class="h2-extra">按请求模型归集 · 包含费用与请求数</span></h2>
+            <h2>模型调用分布与用量审计 <span class="h2-extra">按模型统计调用频次、Token 用量与折合成本</span></h2>
             <div id="modelBars"></div>
           </section>
 
           <section style="margin-bottom:0">
-            <h2>渠道调用统计与容灾 <span class="h2-extra">发布模型上游渠道成功/失败次数（含失败转移）</span></h2>
+            <h2>上游链路质量与容灾统计 <span class="h2-extra">渠道调用成功率与高可用故障转移审计</span></h2>
             <div id="chanStats"></div>
           </section>
         </div>
@@ -846,19 +908,19 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
         <!-- 右主栏：运行自检（紧凑微坞） + 历史统计趋势 + 签到流水 -->
         <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
           <section style="margin-bottom:0" class="compact-sec">
-            <h2>运行自检机制 <span class="h2-extra">调度、保活与状态</span></h2>
+            <h2>系统服务状态与机制巡检 <span class="h2-extra">调度集群、心跳保活与自动化任务</span></h2>
             <div class="check-dock" id="dashCheck"></div>
           </section>
 
           <section style="margin-bottom:0" class="compact-sec">
-            <h2>使用历史与近 7 日趋势 <span class="h2-extra">本地持久化数据库</span></h2>
+            <h2>历史用量走势与数据归档 <span class="h2-extra">本地持久化数据仓库</span></h2>
             <div class="hist-top" id="dashHist"></div>
             <div class="bars" id="dashHistBars" style="height:110px;margin-bottom:12px"></div>
             <div id="dashHistTbl"></div>
           </section>
 
           <section style="margin-bottom:0" class="compact-sec">
-            <h2>每日自动签到流水 <span class="h2-extra" id="checkinExtra"></span></h2>
+            <h2>自动化任务与签到日志 <span class="h2-extra" id="checkinExtra"></span></h2>
             <div class="chipwrap" id="checkinChips"></div>
           </section>
         </div>
@@ -923,14 +985,14 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
         <div class="tblwrap" id="acctWrap">
         <table id="acctTable">
           <thead><tr>
-            <th>平台</th><th>账号</th><th>剩余额度</th><th>已用</th><th>额度明细</th><th>今日签到</th><th>Token 有效期</th><th>状态</th><th>操作</th>
+            <th>平台</th><th>账号</th><th>剩余额度</th><th>已用</th><th>额度明细</th><th>今日签到</th><th>Token 有效期</th><th>运行中</th><th>状态</th><th>操作</th>
           </tr></thead>
           <tbody></tbody>
         </table>
         </div>
         <div class="empty" id="acctEmpty" style="display:none">
-          暂无账号，点击左下角「＋ 添加账号」纳管第一个账号<br>
-          <span class="mini" style="color:var(--faint)">支持 WorkBuddy / Qwen / Trae / Qoder 四平台，纳管后自动签到与拉取额度</span>
+          当前账号池暂未接入任何服务商凭据，请点击右上角「＋ 添加账号」接入上游实例<br>
+          <span class="mini" style="color:var(--faint)">支持 WorkBuddy / Qwen / Trae / Qoder / 千问办公 / 豆包 等平台，接入后自动执行凭据托管与额度同步</span>
         </div>
       </section>
     </div>
@@ -942,7 +1004,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
         <div class="view-status" id="gqCount"></div>
       </div>
       <section>
-        <div class="hint" style="margin-bottom:14px">豆包网页端无公开额度接口，此页为<b>本地按账号日计数</b>（图片按张、视频按条、对话按次；提交成功即计数，跨日自动清零，服务重启清零）。达到上限的账号会被自动冷却并切到下一个豆包账号。每日上限在 config.json <code>doubao.image_daily_limit</code> / <code>doubao.video_daily_limit</code> 配置（默认 图片 50 / 视频 10）。</div>
+        <div class="hint" style="margin-bottom:14px">因豆包服务商未开放公开配额查询端点，本模块采用<b>本地实例级日用量审计</b>机制（按提交成功事件原子计数：图片以张计、视频以条计、文本以次计；跨日自动归零）。当单一实例达到限额阈值时，网关将自动置入冷却隔离并触发故障转移至备用实例。每日阈值可在 <code>config.json</code> 中的 <code>doubao.image_daily_limit</code> 及 <code>doubao.video_daily_limit</code> 进行配置。</div>
         <div class="tblwrap">
         <table id="genQuotaTable">
           <thead><tr>
@@ -951,7 +1013,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
           <tbody></tbody>
         </table>
         </div>
-        <div class="empty" id="gqEmpty" style="display:none">暂无豆包账号：左下角「添加账号 → 豆包」扫码纳管后，这里会展示各账号的每日生成额度消耗</div>
+        <div class="empty" id="gqEmpty" style="display:none">暂无已接入的豆包实例：请在「添加账号」中完成移动端扫码鉴权，接入后系统将自动呈现各实例每日多模态配额消耗走势</div>
       </section>
     </div>
 
@@ -978,16 +1040,16 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
     <div class="view" id="view-publish">
       <div class="view-head">
         <div class="view-title">模型发布</div>
-        <div class="view-status">对外模型 → 多渠道归组</div>
+        <div class="view-status">对外统一模型标识符 ➔ 上游集群拓扑映射</div>
       </div>
       <section>
         <h2>发布列表
           <span style="display:flex;gap:10px;align-items:center;font-weight:400;text-transform:none;letter-spacing:0">
             <span class="h2-extra" style="display:flex;align-items:center;gap:4px">$1 = ¥<input id="usdCny" type="number" step="0.05" min="0" style="width:70px;padding:3px 8px;font-size:12px" onchange="saveUsdCny()"></span>
-            <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 新建模型</button>
+            <button class="btn sm accent" onclick="openModelEditor(-1)">＋ 创建路由模型</button>
           </span>
         </h2>
-        <div class="hint" style="margin-bottom:14px">对外只暴露这里发布的模型：<b>一个模型名 → 多个上游渠道</b>。渠道策略可选「优先级」（默认，始终先走第 1 个渠道，失败才切下一个）或「轮询均衡」（每次请求按渠道轮转起点）；渠道内多账号按会话黏性分配（同一会话固定同一账号保上游缓存）。客户端写 <code>{"model":"发布模型名"}</code> 即可，对话模型单价（$/1M tokens）用于费用估算，图片/视频模型按 $/次 计。未配置发布模型时默认暴露全部内部模型。<br>类型选<b>图片</b>/<b>视频</b>可发布生成类模型（如豆包 Seedream/Seedance）：图片走 <code>POST /v1/images/generations</code>，视频走 <code>POST /api/v3/contents/generations/tasks</code>（火山方舟任务协议，视频按任务成功计费）。</div>
+        <div class="hint" style="margin-bottom:14px">网关端点仅对外暴露在此配置的模型定义：<b>单一路由模型名 ➔ 映射至多个上游渠道</b>。调度策略可选「优先级容灾」（默认按次序执行主备容灾切换）或「轮询负载均衡」（多渠道均匀分担流量）；渠道内部多实例默认启用会话亲和锁定（保持上游 Prompt Cache 高命中率）。客户端仅需在请求体指定 <code>{"model":"路由模型名"}</code> 即可；对话模型定价用于调用成本审计，多模态模型支持按次计费。若未配置任何发布模型，网关默认直接透传所有内部模型。<br>支持<b>图片</b>与<b>视频</b>生成模型接入（如豆包 Seedream / Seedance 引擎）：图片标准端点 <code>POST /v1/images/generations</code>，视频异步生成支持火山方舟任务协议 <code>POST /api/v3/contents/generations/tasks</code>。</div>
         <div class="pub-grid" id="pubGrid"></div>
       </section>
     </div>
@@ -996,7 +1058,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
     <div class="view" id="view-models">
       <div class="view-head">
         <div class="view-title">模型倍率</div>
-        <div class="view-status">各平台原始模型与 credits 系数</div>
+        <div class="view-status">各平台原生模型库与基准计价倍率</div>
       </div>
       <section>
         <h2>各平台模型 · 计价倍率
@@ -1005,7 +1067,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
             <button class="btn sm" onclick="loadModels(true)">↻ 强制刷新</button>
           </span>
         </h2>
-        <div class="hint" style="margin-bottom:14px">各平台自动拉取的原始模型与官方计价倍率（credits 系数，越低越省积分）。可直接 <code>平台:模型</code> 调用，或在「模型发布」里挂为渠道。</div>
+        <div class="hint" style="margin-bottom:14px">系统已同步各上游服务商提供的官方原生模型及其基准计费系数（Credits 消耗倍率）。支持通过 <code>服务商:模型ID</code> 格式直接调用，或在「模型发布」中配置为聚合路由渠道。</div>
         <div class="tabs" id="modelTabs"></div>
         <div class="tblwrap">
         <table id="modelTable">
@@ -1022,8 +1084,8 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 <!-- 添加账号弹窗 -->
 <div class="modal" id="addModal">
   <div class="box">
-    <h3>添加账号 <button class="xbtn" onclick="closeAdd()">✕</button></h3>
-    <div class="m-sub">选择平台发起授权，或直接粘贴已有凭证</div>
+    <h3>接入上游服务商实例 <button class="xbtn" onclick="closeAdd()">✕</button></h3>
+    <div class="m-sub">选择上游服务商发起鉴权授权，或直接导入既有凭据</div>
     <div class="prov-grid">
       <div class="prov-card" onclick="startLogin('workbuddy')">
         <div class="t" style="color:var(--blue)">WorkBuddy 国内版</div><div class="d">腾讯 CodeBuddy<br>OAuth 浏览器登录</div>
@@ -1052,8 +1114,8 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
     </div>
     <div id="loginFlow"></div>
     <div style="margin-top:18px;border-top:1px solid var(--border);padding-top:16px">
-      <div style="font-weight:600;margin-bottom:4px;font-size:13px">或直接粘贴登录凭证</div>
-      <p class="hint" id="importHint">WorkBuddy：refreshToken / auth 文件 JSON（国际版选「WorkBuddy 国际」）；Qwen：<code>邮箱:密码</code> 自动登录（最省事）或整串 Cookie（最稳，含 token=）；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）；千问办公：ory_rt_ 开头的 refresh token；豆包：www.doubao.com 任一请求的完整 Cookie 头（需含 s_v_web_id 与 sessionid）。</p>
+      <div style="font-weight:600;margin-bottom:4px;font-size:13px">或直接导入服务商鉴权凭据</div>
+      <p class="hint" id="importHint">WorkBuddy：refreshToken / auth 文件 JSON（国际版选「WorkBuddy 国际」）；Qwen：<code>邮箱:密码</code> 自动凭据认证（推荐，免提取）或完整 Cookie 标头（高稳定性，包含 token=）；Trae：refreshToken（国际版加前缀 global:）；Qoder：控制台 PAT（国际版前缀 global:）；千问办公：ory_rt_ 开头的 refresh token；豆包：www.doubao.com 任一请求的完整 Cookie 标头（需含 s_v_web_id 与 sessionid）。</p>
       <select id="importProv" style="margin-right:8px">
         <option value="workbuddy">WorkBuddy 国内</option>
         <option value="workbuddy-intl">WorkBuddy 国际</option>
@@ -1065,7 +1127,7 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
         <option value="doubao">豆包 Doubao</option>
       </select>
       <textarea id="importCred" placeholder="粘贴凭证..."></textarea>
-      <button class="btn primary" onclick="doImport()">导入凭证</button>
+      <button class="btn primary" onclick="doImport()">导入并验证凭据</button>
       <div class="status-line" id="importStatus"></div>
     </div>
   </div>
@@ -1075,10 +1137,10 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
 <div class="modal" id="modelModal">
   <div class="box wide">
     <h3 id="mmTitle">新建发布模型 <button class="xbtn" onclick="closeModelEditor()">✕</button></h3>
-    <div class="m-sub">对外暴露一个模型名，实际由下方多个上游渠道轮询提供</div>
+    <div class="m-sub">定义网关对外统一模型标识符，智能路由至底层多个上游服务商实例集群</div>
     <div style="display:flex;gap:10px">
       <div style="flex:1">
-        <label class="f">对外模型名（客户端 model 参数）</label>
+        <label class="f">对外模型标识符（客户端 model 参数）</label>
         <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / my-seedream / my-seedance">
       </div>
       <div style="width:220px">
@@ -1099,13 +1161,13 @@ label.f{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px}
     </div>
     <label class="f">备注（可选）</label>
     <input id="mmNote" style="width:100%" placeholder="显示在面板上的备注名">
-    <label class="f" id="mmPriceLabel">单价（$/1M tokens，用于费用估算，留空不计价；缓存价未填时缓存按输入价计）</label>
+    <label class="f" id="mmPriceLabel">模型定价规则（$/1M tokens，用于用量与成本核算，留空不计价；未填缓存价时按输入价计）</label>
     <div style="display:flex;gap:10px">
       <div style="flex:1"><input id="mmIn" type="number" step="0.0001" min="0" style="width:100%" placeholder="输入价，如 0.002"></div>
       <div id="mmOutWrap" style="flex:1"><input id="mmOut" type="number" step="0.0001" min="0" style="width:100%" placeholder="输出价，如 0.008"></div>
       <div id="mmCacheWrap" style="flex:1"><input id="mmCache" type="number" step="0.0001" min="0" style="width:100%" placeholder="缓存价，如 0.0002"></div>
     </div>
-    <label class="f" id="mmChLabel">上游渠道（按优先级排列：始终先走第 1 个，失败才切下一个；渠道内多账号按会话黏性分配）</label>
+    <label class="f" id="mmChLabel">上游路由渠道（按优先级排列：主渠道异常自动触发故障转移；渠道内实例支持会话亲和锁定）</label>
     <div id="mmChannels"></div>
     <button class="btn sm" onclick="addEdChannel()" style="margin-top:4px">＋ 添加渠道</button>
     <datalist id="chModels"></datalist>
@@ -1274,23 +1336,23 @@ function renderGatewayStrip(o){
     </div>
     <div class="sep"></div>
     <div class="gw-item">
-      <span class="k">API 密钥</span>
+      <span class="k">服务密钥</span>
       <code>${esc(displayKey)}</code>
       <button class="copy-btn" onclick="toggleKeyMask()" title="${KEY_MASKED?'显示完整密钥':'隐藏密钥'}">${KEY_MASKED?'👁':'🔒'}</button>
-      <button class="copy-btn" onclick="copyText('${esc(key)}','已复制 API 密钥')">📋 复制</button>
+      <button class="copy-btn" onclick="copyText('${esc(key)}','已复制服务密钥')">📋 复制</button>
     </div>
     <div class="sep"></div>
     <div class="gw-item">
-      <span class="k">发布模型</span>
-      <a href="#publish" onclick="switchView('publish')" style="font-weight:600;font-variant-numeric:tabular-nums">${pubLen?pubLen+' 个':'全部内部模型'} →</a>
+      <span class="k">路由模型</span>
+      <a href="#publish" onclick="switchView('publish')" style="font-weight:600;font-variant-numeric:tabular-nums">${pubLen?pubLen+' 个规则':'透传全部内部模型'} →</a>
     </div>
     <div class="sep"></div>
     <div class="gw-item">
-      <span class="k">汇率</span>
+      <span class="k">基准汇率</span>
       <b>$1 = ¥${o.usd_cny||'7.20'}</b>
     </div>
     <div class="gw-item" style="margin-left:auto">
-      <span class="k">数据目录</span>
+      <span class="k">存储目录</span>
       <code>${esc(o.data_dir||'./data')}</code>
     </div>
   `;
@@ -1307,25 +1369,25 @@ function renderAlertBanner(o){
     const t=reloginAccs[0];
     el.className='alert-banner err';el.style.display='flex';
     el.innerHTML=`<span style="font-size:18px">⚠</span>
-      <div class="msg"><b>检测到 ${reloginAccs.length} 个账号凭证失效（需重新登录）：</b>${esc(PROV_NAMES[t.provider]||t.provider)} (${esc(t.nickname||t.uid)})，已暂停路由调度避免请求中断。</div>
+      <div class="msg"><b>检测到 ${reloginAccs.length} 个上游服务商凭据鉴权失效：</b>${esc(PROV_NAMES[t.provider]||t.provider)} (${esc(t.nickname||t.uid)})，网关已暂时隔离故障实例以保障集群可用性。</div>
       <div class="actions">
-        <button class="btn sm" onclick="act('${t.provider}','${t.uid}','resume')">一键恢复尝试</button>
-        <button class="btn sm primary" onclick="openAdd()">重新纳管</button>
+        <button class="btn sm" onclick="act('${t.provider}','${t.uid}','resume')">连接重试</button>
+        <button class="btn sm primary" onclick="openAdd()">重新鉴权</button>
       </div>`;
   }else if(expiredAccs.length>0){
     const t=expiredAccs[0];
     el.className='alert-banner warn';el.style.display='flex';
     el.innerHTML=`<span style="font-size:18px">⌛</span>
-      <div class="msg"><b>检测到账号 Token 已过期：</b>${esc(PROV_NAMES[t.provider]||t.provider)} (${esc(t.nickname||t.uid)})。</div>
+      <div class="msg"><b>上游访问令牌（Access Token）已过期：</b>${esc(PROV_NAMES[t.provider]||t.provider)} (${esc(t.nickname||t.uid)})，系统正尝试执行自动刷新。</div>
       <div class="actions">
         <button class="btn sm" onclick="act('${t.provider}','${t.uid}','quota')">刷新凭证</button>
-        <button class="btn sm primary" onclick="openAdd()">重新登录</button>
+        <button class="btn sm primary" onclick="openAdd()">重新授权</button>
       </div>`;
   }else if(cooldownAccs.length>0){
     el.className='alert-banner warn';el.style.display='flex';
     el.innerHTML=`<span style="font-size:18px">⏳</span>
-      <div class="msg"><b>账号限流保护中：</b>当前有 ${cooldownAccs.length} 个账号触发了服务商风控限流，网关已自动进行流量避让与失败转移。</div>
-      <div class="actions"><button class="btn sm" onclick="switchView('accounts')">查看账号池</button></div>`;
+      <div class="msg"><b>上游实例熔断与限流保护：</b>当前有 ${cooldownAccs.length} 个实例触发服务商并发或配额限流阈值，网关已执行流量旁路与故障转移。</div>
+      <div class="actions"><button class="btn sm" onclick="switchView('accounts')">查看实例池</button></div>`;
   }else{
     el.style.display='none';
   }
@@ -1349,7 +1411,7 @@ function renderKPI(o){
 
   el.innerHTML=`
     <div class="kpi-card" style="--i:0">
-      <div class="kpi-label"><span>今日 Token 吞吐</span><span class="tag p-wb">实时统计</span></div>
+      <div class="kpi-label"><span>今日 Token 吞吐量</span><span class="tag p-wb">实时流计量</span></div>
       <div class="kpi-val" id="kpiTotalTk">${totalTk?fmt(totalTk):'0'}</div>
       <div class="kpi-sub">
         <span>输入 ${fmt(promptTk)}</span> · <span>输出 ${fmt(compTk)}</span>
@@ -1357,24 +1419,24 @@ function renderKPI(o){
       </div>
     </div>
     <div class="kpi-card" style="--i:1">
-      <div class="kpi-label"><span>预估调用成本</span><span class="tag plain">$1=¥${o.usd_cny||'7.2'}</span></div>
+      <div class="kpi-label"><span>预估折合成本</span><span class="tag plain">$1=¥${o.usd_cny||'7.2'}</span></div>
       <div class="kpi-val" style="color:var(--accent)">${fmtCNY(cost)}</div>
       <div class="kpi-sub">
-        <span>今日调用 ${fmt(reqs)} 次</span> · <span>发布单价优先</span>
+        <span>调用频次 ${fmt(reqs)} 次</span> · <span>依据模型定价规则核算</span>
       </div>
     </div>
     <div class="kpi-card" style="--i:2">
-      <div class="kpi-label"><span>账号池可用度</span><span class="tag ${online===totalAcc&&totalAcc>0?'ok':'cooldown'}">${online}/${totalAcc} 在线</span></div>
-      <div class="kpi-val" style="color:${online===totalAcc&&totalAcc>0?'var(--green)':'var(--yellow)'}">${online} <span style="font-size:16px;color:var(--muted)">/ ${totalAcc} 正常</span></div>
+      <div class="kpi-label"><span>上游实例可用率</span><span class="tag ${online===totalAcc&&totalAcc>0?'ok':'cooldown'}">${online}/${totalAcc} 就绪</span></div>
+      <div class="kpi-val" style="color:${online===totalAcc&&totalAcc>0?'var(--green)':'var(--yellow)'}">${online} <span style="font-size:16px;color:var(--muted)">/ ${totalAcc} 实例就绪</span></div>
       <div class="kpi-sub">
-        <span>纳管 ${Object.keys(o.provider_count||{}).length} 平台</span> · <span>今日已签 ${signed}/${totalAcc}</span>
+        <span>接入 ${Object.keys(o.provider_count||{}).length} 大服务商</span> · <span>自动化巡检 ${signed}/${totalAcc}</span>
       </div>
     </div>
     <div class="kpi-card" style="--i:3">
-      <div class="kpi-label"><span>调度与请求质量</span><span class="tag p-trae">高可用</span></div>
+      <div class="kpi-label"><span>网关调度吞吐量</span><span class="tag p-trae">高可用集群</span></div>
       <div class="kpi-val">${reqs?fmt(reqs):'0'}<span style="font-size:14px;color:var(--muted)"> 次请求</span></div>
       <div class="kpi-sub">
-        <span>多渠道自动故障转移</span> · <span style="color:var(--green)">SSE 流式支持</span>
+        <span>高可用多级容灾调度</span> · <span style="color:var(--green)">SSE 流式传输支持</span>
       </div>
     </div>
   `;
@@ -1398,17 +1460,17 @@ function renderCapCards(o){
   });
 
   const cards=[
-    {pid:'workbuddy',name:'WorkBuddy (腾讯)',unit:'积分',val:o.total_credits||0,desc:'CodeBuddy 资源包 · 自动领奖',count:(o.provider_count||{})['workbuddy']||0},
-    {pid:'trae',name:'Trae (字节 SOLO)',unit:'积分',val:o.total_ide_credits||0,desc:'PKCE 授权 · 每日 +200 签到',count:(o.provider_count||{})['trae']||0},
-    {pid:'qwen',name:'Qwen 通义千问',unit:'次/天',val:o.qwen_remaining||0,isCapped:true,max:2000*Math.max(1,(o.provider_count||{})['qwen']||1),desc:'网页免费额度 · 自动硬限切号',count:(o.provider_count||{})['qwen']||0},
-    {pid:'qoder',name:'Qoder (阿里)',unit:'credits',val:o.qoder_remaining||0,desc:'PAT 纳管 · 每日积分活动自动领取',count:((o.provider_count||{})['qoder']||0)+((o.provider_count||{})['qoder-intl']||0)},
-    {pid:'qwenwork',name:'千问办公 QwenWork',unit:'积分',val:o.qwenwork_remaining||0,desc:'钉钉授权 · 每日登录发放 100~200 积分',count:(o.provider_count||{})['qwenwork']||0},
-    {pid:'doubao',name:'豆包 Doubao (字节)',unit:'日额度',val:dbImagesLimit>0?(dbImagesLimit-dbImagesUsed):dbCount,isDoubao:true,dbData:{imagesUsed:dbImagesUsed,imagesLimit:dbImagesLimit,videosUsed:dbVideosUsed,videosLimit:dbVideosLimit,chats:dbChats},desc:'App 扫码 · 文 / Seedream 图 / Seedance 视频',count:dbCount}
+    {pid:'workbuddy',name:'WorkBuddy (腾讯)',unit:'积分',val:o.total_credits||0,desc:'CodeBuddy 开发者资源包 · 自动领用结算',count:(o.provider_count||{})['workbuddy']||0},
+    {pid:'trae',name:'Trae (字节 SOLO)',unit:'积分',val:o.total_ide_credits||0,desc:'OAuth PKCE 协议授权 · 每日配额巡检续期',count:(o.provider_count||{})['trae']||0},
+    {pid:'qwen',name:'Qwen 通义千问',unit:'次/天',val:o.qwen_remaining||0,isCapped:true,max:2000*Math.max(1,(o.provider_count||{})['qwen']||1),desc:'Web 端免费配额池 · 熔断保护动态切流',count:(o.provider_count||{})['qwen']||0},
+    {pid:'qoder',name:'Qoder (阿里)',unit:'credits',val:o.qoder_remaining||0,desc:'PAT 访问令牌纳管 · 每日平台奖励自动入账',count:((o.provider_count||{})['qoder']||0)+((o.provider_count||{})['qoder-intl']||0)},
+    {pid:'qwenwork',name:'千问办公 QwenWork',unit:'积分',val:o.qwenwork_remaining||0,desc:'企业凭证授权 · 每日登录积分自动同步',count:(o.provider_count||{})['qwenwork']||0},
+    {pid:'doubao',name:'豆包 Doubao (字节)',unit:'日额度',val:dbImagesLimit>0?(dbImagesLimit-dbImagesUsed):dbCount,isDoubao:true,dbData:{imagesUsed:dbImagesUsed,imagesLimit:dbImagesLimit,videosUsed:dbVideosUsed,videosLimit:dbVideosLimit,chats:dbChats},desc:'移动端扫码鉴权 · 文本 / Seedream 绘图 / Seedance 视频',count:dbCount}
   ];
 
   el.innerHTML=cards.map((c,i)=>{
     const tagCls=PROV_TAG[c.pid]||'plain';
-    const countBadge=c.count?`<span class="tag ${tagCls}" style="padding:1px 7px;font-size:10.5px">${c.count} 账号</span>`:'<span class="tag plain" style="padding:1px 7px;font-size:10.5px">未纳管</span>';
+    const countBadge=c.count?`<span class="tag ${tagCls}" style="padding:1px 7px;font-size:10.5px">${c.count} 实例</span>`:'<span class="tag plain" style="padding:1px 7px;font-size:10.5px">未接入</span>';
 
     if(c.isDoubao){
       const d=c.dbData;
@@ -1448,7 +1510,7 @@ function renderCapCards(o){
       <div class="cap-num ${zero?'bad':''}">${fmt(c.val)} <span class="unit">${c.unit}</span></div>
       <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--green)">
         <span class="live-dot" style="width:6px;height:6px"></span>
-        <span>${c.count?'积分池活跃 · 自动调度':'暂未添加该平台账号'}</span>
+        <span>${c.count?'实例就绪 · 纳入集群调度':'未接入该服务商实例'}</span>
       </div>
       <div class="cap-extra">${c.desc}</div>
     </div>`;
@@ -1465,11 +1527,11 @@ function renderOverview(o){
   const provs=Object.entries(o.provider_count||{});
 
   $('#dashStatus').innerHTML=
-    `<span class="live-dot"></span>网关运行中 <code>${esc(host)}${esc(o.gateway_url||'/v1')}</code>`+
+    `<span class="live-dot"></span>网关核心运行中 <code>${esc(host)}${esc(o.gateway_url||'/v1')}</code>`+
     (accs.length
-      ?`<span>·</span>${accs.length} 个账号（${online} 正常${problems?`，${problems} 需关注`:''}）`
+      ?`<span>·</span>${accs.length} 个上游实例（${online} 可用${problems?`，${problems} 异常`:''}）`
         +`<span>·</span>${provs.map(([k,v])=>`${PROV_NAMES[k]||esc(k)} ×${v}`).join(' · ')}`
-      :`<span>·</span>暂无账号`);
+      :`<span>·</span>暂无已接入实例`);
 
   renderAlertBanner(o);
   renderGatewayStrip(o);
@@ -1479,7 +1541,7 @@ function renderOverview(o){
   renderCheckList(o);
   renderDashHist(o);
 
-  $('#acctCount').textContent=`共 ${o.account_total} 个账号 · ${provs.map(([k,v])=>`${PROV_NAMES[k]||k} ×${v}`).join(' · ')||'暂无'}`;
+  $('#acctCount').textContent=`纳管实例总数：${o.account_total} · ${provs.map(([k,v])=>`${PROV_NAMES[k]||k} ×${v}`).join(' · ')||'暂无'}`;
   renderModelBars(o);
   renderCheckin(o);
   renderAcctTable(o);
@@ -1526,7 +1588,7 @@ function renderTopology(o){
       targetCol.innerHTML = `
         <div class="topo-node-target" data-prov="none">
           <div class="t-ico">!</div>
-          <div><div class="t-name">暂无账号</div><div class="t-model">等待纳管账号</div></div>
+          <div><div class="t-name">暂无活跃实例</div><div class="t-model">等待上游实例接入</div></div>
         </div>`;
     } else {
       targetCol.innerHTML = provKeys.map((p, idx)=>{
@@ -1537,7 +1599,7 @@ function renderTopology(o){
           <div class="topo-node-target ${idx===0?'active':''}" data-prov="${esc(p)}" data-idx="${idx}">
             <div class="t-ico">${p.toUpperCase().slice(0,2)}</div>
             <div style="flex:1;min-width:0">
-              <div class="t-name">${esc(pName)} <span class="tag plain" style="padding:0 5px;font-size:10px">${g.count}个账号</span></div>
+              <div class="t-name">${esc(pName)} <span class="tag plain" style="padding:0 5px;font-size:10px">${g.count} 实例</span></div>
               <div class="t-model">${esc(modelStr)}</div>
             </div>
           </div>`;
@@ -1606,10 +1668,10 @@ function startTopologyTraffic(o){
   if(!clients.length || !targets.length) return;
 
   const simDecisions = [
-    { client: 'Go-http-client', sub: 'chat/completions', hit: 'WorkBuddy', reason: '轮流命中 · 保持提示词缓存', lat: '82ms' },
-    { client: 'Cursor IDE Agent', sub: 'deepseek-v3', hit: 'Trae', reason: '亲和路由 · 首字延迟 104ms', lat: '104ms' },
-    { client: 'OpenAI SDK Client', sub: 'v1/models', hit: 'Qoder', reason: '负载均衡 · 令牌充足', lat: '76ms' },
-    { client: 'Go-http-client', sub: 'chat/completions', hit: '豆包 Doubao', reason: '多模态分支 · Seedream 生成', lat: '120ms' },
+    { client: 'Go-http-client', sub: 'chat/completions', hit: 'WorkBuddy', reason: '会话亲和锁定 · Prompt Cache 命中', lat: '82ms' },
+    { client: 'Cursor IDE Agent', sub: 'deepseek-v3', hit: 'Trae', reason: '会话保持调度 · 首字延迟 104ms', lat: '104ms' },
+    { client: 'OpenAI SDK Client', sub: 'v1/models', hit: 'Qoder', reason: '权重轮询分配 · 实例配额充裕', lat: '76ms' },
+    { client: 'Go-http-client', sub: 'chat/completions', hit: '豆包 Doubao', reason: '协议路由分流 · Seedream 绘图生成', lat: '120ms' },
   ];
 
   function pulseCycle(){
@@ -1654,7 +1716,7 @@ function startTopologyTraffic(o){
       const clientName = clientEl ? (clientEl.querySelector('.tn-name')||{}).textContent||d.client : d.client;
       const now = new Date();
       const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
-      ticker.innerHTML = `[实时 ${timeStr}] 来自 <b>${esc(clientName)}</b> 请求 -> [ChinaCPA 网关中枢] -> 调度至 <b>${esc(targetName)}</b> · <span style="color:var(--green)">${esc(d.reason)}</span> · 延迟 ${d.lat}`;
+      ticker.innerHTML = `[链路事件 ${timeStr}] 客户端: <b>${esc(clientName)}</b> ➔ 调度中枢: ChinaCPA 网关 ➔ 目标实例: <b>${esc(targetName)}</b> ｜ 策略: <span style="color:var(--green)">${esc(d.reason)}</span> ｜ 耗时: ${d.lat}`;
     }
   }
 
@@ -1705,21 +1767,21 @@ function renderCheckList(o){
   const signed=accs.filter(a=>a.checkin_today&&a.checkin_today.ok).length;
   const pubLen=(PUB.models||[]).length;
   const checks=[
-    {t:'账号池就绪',d:accs.length?`${online}/${accs.length} 个就绪`:'尚未纳管账号',
+    {t:'上游实例就绪',d:accs.length?`${online}/${accs.length} 实例可用`:'未接入实例',
       s:accs.length?(online===accs.length?'ok':'warn'):'bad',ico:ICON.user,
-      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="switchView('accounts')">账号池</button>`},
-    {t:'模型发布策略',d:pubLen?`${pubLen} 个对外模型`:'未发布模型',
+      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="switchView('accounts')">实例管理</button>`},
+    {t:'路由映射策略',d:pubLen?`${pubLen} 个路由模型`:'未配置路由模型',
       s:pubLen?'ok':'idle',ico:ICON.cube,
-      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="switchView('publish')">模型管理</button>`},
-    {t:'每日自动签到',d:accs.length?`已签 ${signed}/${accs.length}${sch.next_checkin?' · 下次 '+nextCheckinText(sch.next_checkin):''}`:'无账号',
+      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="switchView('publish')">路由配置</button>`},
+    {t:'定时配额巡检',d:accs.length?`已同步 ${signed}/${accs.length}${sch.next_checkin?' · 下次巡检 '+nextCheckinText(sch.next_checkin):''}`:'无活跃实例',
       s:accs.length?(signed===accs.length?'ok':'warn'):'bad',ico:ICON.check,
-      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="checkinAll()">签到</button>`},
-    {t:'额度自动刷新',d:sch.quota_refresh_minutes?`每 ${sch.quota_refresh_minutes} 分钟刷新`:'未开启',
+      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="checkinAll()">立即巡检</button>`},
+    {t:'用量配额拉取',d:sch.quota_refresh_minutes?`周期：每 ${sch.quota_refresh_minutes} 分钟`:'未开启',
       s:sch.quota_refresh_minutes?'ok':'warn',ico:ICON.clock,
-      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="refreshAllQuotas()">刷新</button>`},
-    {t:'Token 凭证保活',d:(sch.token_refresh_hours||[]).length?`每日 ${(sch.token_refresh_hours||[]).join('/')} 点保活`:'未配置',
+      action:`<button class="btn sm" style="padding:2px 7px;font-size:11px;border-radius:6px" onclick="refreshAllQuotas()">强制同步</button>`},
+    {t:'凭证主动续期',d:(sch.token_refresh_hours||[]).length?`每日 ${(sch.token_refresh_hours||[]).join('/')} 时执行续期`:'未配置',
       s:(sch.token_refresh_hours||[]).length?'ok':'warn',ico:ICON.shield,
-      action:`<span style="font-size:11px;color:var(--green)">✓ 保活中</span>`},
+      action:`<span style="font-size:11px;color:var(--green)">✓ 运行中</span>`},
   ];
   el.innerHTML=checks.map((c,i)=>`<div class="chk" style="animation:fadeUp .3s both;animation-delay:${i*30}ms">
     <span class="chk-ico">${c.ico}</span>
@@ -1759,10 +1821,10 @@ function renderAcctTable(o){
       if(a.quota.detail&&a.quota.detail.packs)bits.push(a.quota.detail.packs+' 个权益包');
       detail=bits.join(' · ')||'—';
     }
-    if(a.status==='cooldown'){cls='cooldown';const cm=(a.cooldown_models||[]).join('、');txt=`冷却中${cm?`（${esc(cm)}）`:''}`}
+    if(a.status==='cooldown'){cls='cooldown';const cm=(a.cooldown_models||[]).join('、');txt=`限流保护中${cm?`（${esc(cm)}）`:''}`}
     if(a.status==='disabled'){cls='disabled';txt='已禁用'}
-    if(a.status==='expired'){cls='expired';txt='Token 过期'}
-    if(a.status==='relogin'){cls='expired';txt='需重新登录'}
+    if(a.status==='expired'){cls='expired';txt='令牌已过期'}
+    if(a.status==='relogin'){cls='expired';txt='凭证鉴权失效'}
     let chk='<span class="muted">—</span>';
     if(a.checkin_today){chk=a.checkin_today.ok?`<span class="tag ok">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`:`<span class="tag cooldown">${esc(a.checkin_today.message||'未签')}</span>`}
     const days=a.token_days_left;
@@ -1777,13 +1839,14 @@ function renderAcctTable(o){
       <td class="mini" style="white-space:normal;max-width:220px">${esc(detail)}</td>
       <td>${chk}</td>
       <td>${exp}</td>
+      <td>${a.inflight>0?`<span class="tag ok">运行中 ${a.inflight}</span>`:'<span class="muted">空闲</span>'}</td>
       <td><span class="tag ${cls}">${txt}</span></td>
       <td>
-        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','checkin')">签到</button>
-        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','quota')">刷额度</button>
+        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','checkin')">签到巡检</button>
+        <button class="btn sm" onclick="act('${a.provider}','${a.uid}','quota')">同步配额</button>
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','toggle')">${a.disabled?'启用':'禁用'}</button>
-        ${a.needs_relogin?`<button class="btn sm" onclick="act('${a.provider}','${a.uid}','resume')">恢复</button>`:''}
-        <button class="btn sm danger" onclick="delAcct('${a.provider}','${a.uid}')">删除</button>
+        ${a.needs_relogin?`<button class="btn sm" onclick="act('${a.provider}','${a.uid}','resume')">连接重试</button>`:''}
+        <button class="btn sm danger" onclick="delAcct('${a.provider}','${a.uid}')">移除</button>
       </td></tr>`);
   });
   // 空账号时由整块提示替代表格（我们的布局用 #acctWrap 包住表格）
@@ -1803,7 +1866,7 @@ function qbar(used,limit){
 function renderGenQuota(o){
   const tb=$('#genQuotaTable tbody');if(!tb)return;
   const list=(o.accounts||[]).filter(a=>a.provider==='doubao');
-  $('#gqCount').textContent=list.length?`${list.length} 个豆包账号`:'';
+  $('#gqCount').textContent=list.length?`${list.length} 个豆包实例`:'';
   $('#gqEmpty').style.display=list.length?'none':'block';
   const imgFull=a=>{const d=(a.quota&&a.quota.detail)||{};return d.images_limit>0&&(d.images_used_today||0)>=d.images_limit};
   const vidFull=a=>{const d=(a.quota&&a.quota.detail)||{};return d.videos_limit>0&&(d.videos_used_today||0)>=d.videos_limit};
@@ -1818,9 +1881,9 @@ function renderGenQuota(o){
       ||'<span class="muted">今日暂无生成</span>';
     const st=a.disabled?'<span class="tag disabled">已禁用</span>'
       :(a.quota&&a.quota.healthy===false)?'<span class="tag expired">凭证失效</span>'
-      :(imgFull(a)&&vidFull(a))?'<span class="tag expired">图/视频额度用完</span>'
-      :imgFull(a)?'<span class="tag cooldown">图片额度用完</span>'
-      :vidFull(a)?'<span class="tag cooldown">视频额度用完</span>'
+      :(imgFull(a)&&vidFull(a))?'<span class="tag expired">图/视频配额耗尽</span>'
+      :imgFull(a)?'<span class="tag cooldown">图片配额耗尽</span>'
+      :vidFull(a)?'<span class="tag cooldown">视频配额耗尽</span>'
       :'<span class="tag ok">可用</span>';
     return `<tr>
       <td><span class="tag p-doubao">DB</span> <span class="mini">${esc(a.nickname||a.uid)}</span></td>
@@ -1846,7 +1909,7 @@ function renderCards(el,cards){
 function renderModelBars(o){
   const list=(o.today_by_model||[]).slice().sort((a,b)=>b.total_tokens-a.total_tokens);
   const el=$('#modelBars');
-  if(!list.length){el.innerHTML='<div class="empty">今日暂无调用，发起一次请求后这里会显示各模型 token 占比</div>';return}
+  if(!list.length){el.innerHTML='<div class="empty">今日暂无调用记录：产生接口请求后此处将呈现各模型 Token 吞吐与成本占比</div>';return}
   const max=Math.max(1,...list.map(x=>x.total_tokens));
   el.innerHTML=list.map((u,i)=>`<div class="hbar-row" style="--i:${i}">
     <div class="hbar-label"><code>${esc(u.model)}</code></div>
@@ -1863,15 +1926,15 @@ function renderCheckin(o){
   const accs=o.accounts||[];
   const sch=o.schedule||{};
   $('#checkinExtra').textContent=sch.checkin_enabled
-    ?`自动签到已开启${(sch.checkin_hours||[]).length?`（每日 ${(sch.checkin_hours||[]).join('、')} 点）`:''}${(sch.tasks_enabled)?' · 含 WorkBuddy 任务中心':''}`
-    :'自动签到未开启（config.json → schedule.checkin_enabled）';
+    ?`自动化巡检已启用${(sch.checkin_hours||[]).length?`（每日 ${(sch.checkin_hours||[]).join('、')} 点）`:''}${(sch.tasks_enabled)?' · 含开发者任务中心':''}`
+    :'自动化定时巡检未启用（config.json → schedule.checkin_enabled）';
   $('#checkinChips').innerHTML=accs.length?accs.map((a,i)=>{
     let tag='<span class="tag plain">—</span>';
     if(a.checkin_today)tag=a.checkin_today.ok
       ?`<span class="tag ok">✓ ${a.checkin_today.already?'已签':'签到成功'}</span>`
       :`<span class="tag cooldown">${esc(String(a.checkin_today.message||'未签').slice(0,20))}</span>`;
     return `<span class="chip" style="--i:${i}">${esc(a.nickname||a.uid)}${tag}</span>`;
-  }).join(''):'<div class="empty">暂无账号</div>';
+  }).join(''):'<div class="empty">暂无已接入实例</div>';
 }
 
 /* ── 请求日志 ─────────────────────────── */
@@ -1896,11 +1959,11 @@ async function loadRequests(){
 function renderRequests(){
   if(!REQ)return;
   const s=REQ.stats||{};
-  $('#reqSub').textContent=`${REQ_RANGE_NAMES[REQ_RANGE]||REQ_RANGE} · 共 ${fmt(s.total)} 次 · 成功 ${fmt(s.ok)} / 失败 ${fmt(s.fail)}（本地数据库持久化，重启不丢）`;
+  $('#reqSub').textContent=`${REQ_RANGE_NAMES[REQ_RANGE]||REQ_RANGE} · 累计请求 ${fmt(s.total)} 次 · 成功率 ${s.total?((s.ok/s.total)*100).toFixed(1):100}%（成功 ${fmt(s.ok)} / 失败 ${fmt(s.fail)}）· 基于持久化审计日志`;
   renderCards($('#reqCards'),[
     {l:'请求数',n:s.total||0,c:'',s:`成功 ${fmt(s.ok)} · 失败 ${fmt(s.fail)}`},
     {l:'Token 用量',n:s.total_tokens||0,c:'blue',s:`输入 ${fmt(s.prompt_tokens)} / 输出 ${fmt(s.completion_tokens)}${s.cache_tokens>0?` / 缓存 ${fmt(s.cache_tokens)}`:''}`},
-    {l:'实际消费',v:fmtCNY(s.cost_cny||0),c:'accent',s:'按发布模型单价折算'},
+    {l:'折合成本',v:fmtCNY(s.cost_cny||0),c:'accent',s:'依据模型定价规则核算'},
     {l:'平均耗时',v:((s.avg_ms||0)/1000).toFixed(1)+' s',c:'purple',s:`平均首字 ${(s.avg_first_ms||0)/1000>0?((s.avg_first_ms||0)/1000).toFixed(2)+' s':'—'}`},
   ]);
   // 环形分布图（服务端按筛选范围聚合）
@@ -1976,7 +2039,7 @@ function renderChannelStats(){
     const st=chanStatOf(m.id,ch);
     rows.push({m,ch,st});
   }));
-  if(!rows.length){el.innerHTML='<div class="empty">还没有发布模型，去「模型发布」创建后这里显示各渠道成功/失败统计</div>';return}
+  if(!rows.length){el.innerHTML='<div class="empty">暂未配置发布模型：在「模型发布」创建路由模型后，此处将呈现上游各渠道成功与故障转移调用审计</div>';return}
   el.innerHTML=rows.map((r,i)=>{
     const total=r.st.ok+r.st.fail;
     const rate=total?Math.round(r.st.ok/total*100):0;
@@ -2018,7 +2081,7 @@ function renderUsage(us){
   }).join('');
   const tpt=us.totals?.prompt_tokens||0, tct=us.totals?.cache_tokens||0;
   const crate=tpt>0?Math.round(tct/tpt*100):0;
-  $('#usageSub').textContent=`今日合计 ${fmt(us.totals?.requests)} 次请求 / ${fmt(us.totals?.total_tokens)} tokens / 缓存命中 ${crate}%（${fmt(tct)}/${fmt(tpt)}） / ${fmtCNY(us.totals?.cost_cny)}`;
+  $('#usageSub').textContent=`今日累计调用 ${fmt(us.totals?.requests)} 次 ｜ 吞吐量 ${fmt(us.totals?.total_tokens)} Tokens ｜ 提示词缓存命中率 ${crate}%（${fmt(tct)}/${fmt(tpt)}） ｜ 累计折合成本 ${fmtCNY(us.totals?.cost_cny)}`;
   // 7 日柱状图（自适应 flex-track 架构，杜绝塌陷为 0）
   const hist=us.history||[];const max=Math.max(1,...hist.map(h=>h.total_tokens||0));
   const barsHtml=hist.map((h,i)=>{
@@ -2061,9 +2124,9 @@ function renderPublish(){
   const g=$('#pubGrid');
   if(!PUB.models.length){
     g.innerHTML=`<div class="empty-pub" style="grid-column:1/-1">
-      <div class="big">还没有发布任何模型</div>
-      <div style="margin-bottom:14px">发布后 <code>/v1/models</code> 只暴露你设置的模型，多渠道自动轮询</div>
-      <button class="btn accent" onclick="openModelEditor(-1)">＋ 新建第一个模型</button></div>`;
+      <div class="big">暂未配置任何发布模型</div>
+      <div style="margin-bottom:14px">配置后 <code>/v1/models</code> 将仅公开纳管模型，并启用多渠道智能调度与容灾熔断</div>
+      <button class="btn accent" onclick="openModelEditor(-1)">＋ 创建路由模型</button></div>`;
     return;
   }
   g.innerHTML=PUB.models.map((m,i)=>{
@@ -2234,7 +2297,7 @@ function renderModels(){
   });
   const list=(MODELS&&MODELS[MODEL_TAB])||[];
   const tb=$('#modelTable tbody');
-  if(!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">该平台暂无账号或模型列表获取失败（纳管账号后自动拉取）</td></tr>';return}
+  if(!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">当前服务商暂未接入有效实例，或原生模型目录正在同步中（接入实例后将自动拉取）</td></tr>';return}
   tb.innerHTML=list.map((m,i)=>`<tr style="--r:${i}"><td onclick="copyText('${esc(m.id)}','已复制模型 ID')" style="cursor:pointer" title="点击复制模型 ID"><code>${esc(m.id)} 📋</code>${m.kind&&m.kind!=='chat'?` <span class="tag plain">${m.kind==='image'?'图':'视频'}</span>`:''}</td><td onclick="copyText('${MODEL_TAB}:${esc(m.id)}','已复制直连名')" style="cursor:pointer" title="点击复制直连名"><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)} 📋</code></td><td class="mini">${esc(m.name||'—')}</td><td>${m.context_window?fmt(m.context_window):'—'}</td><td class="mini">${esc(m.credits||'—')}</td></tr>`).join('');
 }
 
@@ -2247,7 +2310,7 @@ async function act(provider,uid,action){
   setTimeout(()=>refreshAll(false),800);
 }
 async function delAcct(provider,uid){
-  if(!confirm('确认删除该账号凭证？'))return;
+  if(!confirm('确认移除该上游服务商实例凭据？'))return;
   await api('/api/accounts?provider='+provider+'&uid='+encodeURIComponent(uid),{method:'DELETE',body:JSON.stringify({provider,uid})});
   toast('已删除');setTimeout(()=>refreshAll(false),500);
 }
@@ -2260,8 +2323,8 @@ function presetImport(prov){
   const sel=$('#importProv');if(sel)sel.value=prov;
   const ta=$('#importCred');
   const hint=$('#importHint');
-  if(hint&&prov==='qwen')hint.innerHTML='<b style="color:var(--purple)">Qwen 导入方法（三选一）</b>：<br>① 直接粘贴 <code>邮箱:密码</code>（你的 chat.qwen.ai 登录邮箱和密码，冒号分隔）——面板自动登录并取 token，全自动；<br>② 粘贴整串 Cookie（最稳）：F12 → Network → 随便发一条消息 → 点开 <code>chat/completions</code> → 复制 Request Headers 里完整的 <code>Cookie:</code> 值；<br>③ Application → Local Storage → <code>token</code> 的值（对话可能被 WAF 拦）。<br>注：OAuth 设备码授权已被官方下线。';
-  if(hint&&prov==='doubao')hint.innerHTML='<b style="color:var(--accent2)">豆包导入方法</b>：浏览器登录 <code>www.doubao.com</code> → 按 <code>F12</code> 打开开发者工具 → <code>Network</code>（网络）→ 随便发一条消息 → 点开 <code>completion</code> 请求 → 在 <b>Request Headers</b> 里复制完整的 <code>Cookie:</code> 值粘贴到下面。<br>Cookie 必须包含 <code>sessionid</code>（登录态）和 <code>s_v_web_id</code>（风控指纹）。导入后可用：<code>doubao-chat</code> 对话、<code>seedream-5.0-flash</code> 等图片生成（/v1/images/generations）、<code>seedance-2.5</code> 等视频生成（火山方舟任务接口）。';
+  if(hint&&prov==='qwen')hint.innerHTML='<b style="color:var(--purple)">Qwen 凭据接入指南</b>：<br>① 直接输入 <code>邮箱:密码</code>（chat.qwen.ai 账号密码，半角冒号分隔）：网关将自动完成会话认证并提取访问令牌；<br>② 导入完整 Cookie 标头（推荐）：开发者工具 (F12) ➔ Network ➔ 触发任意对话请求 ➔ 审查 <code>chat/completions</code> ➔ 复制 Request Headers 中的 <code>Cookie:</code> 完整字符串；<br>③ Application ➔ Local Storage ➔ 提取 <code>token</code> 字段值。<br>注：通义千问官方 OAuth 设备码授权已停止服务。';
+  if(hint&&prov==='doubao')hint.innerHTML='<b style="color:var(--accent2)">豆包凭据接入指南</b>：浏览器登录 <code>www.doubao.com</code> ➔ 按 <code>F12</code> 打开开发者工具 ➔ <code>Network</code>（网络面板）➔ 发起一次对话交互 ➔ 审查 <code>completion</code> 请求 ➔ 复制 <b>Request Headers</b> 中的完整 <code>Cookie:</code> 字符串。<br>Cookie 必须包含鉴权字段 <code>sessionid</code> 与客户端指纹 <code>s_v_web_id</code>。接入后支持：<code>doubao-chat</code> 文本对话、<code>seedream-5.0-flash</code> 绘图（/v1/images/generations）及 <code>seedance-2.5</code> 视频生成（火山方舟异步任务协议）。';
   if(ta)ta.focus();
 }
 function closeAdd(){$('#addModal').classList.remove('open');if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}}
@@ -2272,13 +2335,13 @@ async function startLogin(prov){
   savePending(prov,r.id);
   CUR_LOGIN={prov,id:r.id};
   const html=`<h3 style="margin-top:8px;font-size:15px">${PROV_NAMES[prov]||prov} 授权登录</h3>
-    <p class="hint">${prov==='qwen'?'打开链接输入设备码完成授权：':prov==='trae'?'打开链接登录成功后会自动回调纳管（面板需与浏览器同机或可达）：':prov==='qwenwork'?'打开链接使用钉钉扫码完成授权（无需回调）：':prov==='doubao'?'用豆包 App 扫描下方二维码（对话 → ＋ → 扫一扫），手机确认后自动回调纳管：':'在浏览器打开链接完成腾讯账号登录：'}</p>
+    <p class="hint">${prov==='qwen'?'请访问授权页面并输入设备码完成鉴权：':prov==='trae'?'访问授权链接完成登录后网关将自动接收回调凭据（需浏览器可访问面板）：':prov==='qwenwork'?'访问授权链接并通过钉钉扫码完成企业鉴权（无需回调）：':prov==='doubao'?'请使用豆包 App 扫描二维码（对话界面 ➔ ＋ ➔ 扫一扫），移动端确认后自动完成接入：':'请在浏览器打开授权链接完成账号鉴权：'}</p>
     ${prov==='doubao'?`<div style="margin:6px auto 4px;width:238px"><img src="/doubao/qrlogin/img?sid=${esc(r.id)}" alt="二维码加载中…" style="width:238px;height:238px;border:1px solid var(--border);border-radius:12px;padding:8px;box-sizing:border-box;background:var(--card)" onerror="this.outerHTML='<div style=\\'color:var(--red);padding:40px 0\\'>二维码加载失败，请点下方链接在新窗口打开</div>'"></div>`:''}
     ${r.user_code?`<p style="margin:8px 0">设备码：<code style="font-size:18px;letter-spacing:2px">${esc(r.user_code)}</code></p>`:''}
     <div class="urlbox">${esc(r.url)}</div>
     <button class="btn" onclick="navigator.clipboard.writeText('${esc(r.url)}').then(()=>toast('已复制'))">复制链接</button>
     <a class="btn" style="margin-left:8px" href="${esc(r.url)}" target="_blank">在新窗口打开</a>
-    <div class="status-line wait" id="loginStatus"><span class="spin"></span> 等待授权完成…（完成后自动纳管并签到）</div>`;
+    <div class="status-line wait" id="loginStatus"><span class="spin"></span> 等待鉴权授权完成…（成功后自动接入并同步配额）</div>`;
   $('#loginFlow').innerHTML=html;
   if(POLL_TIMER)clearInterval(POLL_TIMER);
   POLL_TIMER=setInterval(()=>pollLogin(prov,r.id),3000);
@@ -2289,7 +2352,7 @@ async function pollLogin(prov,id){
     const el=$('#loginStatus');
     if(r.status==='success'){
       clearPending();
-      if(el){el.className='status-line ok';el.innerHTML=`✅ 纳管成功：${esc(r.account?.nickname||r.account?.uid||'')}，已自动签到并拉取额度`}
+      if(el){el.className='status-line ok';el.innerHTML=`✅ 接入成功：${esc(r.account?.nickname||r.account?.uid||'')}，已自动同步服务商配额`}
       clearInterval(POLL_TIMER);POLL_TIMER=null;setTimeout(()=>refreshAll(false),1000);
     }else if(r.status==='failed'){
       clearPending();
@@ -2306,8 +2369,8 @@ window.addEventListener('message',e=>{
   clearPending();
   if(POLL_TIMER){clearInterval(POLL_TIMER);POLL_TIMER=null}
   const el=$('#loginStatus');
-  if(el){el.className='status-line ok';el.innerHTML='✅ 纳管成功，已自动签到并拉取额度'}
-  toast('✅ 授权登录成功，账号已纳管');
+  if(el){el.className='status-line ok';el.innerHTML='✅ 接入成功，已自动同步服务商配额'}
+  toast('✅ 授权鉴权成功，实例已就绪');
   setTimeout(()=>refreshAll(false),800);
 });
 function resumePending(){
@@ -2319,17 +2382,17 @@ function resumePending(){
     let r=null;
     try{r=await api(`/api/login/poll?provider=${p.provider}&id=${encodeURIComponent(p.id)}`)}catch(e){r=null}
     if(!r||r.error){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;refreshAll(false);return}
-    if(r.status==='success'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;toast(`✅ 纳管成功：${r.account?.nickname||r.account?.uid||''}（已自动签到）`);refreshAll(false)}
+    if(r.status==='success'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null;toast(`✅ 接入成功：${r.account?.nickname||r.account?.uid||''}（已完成配额同步）`);refreshAll(false)}
     else if(r.status==='failed'){clearPending();clearInterval(POLL_TIMER);POLL_TIMER=null}
   },3000);
 }
 async function doImport(){
   const prov=$('#importProv').value,cred=$('#importCred').value.trim();
   if(!cred){toast('请粘贴凭证',false);return}
-  $('#importStatus').className='status-line wait';$('#importStatus').innerHTML='<span class="spin"></span> 导入中（验证凭证）…';
+  $('#importStatus').className='status-line wait';$('#importStatus').innerHTML='<span class="spin"></span> 导入并验证服务商凭据中…';
   const r=await api('/api/import',{method:'POST',body:JSON.stringify({provider:prov,credential:cred})});
   if(r.error){$('#importStatus').className='status-line err';$('#importStatus').textContent='❌ '+r.error}
-  else{$('#importStatus').className='status-line ok';$('#importStatus').textContent=`✅ 导入成功：${r.nickname||r.uid}，已自动签到`;setTimeout(()=>refreshAll(false),1200)}
+  else{$('#importStatus').className='status-line ok';$('#importStatus').textContent=`✅ 导入成功：${r.nickname||r.uid}，已完成鉴权与配额同步`;setTimeout(()=>refreshAll(false),1200)}
 }
 
 // init
@@ -2342,6 +2405,21 @@ async function doImport(){
 // 静默自动数据刷新（页面获焦立即刷新，后台常驻每 25 秒静默轮询，无需手动点击）
 window.addEventListener('focus',()=>{if($('#app').style.display!=='none')refreshAll(false)});
 setInterval(()=>{if($('#app').style.display!=='none'){refreshAll(false);loadPublish()}},25000);
+// Apple 规范交互：ESC 键与点击遮罩空白区域优雅关闭弹窗 (Direct Manipulation & Forgiveness)
+window.addEventListener('keydown', e=>{
+  if(e.key === 'Escape'){
+    closeAdd();
+    closeModelEditor();
+  }
+});
+document.querySelectorAll('.modal').forEach(m=>{
+  m.addEventListener('click', e=>{
+    if(e.target === m){
+      closeAdd();
+      closeModelEditor();
+    }
+  });
+});
 </script>
 </body>
 </html>
