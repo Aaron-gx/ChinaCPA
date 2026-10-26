@@ -110,6 +110,8 @@ const (
 	// 收起定时器 id
 	timerCollapse = 1
 	timerWatchdog = 2
+	timerAnim     = 3
+	timerSliver    = 4
 )
 
 type point struct{ X, Y int32 }
@@ -159,7 +161,11 @@ type Rail struct {
 	hwnd     windows.Handle
 	opts     Options
 	metrics  []Metric
+	edge     string // 吸附边：left/right/top/bottom
+	isVertical bool // 竖排（贴左/右）还是横排（贴上/下）
 	expanded bool
+	sliver   bool // 闲置时收成细条
+	sliverArmed bool // 已启动7f29细条计时（防止每次重设定时间器）
 	hovered  bool
 	width    int32
 	height   int32
@@ -177,12 +183,33 @@ type Rail struct {
 	commitErrLogged bool
 	hoverIndex int // 悬停/展开的圆环索引
 	leavePending bool // 已收到 MOUSELEAVE，等定时器确认
+
+	// ── 动画状态 ──
+	// 每个环一个动画对象；有动画在跑时由 60fps 定时器逐帧推进。
+	// 都在 UI 线程访问，不需要锁。
+	anims []*ringAnim
+	// 上次数据快照，用于检测变化并触发动画
+	lastUsed []float64
+	lastClock []float64
+	lastBusy []bool
+	lastRefreshAt int64 // 最近一次刷新开始时刻
+	animTickerActive bool
+	animElapsed float64 // 动画时钟（秒，单调）
+	// 通知去重：记录上次通知时各环的已用比例，避免每帧都弹
+	notifiedAt []float64
 }
 
 // NewRail 创建浮动栏窗口。必须在 UI 线程调用（LockOSThread 之后）。
 func NewRail(opts Options) (*Rail, error) {
-	r := &Rail{
+	globalRail = new(Rail)
+	r := globalRail
+	if opts.Edge == "" {
+		opts.Edge = "right"
+	}
+	*r = Rail{
 		opts:       opts,
+		edge:       opts.Edge,
+		isVertical: opts.Edge == "left" || opts.Edge == "right",
 		expanded:   false, // 收起态起步：只显示胶囊，悬停才弹出详情卡
 		hoverIndex: 0,
 		incoming:   make(chan []Metric, 4),
@@ -292,6 +319,11 @@ func railWndProc(hwnd windows.Handle, msg uint32, wParam, lParam uintptr) uintpt
 				r.collapseNow()
 			case timerWatchdog:
 				r.watchdog()
+			case timerAnim:
+				r.tickAnim()
+			case timerSliver:
+				pKillTimer.Call(uintptr(hwnd), timerSliver)
+				r.collapseToSliver()
 			default:
 				r.drainUpdates()
 			}
@@ -409,6 +441,17 @@ func (r *Rail) fitHeight() bool {
 		n = 8
 	}
 
+	// 细条：6px 宽、96px 高（Pulse 的 collapsedWidth/Height）
+	if r.sliver {
+		wantW := int32(pd(6)) + 8
+		wantH := int32(pd(96))
+		if wantW == r.width && wantH == r.height {
+			return false
+		}
+		r.width, r.height = wantW, wantH
+		return true
+	}
+
 	var pillH int32
 	if n == 0 {
 		pillH = railWidthPillF() + padTopF()*2
@@ -456,6 +499,9 @@ func (r *Rail) drainUpdates() {
 			updated = true
 		default:
 			if updated {
+				r.syncAnims(r.animElapsed)
+				r.maybeAlert()
+				r.ensureAnimTicker()
 				if r.fitHeight() {
 					r.applyPlacement()
 				} else {
@@ -483,6 +529,12 @@ func (r *Rail) onMouseMove(x, y int32) {
 	if r.leavePending {
 		r.leavePending = false
 		pKillTimer.Call(uintptr(r.hwnd), timerCollapse)
+	}
+
+	// 指针进入：取消收细条的计时；如果已经是细条，立刻展开
+	r.cancelSliver()
+	if r.sliver {
+		r.expandFromSliver()
 	}
 
 	// 判断指针落在哪个圆环上，决定详情卡显示哪个平台
@@ -566,6 +618,8 @@ func (r *Rail) collapseNow() {
 	r.leavePending = false
 	r.hovered = false
 	r.setExpanded(false)
+	// 悬停光晕淡出
+	r.setHalo(0)
 }
 
 // cursorInside 用系统光标位置判断是否在窗口矩形内。
@@ -584,6 +638,8 @@ func (r *Rail) expandNow() {
 	}
 	r.hovered = true
 	r.expanded = true
+	// 悬停光晕淡入（当前悬停的环）
+	r.setHalo(1)
 	r.requestPaint()
 }
 
@@ -644,11 +700,26 @@ func (r *Rail) applyPlacement() {
 	}
 	var wr rect
 	getWindowRect(r.hwnd, &wr)
-	// rail 与屏幕边缘齐平（flush），和 Pulse 一致：不留间隙，
-	// 视觉上像是从屏幕边缘长出来的一条。
-	// 窗口整体贴右边缘，rail 占窗口最右侧 railWidthPillF() 宽。
-	x := work.Right - r.width
-	y := (work.Top+work.Bottom)/2 - r.height/2
+
+	// 按吸附边定位。竖排（左/右）：rail 贴边、垂直居中；
+	// 横排（上/下）：rail 贴边、水平居中。
+	var x, y int32
+	w, h := r.width, r.height
+	switch r.edge {
+	case "left":
+		x = work.Left
+		y = (work.Top+work.Bottom)/2 - h/2
+	case "top":
+		x = (work.Left+work.Right)/2 - w/2
+		y = work.Top
+	case "bottom":
+		x = (work.Left+work.Right)/2 - w/2
+		y = work.Bottom - h
+	default: // right
+		x = work.Right - w
+		y = (work.Top+work.Bottom)/2 - h/2
+	}
+
 	if r.userPlaced {
 		x = wr.Left
 		y = wr.Top
@@ -656,14 +727,14 @@ func (r *Rail) applyPlacement() {
 		if x < work.Left {
 			x = work.Left
 		}
-		if x+r.width > work.Right {
-			x = work.Right - r.width
+		if x+w > work.Right {
+			x = work.Right - w
 		}
 		if y < work.Top {
 			y = work.Top
 		}
-		if y+r.height > work.Bottom {
-			y = work.Bottom - r.height
+		if y+h > work.Bottom {
+			y = work.Bottom - h
 		}
 	}
 	r.origin = point{x, y}
@@ -756,27 +827,32 @@ func (r *Rail) watchdog() {
 	if r.dragging {
 		return
 	}
-	if !r.expanded && !r.hovered {
+	// 细条已经是最终态，不需要再收
+	if r.sliver {
 		return
 	}
+	// 常态（未展开）也要检查：光标不在 rail 上就启动收细条计时
 
 	var cur point
 	pGetCursorPos.Call(uintptr(unsafe.Pointer(&cur)))
 	var wr rect
 	getWindowRect(r.hwnd, &wr)
 
-	// 指针在窗口外 → 立刻收起
+	// 指针在窗口外 → 先收起（不再展开），并启动「闲置收成细条」的计时。
+	//
+	// Pulse 的 sliver：鼠标离开一段时间后整条 rail 折成一条 6px 宽的色线，
+	// 只在需要的时候展开。这是它不占屏幕的关键，也正好解决"占显示空间"。
 	if cur.X < wr.Left || cur.X >= wr.Right || cur.Y < wr.Top || cur.Y >= wr.Bottom {
 		r.hovered = false
 		r.leavePending = false
 		if r.expanded {
 			r.setExpanded(false)
 		}
+		r.armSliver()
 		return
 	}
 
-	// 指针在窗口内但落在透明区（既不是 rail 也不是卡片）→ 也收起。
-	// 窗口比可见内容宽得多，只判断窗口矩形不够。
+	// 指针在窗口内但落在透明区 → 同样收起并准备收细条
 	var pt = cur
 	pScreenToClient.Call(uintptr(r.hwnd), uintptr(unsafe.Pointer(&pt)))
 	if !r.hitOpaque(pt.X, pt.Y) {
@@ -785,5 +861,224 @@ func (r *Rail) watchdog() {
 		if r.expanded {
 			r.setExpanded(false)
 		}
+		r.armSliver()
 	}
+}
+
+// armSliver 启动「闲置收成细条」的 2.5 秒计时。
+// 指针回来会取消（见 onMouseMove 的 cancelSliver）。
+func (r *Rail) armSliver() {
+	if r.sliver || r.sliverArmed {
+		return
+	}
+	r.sliverArmed = true
+	pSetTimer.Call(uintptr(r.hwnd), timerSliver, 2500, 0)
+}
+
+// cancelSliver 指针回到窗口时取消收细条。
+func (r *Rail) cancelSliver() {
+	if r.sliver {
+		return
+	}
+	r.sliverArmed = false
+	pKillTimer.Call(uintptr(r.hwnd), timerSliver)
+}
+
+// collapseToSliver 由闲置计时触发：收成细条。
+func (r *Rail) collapseToSliver() {
+	if r.dragging || r.hovered {
+		return
+	}
+	r.sliver = true
+	r.fitHeight()
+	r.applyPlacement()
+	r.requestPaint()
+}
+
+// expandFromSliver 指针碰到细条：立刻展开成完整 rail。
+func (r *Rail) expandFromSliver() {
+	if !r.sliver {
+		return
+	}
+	r.sliver = false
+	r.hovered = true
+	r.expanded = true
+	r.fitHeight()
+	r.applyPlacement()
+	r.setHalo(1)
+	r.requestPaint()
+}
+
+// ── 动画驱动 ─────────────────────────────
+
+// animFor 取第 i 个环的动画对象，懒创建。
+func (r *Rail) animFor(i int) *ringAnim {
+	for len(r.anims) <= i {
+		a := newRingAnim(0)
+		r.anims = append(r.anims, a)
+	}
+	a := r.anims[i]
+	// 确保目标值与当前环一致（初次或数据变化时由 syncAnims 处理）
+	if i < len(r.metrics) {
+		m := r.metrics[i]
+		target := m.Used
+		if m.Balance {
+			target = 1
+		}
+		if m.Spent {
+			target = 1
+		}
+		a.arc.set(target)
+		if m.ClockFrac >= 0 {
+			a.clock.set(m.ClockFrac)
+		}
+	}
+	return a
+}
+
+// syncAnims 在新数据到达时更新所有环的动画目标，并触发扫描/活动弧。
+func (r *Rail) syncAnims(now float64) {
+	n := len(r.metrics)
+	for len(r.anims) < n {
+		r.anims = append(r.anims, newRingAnim(0))
+	}
+
+	// 首次：直接把动画跳到当前值（不播放入场动画）
+	if r.lastUsed == nil {
+		r.lastUsed = make([]float64, n)
+		r.lastClock = make([]float64, n)
+		r.lastBusy = make([]bool, n)
+		r.notifiedAt = make([]float64, n)
+		for i, m := range r.metrics {
+			r.anims[i].arc.set(targetOf(m))
+			r.anims[i].arc.cur = targetOf(m)
+			if m.ClockFrac >= 0 {
+				r.anims[i].clock.set(m.ClockFrac)
+				r.anims[i].clock.cur = m.ClockFrac
+			}
+			r.lastUsed[i] = targetOf(m)
+			r.lastClock[i] = m.ClockFrac
+			r.lastBusy[i] = m.Busy
+		}
+		return
+	}
+
+	// 增量：只有数值变了才动
+	for i, m := range r.metrics {
+		if i >= n {
+			break
+		}
+		t := targetOf(m)
+		if t != r.lastUsed[i] {
+			r.anims[i].arc.set(t)
+			r.lastUsed[i] = t
+		}
+		if m.ClockFrac != r.lastClock[i] {
+			if m.ClockFrac >= 0 {
+				r.anims[i].clock.set(m.ClockFrac)
+			}
+			r.lastClock[i] = m.ClockFrac
+		}
+		// 活动状态：从假到真触发白色弧
+		if m.Busy && !r.lastBusy[i] {
+			r.anims[i].busy.start(now)
+			r.anims[i].busyFade.set(1)
+		}
+		if !m.Busy && r.lastBusy[i] {
+			r.anims[i].busy.stop()
+			r.anims[i].busyFade.set(0)
+		}
+		r.lastBusy[i] = m.Busy
+	}
+}
+
+// targetOf 一个环的弧目标比例。
+func targetOf(m Metric) float64 {
+	if m.Empty {
+		return 0
+	}
+	if m.Spent {
+		return 1
+	}
+	if m.Balance {
+		return 1
+	}
+	return clamp01(m.Used)
+}
+
+// ensureAnimTicker 有动画需要推进时启动 60fps 定时器。
+func (r *Rail) ensureAnimTicker() {
+	if r.animTickerActive {
+		return
+	}
+	// 先看有没有需要动的
+	need := false
+	for i := range r.anims {
+		if i < len(r.metrics) && r.anims[i].busyNow() {
+			need = true
+			break
+		}
+	}
+	if !need {
+		return
+	}
+	r.animTickerActive = true
+	// 60fps：16ms 一跳
+	pSetTimer.Call(uintptr(r.hwnd), timerAnim, 16, 0)
+}
+
+// tickAnim 由 WM_TIMER(timerAnim) 驱动，推进一帧。
+func (r *Rail) tickAnim() {
+	dt := 1.0 / 60.0
+	r.animElapsed += dt
+
+	still := false
+	for i := range r.anims {
+		a := r.anims[i]
+		if a == nil {
+			continue
+		}
+		if a.arc.step(dt) {
+			still = true
+		}
+		if a.clock.step(dt) {
+			still = true
+		}
+		if a.refresh.active && a.refresh.step(dt) {
+			still = true
+		}
+		if a.refreshFade.step(dt) {
+			still = true
+		}
+		if a.busy.active && a.busy.step(dt) {
+			still = true
+		}
+		if a.busyFade.step(dt) {
+			still = true
+		}
+		if a.halo.step(dt) {
+			still = true
+		}
+	}
+
+	if !still {
+		// 全部到点：停掉定时器，画最后一帧
+		pKillTimer.Call(uintptr(r.hwnd), timerAnim)
+		r.animTickerActive = false
+	}
+	r.requestPaint()
+}
+
+// setHalo 设置当前悬停环的光晕强度（0~1），并确保动画定时器在跑。
+func (r *Rail) setHalo(v float64) {
+	if r.hoverIndex < 0 || r.hoverIndex >= len(r.anims) {
+		return
+	}
+	a := r.anims[r.hoverIndex]
+	if a == nil {
+		return
+	}
+	a.halo.set(v)
+	r.ensureAnimTicker()
+	r.requestPaint()
 }

@@ -84,9 +84,14 @@ func main() {
 	pl.SetPublished(pub)
 	pubPrices := map[string]usage.PubPrice{}
 	for k, v := range pub.PricingMap() {
-		pubPrices[k] = usage.PubPrice{Input: v.Input, Output: v.Output, Cache: v.Cache}
+		pubPrices[k] = usage.PubPrice{Input: v.Input, Output: v.Output, Cache: v.Cache, PerCall: v.PerCall}
 	}
-	u.SetPublishedPricing(pubPrices, pub.USDCNY())
+	// 汇率优先级：发布模型配置 > config.json pricing.usd_cny > usage 内置缺省
+	pubUSDCNY := pub.USDCNY()
+	if pubUSDCNY <= 0 {
+		pubUSDCNY = cfg.Pricing.USDCNY
+	}
+	u.SetPublishedPricing(pubPrices, pubUSDCNY)
 	if n := len(pub.Get().Models); n > 0 {
 		log.Printf("发布模型 %d 个（/v1/models 仅暴露已发布模型）", n)
 	}
@@ -95,6 +100,35 @@ func main() {
 	for _, a := range pl.Accounts() {
 		if a.Provider == "qwen" {
 			qw.RestoreCounters(a.UID, u.RequestsToday("qwen", a.UID))
+		}
+	}
+
+	// 豆包每日计数跨重启持久化（store 落盘，键 provider:uid:day:kind）
+	doubao.SetCounterPersistence(
+		func(uid string, c doubao.CounterSnapshot) {
+			day := time.Now().Format("2006-01-02")
+			st.SetCounter("doubao:"+uid+":"+day+":chats", c.Chats)
+			st.SetCounter("doubao:"+uid+":"+day+":images", c.Images)
+			st.SetCounter("doubao:"+uid+":"+day+":videos", c.Videos)
+		},
+		func(uid string) (doubao.CounterSnapshot, bool) {
+			day := time.Now().Format("2006-01-02")
+			prefix := "doubao:" + uid + ":" + day + ":"
+			vals := st.CountersPrefix(prefix)
+			if len(vals) == 0 {
+				return doubao.CounterSnapshot{}, false
+			}
+			return doubao.CounterSnapshot{
+				Day:    day,
+				Chats:  vals[prefix+"chats"],
+				Images: vals[prefix+"images"],
+				Videos: vals[prefix+"videos"],
+			}, true
+		},
+	)
+	for _, a := range pl.Accounts() {
+		if a.Provider == "doubao" {
+			doubao.RestoreAccountCounters(a.UID)
 		}
 	}
 

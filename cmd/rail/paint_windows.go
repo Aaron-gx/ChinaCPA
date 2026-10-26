@@ -113,6 +113,20 @@ var (
 	// 悬停环的细亮边
 	colRingHalo = rgba(0xFF, 0xFF, 0xFF, 0x4D)
 
+	// 窗口时钟弧：中性色，不参与用量配色（Pulse 的原则：环上的颜色
+	// 只表示用量，再来一个色相就是第二套语言）
+	colClockTrack = rgba(0xFF, 0xFF, 0xFF, 0x29) // 16%
+	colClockArc   = rgba(0xFF, 0xFF, 0xFF, 0xB3) // 70%
+
+	// 第二限制内环的轨道（18%）
+	colSecondTrack = rgba(0xFF, 0xFF, 0xFF, 0x2E)
+
+	// 活动标记：白色（Pulse 用 Color.primary）
+	colTextPrimary = rgba(0xFF, 0xFF, 0xFF, 0xFF)
+
+	// 细条闲置时的中间线：中性灰
+	colSliverIdle = rgba(0x6A, 0x68, 0x64, 0xFF)
+
 	// 遗留（旧配色，保留给图标兜底绘制）
 	colDotEmpty   = rgba(0x45, 0x44, 0x42, 0xFF)
 	colLogoDim    = rgba(0x9A, 0x97, 0x90, 0xFF)
@@ -495,4 +509,49 @@ func (p *painter) text(s string, x, y, w, h int32, size float32, bold bool, alig
 	pGdipDrawString.Call(p.graphics,
 		uintptr(unsafe.Pointer(&u16[0])), uintptr(length), font,
 		uintptr(unsafe.Pointer(&layout)), format, brush)
+}
+
+// 玻璃高光：在深色表面上叠一条顶部亮、向下消隐的高光，模拟
+// Liquid Glass 顶部的光泽反射。这是纯绘制增强，无系统依赖。
+
+var pGdipCreateLineBrushI = gdiplus.NewProc("GdipCreateLineBrushI")
+
+// glassHighlight 在 (x,y,w,h) 顶部画一条模拟玻璃反光的高光。
+//
+// 不用 GDI+ 渐变笔（在分层窗口上不稳定，实测崩溃），而是画 4 层
+// 递减透明度的细条叠成渐变 —— 都是已验证的原语，稳。
+func (p *painter) glassHighlight(x, y, w, h int32) {
+	if w <= 3 || h <= 0 {
+		return
+	}
+	// 顶部 18% 高度，分 4 条，从上到下透明度递减
+	bandH := int32(float32(h) * 0.18)
+	if bandH < 6 {
+		bandH = 6
+	}
+	// 每条高度，透明度 0x0C → 0x06 → 0x03 → 0x01
+	layers := []struct {
+		off  int32
+		h    int32
+		a    uint8
+	}{
+		{0, bandH, 0x0C},
+		{bandH, maxI32(1, bandH/2), 0x06},
+		{bandH + maxI32(1, bandH/2), maxI32(1, bandH/4), 0x03},
+	}
+	for _, l := range layers {
+		y0 := y + l.off
+		if y0+l.h > y+int32(float32(h)*0.4) {
+			break
+		}
+		c := rgba(0xFF, 0xFF, 0xFF, l.a)
+		p.fillRound(x, y0, w, l.h, l.h/2, c)
+	}
+}
+
+func maxI32(a, b int32) int32 {
+	if a > b {
+		return a
+	}
+	return b
 }

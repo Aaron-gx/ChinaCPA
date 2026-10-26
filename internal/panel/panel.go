@@ -97,6 +97,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 	mux.HandleFunc("/api/import", p.authed(p.handleImport))
 	mux.HandleFunc("/api/usage", p.authed(p.handleUsage))
 	mux.HandleFunc("/api/checkin_all", p.authed(p.handleCheckinAll))
+	mux.HandleFunc("/api/refresh_all_quotas", p.authed(p.handleRefreshAllQuotas))
 	mux.HandleFunc("/api/publish", p.authed(p.handlePublish))
 	mux.HandleFunc("/api/requests", p.authed(p.handleRequests))
 }
@@ -426,6 +427,15 @@ func (p *Panel) handleCheckinAll(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "已发起全账号签到"})
+}
+
+func (p *Panel) handleRefreshAllQuotas(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "POST only"})
+		return
+	}
+	go p.sched.RefreshAllQuotas()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "message": "已触发全账号额度刷新"})
 }
 
 // ── 模型列表 ─────────────────────────────────────────────

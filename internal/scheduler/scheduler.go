@@ -175,6 +175,11 @@ func label(a *model.Account) string {
 	return a.UID
 }
 
+// RefreshAllQuotas 手动触发全账号额度刷新。
+func (s *Scheduler) RefreshAllQuotas() {
+	s.refreshAllQuotas()
+}
+
 // refreshAllQuotas 全账号额度刷新。
 func (s *Scheduler) refreshAllQuotas() {
 	for _, a := range s.pool.Accounts() {

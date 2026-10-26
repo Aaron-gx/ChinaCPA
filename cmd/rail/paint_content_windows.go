@@ -18,25 +18,36 @@ import (
 //      同样的像素占比更大，一条 640px 高的 rail 会吃掉 60% 屏幕。
 var uiScale float32 = 4.0 / 3.0
 
+// userScale 用户在设置里选的额外缩放（1.0 = 按屏幕自动算）。
+// 由 -scale 参数或配置文件设定，可以再压小或放大。
+var userScale float32 = 1.0
+
 func setUIScale(dpi int32, screenH int32) {
 	base := float32(4.0) / 3.0
 	if dpi > 0 {
 		base = float32(dpi) / 72.0
 	}
+	// 基准 = 96dpi/72 * 屏高档位 * 用户系数。
+	//
+	// 1080p 一档从 0.82 收到 0.72：实测 85px 宽的 rail 在 1920 宽的屏幕上
+	// 仍然显眼，7 个环时高度也吃掉 1/3 屏幕。Pulse 的基准是笔记本屏，
+	// 桌面显示器上按它原尺寸会明显偏大。
+	// 屏高档位。1080p 落在 0.60：7 个环时窗口约 260px 高（占屏高 24%），
+	// rail 可见宽约 42px —— 再大就明显挤占桌面了。
 	var fit float32
 	switch {
 	case screenH >= 1600:
-		fit = 1.12
+		fit = 0.92
 	case screenH >= 1300:
-		fit = 1.0
+		fit = 0.78
 	case screenH >= 1100:
-		fit = 0.90
+		fit = 0.68
 	case screenH >= 1000:
-		fit = 0.82
+		fit = 0.60
 	default:
-		fit = 0.74
+		fit = 0.52
 	}
-	uiScale = base * fit
+	uiScale = base * fit * userScale
 }
 
 func pd(v float64) int32 { return int32(float32(v)*uiScale + 0.5) }
@@ -50,10 +61,26 @@ func railWidthPillF() int32 { return pd(64) }
 func ringDiameterF() int32  { return pd(36) }
 func ringLineF() int32 { return pd(4) }
 func ringCentreGapF() int32 { return pd(4) }
-func itemSpacingF() int32   { return pd(30) }
-func percentFontF() int32 { return pd(13) }
-func percentHeightF() int32 { return pd(16) }
-func ringToTextF() int32    { return pd(6) }
+// itemSpacingF 环间距。
+//
+// 缩放时比环本身收得更快：小尺寸下 30pt 的间距会把整条 rail 拉得很长，
+// 而环本身已经很小，留白反而显得空。乘 0.72 收一档。
+func itemSpacingF() int32 { return pd(30 * 0.72) }
+
+// percentFontF 百分比字号。
+//
+// 有下限 11px：再小 GDI+ 的灰度抗锯齿会糊成一团，数字反而难读。
+// 这也是 rail 不能无限缩小的原因 —— 环可以小，字不行。
+func percentFontF() int32 {
+	px := pd(13)
+	if px < 11 {
+		return 11
+	}
+	return px
+}
+
+func percentHeightF() int32 { return pd(14) }
+func ringToTextF() int32    { return pd(5) }
 
 func cardWidthF() int32      { return pd(250) }
 func cardPadF() int32        { return pd(18) }
@@ -107,6 +134,13 @@ func (r *Rail) computeLayout(w, h int32) layout {
 	n := len(r.metrics)
 	if n > 8 {
 		n = 8
+	}
+
+	if r.sliver {
+		// 细条：一条 6px 宽的竖线贴屏幕边缘，什么都不画
+		slW := int32(pd(6))
+		L.pill = rect{w - slW, 0, w, h}
+		return L
 	}
 
 	// rail 贴窗口右边缘（窗口本身再贴屏幕边，见 applyPlacement）
@@ -226,7 +260,27 @@ func (r *Rail) paint() {
 func (r *Rail) paintPill(p *painter, L layout) {
 	pw := L.pill.Right - L.pill.Left
 	ph := L.pill.Bottom - L.pill.Top
+
+	// 细条：一条深色竖线，中间嵌一条代表"有活动"的细色线。
+	// Pulse 的 sliver 只露色点，这里用整条细线，色点留在线上。
+	if r.sliver {
+		p.fillRound(L.pill.Left, L.pill.Top, pw, ph, pw/2, colRail)
+		// 中间 1.5px 的彩色细线：按第一个环的颜色（或灰色）
+		lineCol := colSliverIdle
+		if len(r.metrics) > 0 && !r.metrics[0].Empty {
+			lineCol = ringColorFor(r.metrics[0])
+		}
+		lw := int32(pd(1.5))
+		cx := L.pill.Left + pw/2
+		top := L.pill.Top + int32(pd(12))
+		bot := L.pill.Bottom - int32(pd(12))
+		p.fillRound(cx-lw/2, top, lw, bot-top, lw/2, lineCol)
+		return
+	}
+
 	p.fillRound(L.pill.Left, L.pill.Top, pw, ph, capRadiusF(), colRail)
+	// 玻璃高光：顶部一条渐变反光，模拟 Light Surface 的光泽
+	p.glassHighlight(L.pill.Left+1, L.pill.Top+1, pw-2, ph/2)
 
 	if len(r.metrics) == 0 {
 		cx := L.pill.Left + pw/2
@@ -244,7 +298,7 @@ func (r *Rail) paintPill(p *painter, L layout) {
 		}
 		m := r.metrics[i]
 		cy := L.slots[i]
-		r.paintRing(p, cx, cy, m, i == r.hoverIndex)
+		r.paintRingAnimated(p, cx, cy, m, r.animFor(i), i == r.hoverIndex)
 
 		// 百分比：居中在环下方。字号按 pt→px 换算（96dpi 下 1pt≈1.33px），
 		// Pulse 的 13pt 在 Windows 上对应约 17px，视觉大小才一致。
@@ -278,59 +332,6 @@ func percentWidth() int {
 	// "100%" 在 13pt 下约 38pt；纯余额文字（如 "3.8K"）更长，
 	// 给到 rail 宽度靠居中排版，不要卡在 38pt 上被裁掉
 	return int(railWidthPillF()) - 8
-}
-
-// paintRing 一个圆环：轨道 + 进度弧 + 中心盘 + 图标。
-//
-// 结构完全对齐 Pulse 的 UsageRingView：
-//   - 外圈是描边（不是填充饼），从 12 点顺时针
-//   - 颜色只表示"用了多少"，不表示平台
-//   - 环内是深色圆盘，图标占圆盘 80%，单色渲染
-func (r *Rail) paintRing(p *painter, cx, cy int32, m Metric, active bool) {
-	rad := (ringDiameterF()/2)
-
-	// 轨道：整圈细环，淡淡的白色（Pulse 用 primary 18%）
-	p.arcTrack(cx, cy, rad, float32(ringLineF()), colTrack)
-
-	if !m.Empty {
-		frac := m.Used
-		if frac < 0 {
-			frac = 0
-		}
-		if frac > 1 {
-			frac = 1
-		}
-		col := ringColorFor(m)
-		if frac > 0 {
-			p.arcRound(cx, cy, rad, float32(ringLineF()), 0, frac*359.9, col)
-		}
-		// active：外发光
-		if active {
-			p.arcGlow(cx, cy, rad, float32(ringLineF())+3, 0, frac*359.9, col, 0x30)
-		}
-	}
-
-	// 中心深色圆盘
-	discR := centreDiameter() / 2
-	p.fillCircle(cx, cy, discR, colDisc)
-
-	// 图标：占中心盘 80%（Pulse 的 iconScale）；无读数时压到 35%
-	iconSize := int32(float32(discR*2) * float32(iconScale))
-	op := uint8(0xFF)
-	if m.Empty {
-		op = 0x59 // 35%
-	}
-	if icon := loadIcon(m.Provider); icon != nil {
-		p.drawIconAlpha(icon, cx, cy, iconSize, op)
-	} else {
-		// 没有素材的平台（新接入的 provider）画首字母，不留空白
-		drawInitial(p, m.Label, cx, cy, float32(iconSize)*0.72, op)
-	}
-
-	if active {
-		// 指针所在环：细亮边
-		p.arc(cx, cy, rad+2, 1.2, 0, 359.9, colRingHalo)
-	}
 }
 
 // ringColorFor 环的颜色：只表达"离上限还有多远"。
@@ -371,6 +372,8 @@ func (r *Rail) paintCard(p *painter, L layout) {
 
 	// 卡片本体 + 指针（指针先画，才不会被卡片盖住接缝）
 	p.fillRound(c.Left, c.Top, cw, ch, cardRadiusF(), colCardBg)
+	// 玻璃高光：顶部渐变反光
+	p.glassHighlight(c.Left+1, c.Top+1, cw-2, ch/3)
 	p.fillPointer(L)
 
 	// 标题行
@@ -570,10 +573,11 @@ func drawInitial(p *painter, label string, cx, cy int32, size float32, alpha uin
 	}
 	r := []rune(label)
 	initial := string(r[0])
-	// 字号约为图标尺寸的 0.9；文字框按 size 宽度居中
-	fs := size * 0.9
+	// 字号取图标尺寸的 0.62：GDI+ 的 DrawString 还会算上行高，
+	// 按 0.9 画出来会顶满整个圆盘，字反而糊。
+	fs := size * 0.62
 	col := argb(uint32(alpha)<<24 | 0x00F0EEE8)
-	w := int32(size * 1.4)
-	h := int32(size * 1.2)
+	w := int32(size * 1.8)
+	h := int32(size * 1.6)
 	p.text(initial, cx-w/2, cy-h/2, w, h, fs, true, stringAlignmentCenter, col)
 }

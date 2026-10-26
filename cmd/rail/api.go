@@ -24,6 +24,7 @@ type Options struct {
 	Interval int     // 轮询秒数
 	Tint     string  // 颜色主题 accent / green / teal
 	AlwaysOnTop bool // 是否置顶
+	Edge     string // 吸附边：left / right / top / bottom
 }
 
 // Quota 单个账号的额度快照（对应 panel 的 quota 字段）。
@@ -34,6 +35,20 @@ type Quota struct {
 	Unit      string  `json:"unit"`
 	Daily     bool    `json:"daily"`
 	Credits   int64   `json:"credits,omitempty"`
+	// Healthy 服务商是否认为这个账号还能用（false = 明确耗尽）
+	Healthy bool `json:"healthy"`
+	// Detail 平台自定义字段
+	Detail struct {
+		Plan              string `json:"plan"`
+		ResetsAt      string `json:"resets_at"`
+		QuotaExceeded bool   `json:"quota_exceeded"`
+		RequestsUsedToday int64 `json:"requests_used_today"`
+		ImagesUsedToday   int64 `json:"images_used_today"`
+		ImagesLimit       int64 `json:"images_limit"`
+		VideosUsedToday   int64 `json:"videos_used_today"`
+		VideosLimit       int64 `json:"videos_limit"`
+		ChatsToday        int64 `json:"chats_today"`
+	} `json:"detail"`
 }
 
 // Account 账号视图（只取浮动栏需要的字段）。
@@ -53,8 +68,14 @@ type Overview struct {
 	ProviderCount  map[string]int `json:"provider_count"`
 	TotalCredits   float64   `json:"total_credits"`
 	TotalIdeCredits float64  `json:"total_ide_credits"`
-	QwenRemaining  float64   `json:"qwen_remaining"`
-	QoderRemaining float64   `json:"qoder_remaining"`
+	QwenRemaining     float64 `json:"qwen_remaining"`
+	QoderRemaining    float64 `json:"qoder_remaining"`
+	QwenWorkRemaining float64 `json:"qwenwork_remaining"`
+	Now               int64   `json:"now"`
+	Schedule          struct {
+		QuotaRefreshMinutes int   `json:"quota_refresh_minutes"`
+		NextCheckin         int64 `json:"next_checkin"`
+	} `json:"schedule"`
 	Today          struct {
 		Requests   int64   `json:"requests"`
 		TotalTokens int64  `json:"total_tokens"`
@@ -154,7 +175,7 @@ type Metric struct {
 	Label    string  // 详情卡标题用的平台名
 	Full     string  // 平台全名
 	Provider string  // 平台 id，用于选 logo
-	Used     float64 // 已用比例 0~1（决定圆盘占满程度与颜色）
+	Used     float64 // 已用比例 0~1（决定圆环进度与颜色）
 	Text     string  // 已用/上限，如 "7.70K/9.03K"
 	Unit     string  // 单位
 	Empty    bool    // 无数据
@@ -164,6 +185,24 @@ type Metric struct {
 	Rows []MetricRow
 	// 账号数（同平台可能有多个账号）
 	AccountCount int
+
+	// ── 以下是 Pulse 的四个附加视觉状态 ──
+
+	// ClockFrac 窗口时钟弧：这一轮计费窗口已经过去了多少（0~1）。
+	// 画在环外侧的一圈细线上（Pulse 的 windowClockFraction）。
+	// <0 表示不画（没有可预期的窗口）。
+	ClockFrac float64
+	// SecondUsed 第二限制的已用比例（0~1），画成环内更细的小环。
+	// <0 表示这个平台只有一个限制，不画内环。
+	SecondUsed float64
+	// SecondLabel 第二限制的名字，用于详情卡。
+	SecondLabel string
+	// SecondReset 第二限制的重置文案。
+	SecondReset string
+	// Busy 这个平台此刻有请求在跑（Pulse 的 isBusy：白色短弧在环内游走）。
+	Busy bool
+	// Spent 服务商明确说这个额度已耗尽（不只是比例到 100%）。
+	Spent bool
 }
 
 // MetricRow 详情卡里的一行用量。
@@ -172,117 +211,6 @@ type MetricRow struct {
 	UsedPct float64 // 已用百分比 0~100
 	Reset   string  // 重置时间文案，如「16:00 重置」，空则不显示
 	Detail  string  // 补充说明（已用/上限）
-}
-
-// Metrics 把总览压成浮动栏要显示的圆环列表。
-//
-// 顺序固定为 Qwen / WorkBuddy / Trae / Qoder，与面板能力区一致；
-// 只保留有额度的平台，一个都没有时返回空（界面显示未连接）。
-func Metrics(ov *Overview) []Metric {
-	if ov == nil {
-		return nil
-	}
-	// 按平台聚合成一个环
-	type agg struct {
-		used, limit, remaining float64
-		unit                   string
-		count                  int
-		daily                  bool
-		rows                   []MetricRow
-	}
-	byProvider := map[string]*agg{}
-	for _, a := range ov.Accounts {
-		if a.Quota == nil || a.Status == "disabled" {
-			continue
-		}
-		g := byProvider[a.Provider]
-		if g == nil {
-			g = &agg{unit: a.Quota.Unit}
-			byProvider[a.Provider] = g
-		}
-		q := a.Quota
-		g.used += q.Used
-		g.limit += q.Limit
-		g.remaining += q.Remaining
-		g.daily = g.daily || q.Daily
-		if q.Unit != "" {
-			g.unit = q.Unit
-		}
-		// 每个账号贡献一行（多账号时标注昵称）
-		label := "每日配额"
-		if !q.Daily {
-			label = "配额"
-		}
-		if len(ov.Accounts) > 1 {
-			name := a.Nickname
-			if name == "" {
-				name = a.UID
-				if len(name) > 8 {
-					name = name[:8]
-				}
-			}
-			label = name
-		}
-		var pct float64
-		detail := ""
-		if q.Limit > 0 {
-			pct = q.Used / q.Limit * 100
-			detail = fmt.Sprintf("已用 %s / %s", shortNum(q.Used), shortNum(q.Limit))
-		} else {
-			pct = 0
-			detail = "剩余 " + shortNum(q.Remaining)
-		}
-		row := MetricRow{Label: label, UsedPct: pct, Detail: detail}
-		row.Reset = resetText(q.Unit, q.Daily)
-		g.rows = append(g.rows, row)
-		g.count++
-	}
-
-	order := []struct{ id, label, full string }{
-		{"qwen", "Qwen", "Qwen 通义千问"},
-		{"workbuddy", "WorkBuddy", "WorkBuddy / CodeBuddy"},
-		{"trae", "Trae", "Trae"},
-		{"qoder", "Qoder", "Qoder"},
-		{"qoder-intl", "Qoder", "Qoder 国际"},
-		{"qwenwork", "QwenWork", "QwenWork 千问办公"},
-		{"doubao", "Doubao", "豆包"},
-	}
-	var out []Metric
-	seen := map[string]bool{}
-	for _, o := range order {
-		g := byProvider[o.id]
-		if g == nil {
-			continue
-		}
-		short := o.label
-		if seen[short] {
-			continue
-		}
-		seen[short] = true
-
-		m := Metric{
-			Label:        short,
-			Full:         o.full,
-			Provider:     o.id,
-			Unit:         g.unit,
-			Rows:         g.rows,
-			AccountCount: g.count,
-		}
-		if g.limit > 0 {
-			m.Used = clamp01(g.used / g.limit)
-			m.Text = shortNum(g.used) + "/" + shortNum(g.limit)
-		} else if g.remaining > 0 {
-			m.Used = 1
-			m.Balance = true
-			// 圆盘下方只有 46px 宽，用最紧凑写法
-			m.Text = shortCompact(g.remaining)
-		} else {
-			m.Empty = true
-			m.Text = "0"
-		}
-		out = append(out, m)
-	}
-	return out
 }
 
 // resetText 生成重置时间文案。

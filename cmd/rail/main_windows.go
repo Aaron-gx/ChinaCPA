@@ -21,8 +21,17 @@ func main() {
 		top      = flag.Bool("top", true, "窗口是否置顶")
 		demo     = flag.Bool("demo", false, "用示例数据预览外观（不连服务）")
 		demoExpanded = flag.Bool("demo-expanded", false, "配合 -demo：直接展开详情卡")
+		scale    = flag.Float64("scale", 0, "额外缩放，0=按屏幕自动；如 0.85 / 1.2")
+		edge     = flag.String("edge", "right", "吸附边：left / right / top / bottom")
 	)
 	flag.Parse()
+
+	// 用户缩放：命令行优先，否则读 config.json 的 rail.scale
+	if *scale > 0 {
+		userScale = float32(*scale)
+	} else if v := railScaleFromConfig(*config); v > 0 {
+		userScale = float32(v)
+	}
 
 	// 单实例：多开会叠出几条 rail，
 	// 而且它们的悬停状态互相独立，看起来就像卡片一直在。
@@ -35,6 +44,7 @@ func main() {
 		BaseURL:     *base,
 		Interval:    *interval,
 		AlwaysOnTop: *top,
+		Edge:        *edge,
 	}
 
 	// Win32 UI 必须固定在同一个 OS 线程上
@@ -194,3 +204,32 @@ func jsonUnmarshal(data []byte, v any) error {
 }
 
 var _ = fmt.Sprint
+
+// railScaleFromConfig 读 config.json 里的 rail.scale。
+//
+// 让缩放可以持久化：改一次配置文件就长期生效，不用每次启动挂参数。
+// 缺省返回 0，表示按屏幕高度自动算。
+func railScaleFromConfig(path string) float64 {
+	candidates := []string{path}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), path))
+	}
+	for _, p := range candidates {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var cfg struct {
+			Rail struct {
+				Scale float64 `json:"scale"`
+			} `json:"rail"`
+		}
+		if err := jsonUnmarshal(raw, &cfg); err != nil {
+			continue
+		}
+		if cfg.Rail.Scale > 0 {
+			return cfg.Rail.Scale
+		}
+	}
+	return 0
+}
