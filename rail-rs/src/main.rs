@@ -3,7 +3,6 @@
 use windows::{
     core::*,
     Win32::Foundation::*,
-    Win32::Graphics::Dwm::*,
     Win32::Graphics::Gdi::*,
     Win32::System::LibraryLoader::*,
     Win32::System::Threading::*,
@@ -39,7 +38,7 @@ thread_local! {
     static STATE: RefCell<Option<AppState>> = RefCell::new(None);
 }
 
-fn log_msg(msg: &str) {
+pub(crate) fn log_msg(msg: &str) {
     use std::io::Write;
     let path = if let Ok(mut exe) = std::env::current_exe() {
         exe.set_file_name("rail.log");
@@ -154,7 +153,7 @@ unsafe fn run() -> Result<()> {
 
     log_msg("Creating window...");
     let hwnd = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOREDIRECTIONBITMAP,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         class_name,
         w!("ChinaCPA Rail"),
         WS_POPUP,
@@ -169,17 +168,8 @@ unsafe fn run() -> Result<()> {
     )?;
     log_msg(&format!("Window created: {:?}", hwnd));
 
-    // 尝试激活 Windows 11 原生 Acrylic/Mica 毛玻璃材质
-    let backdrop_type: u32 = 3; // DWMSBT_TRANSIENTWINDOW (Acrylic Blur)
-    let _ = DwmSetWindowAttribute(
-        hwnd,
-        DWMWA_SYSTEMBACKDROP_TYPE,
-        &backdrop_type as *const _ as _,
-        std::mem::size_of::<u32>() as u32,
-    );
-
     log_msg("Initializing D2DEngine...");
-    let engine = D2DEngine::new(hwnd, initial_w as u32, initial_h as u32)?;
+    let engine = D2DEngine::new(initial_w as u32, initial_h as u32)?;
     log_msg("D2DEngine initialized.");
         let (tx, rx) = channel();
 
@@ -278,6 +268,7 @@ fn reposition_window(hwnd: HWND, w: i32, h: i32) {
 ///
 /// 这里必须真的改窗口尺寸，而不是只改绘制范围 —— 分层/透明窗口的
 /// 未绘制像素在视觉上仍是一块盖在屏幕上的区域，鼠标能穿透、眼睛穿不过。
+/// 按当前 openness 把窗口物理尺寸同步到细条 ↔ 展开胶囊。
 fn sync_window_size(hwnd: HWND) {
     unsafe {
         STATE.with(|s| {
@@ -320,6 +311,10 @@ fn sync_window_size(hwnd: HWND) {
                 }
 
                 reposition_window(hwnd, want_w.round() as i32, want_h.round() as i32);
+
+                // 先更新逻辑尺寸，区域与绘制都按新窗口尺寸计算
+                state.width = want_w;
+                state.height = want_h;
 
                 // D2D 交换链也必须跟着改尺寸。
                 //
@@ -671,6 +666,7 @@ fn draw_now() {
                 state.width,
                 state.height,
                 state.scale,
+                state.hwnd,
             ) {
                 log_msg(&format!("render_frame err: {:?}", e));
             }

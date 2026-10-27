@@ -3,7 +3,7 @@ use windows::{
     Win32::Graphics::Direct2D::*,
     Win32::Graphics::Direct2D::Common::*,
     Win32::Graphics::DirectWrite::*,
-    Win32::Graphics::Dxgi::DXGI_PRESENT,
+    Win32::Foundation::HWND,
 };
 
 use crate::graphics::D2DEngine;
@@ -76,6 +76,7 @@ pub fn render_frame(
     w: f32,
     h: f32,
     scale: f32,
+    hwnd: HWND,
 ) -> Result<()> {
     unsafe {
         let rt = &eng.rt;
@@ -86,7 +87,7 @@ pub fn render_frame(
         let n = metrics.len().min(8);
         if n == 0 {
             rt.EndDraw(None, None)?;
-            eng.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
+            eng.present(hwnd)?;
             return Ok(());
         }
 
@@ -181,7 +182,7 @@ pub fn render_frame(
         }
 
         rt.EndDraw(None, None)?;
-        eng.swap_chain.Present(1, DXGI_PRESENT(0)).ok()?;
+        eng.present(hwnd)?;
     }
     Ok(())
 }
