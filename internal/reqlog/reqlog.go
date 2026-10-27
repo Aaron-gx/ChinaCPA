@@ -61,6 +61,16 @@ type Stats struct {
 	ByLine   []Dist `json:"by_line"`
 	ByStatus []Dist `json:"by_status"`
 	ByClient []Dist `json:"by_client,omitempty"` // 按请求来源客户端聚合
+	// CostByModel 每模型的 token 用量（面板层用当前价格现算成本，见 CostModel）
+	CostByModel []ModelCost `json:"cost_by_model,omitempty"`
+}
+
+// ModelCost 单模型 token 用量（供成本重算）。
+type ModelCost struct {
+	Model    string `json:"model"`
+	Prompt   int64  `json:"prompt"`
+	Complete int64  `json:"complete"`
+	Cache    int64  `json:"cache"`
 }
 
 // Dist 分布条目。
@@ -217,6 +227,19 @@ func (d *DB) Query(q QueryOpts) ([]Entry, *Stats, error) {
 	return page, stats, nil
 }
 
+// incCostModel 按模型累积 token（供面板层用当前价格重算成本）。
+func incCostModel(arr *[]ModelCost, model string, prompt, complete, cache int64) {
+	for i := range *arr {
+		if (*arr)[i].Model == model {
+			(*arr)[i].Prompt += prompt
+			(*arr)[i].Complete += complete
+			(*arr)[i].Cache += cache
+			return
+		}
+	}
+	*arr = append(*arr, ModelCost{Model: model, Prompt: prompt, Complete: complete, Cache: cache})
+}
+
 // aggregate 累加一条到统计（finalize 前用临时和）。
 func aggregate(s *Stats, e *Entry) {
 	s.Total++
@@ -229,7 +252,8 @@ func aggregate(s *Stats, e *Entry) {
 	s.Complete += e.CompletionTokens
 	s.Tokens += e.TotalTokens
 	s.Cache += e.CacheTokens
-	s.CostCNY += e.CostCNY
+	// 成本不在写入时固化：改价后历史统计需用当前价格重算（见 agg.costByModel 面板层现算）
+	incCostModel(&s.CostByModel, e.Model, e.PromptTokens, e.CompletionTokens, e.CacheTokens)
 	if e.TotalMS > 0 {
 		s.AvgMS += float64(e.TotalMS)
 	}

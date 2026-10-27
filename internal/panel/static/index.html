@@ -352,7 +352,7 @@ section h2{font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:
 @media (max-width:1120px){.dash-workspace{grid-template-columns:1fr}}
 
 /* 平台额度多卡片网格 */
-.cap-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.cap-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
 .cap-card{background:var(--bg-soft);border:1px solid var(--border);border-radius:14px;padding:14px 16px;
   display:flex;flex-direction:column;gap:10px;transition:all .18s;animation:fadeUp .4s both}
 .cap-card:hover{border-color:var(--border2);transform:translateY(-1px);background:var(--card)}
@@ -1072,7 +1072,7 @@ section h2{letter-spacing:0.04em !important}
         <div class="tabs" id="modelTabs"></div>
         <div class="tblwrap">
         <table id="modelTable">
-          <thead><tr><th>模型 ID</th><th>直连调用名</th><th>名称</th><th>上下文</th><th>计价倍率</th></tr></thead>
+          <thead><tr><th>模型 ID</th><th>直连调用名</th><th>名称</th><th>上下文</th><th>计价倍率</th><th>官方参考价</th></tr></thead>
           <tbody></tbody>
         </table>
         </div>
@@ -1142,7 +1142,7 @@ section h2{letter-spacing:0.04em !important}
     <div style="display:flex;gap:10px">
       <div style="flex:1">
         <label class="f">对外模型标识符（客户端 model 参数）</label>
-        <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / my-seedream / my-seedance">
+        <input id="mmId" style="width:100%" placeholder="如 glm-4.7 / my-seedream / my-seedance" oninput="autoFillPrice()">
       </div>
       <div style="width:220px">
         <label class="f">模型类型</label>
@@ -1449,7 +1449,7 @@ function renderKPI(o){
 function renderCapCards(o){
   const el=$('#dashCap');if(!el)return;
   const accs=o.accounts||[];
-  let dbImagesUsed=0,dbImagesLimit=0,dbVideosUsed=0,dbVideosLimit=0,dbChats=0,dbCount=0;
+  let dbImagesUsed=0,dbImagesLimit=0,dbVideosUsed=0,dbVideosLimit=0,dbCount=0;
   accs.filter(a=>a.provider==='doubao').forEach(a=>{
     dbCount++;
     const d=(a.quota&&a.quota.detail)||{};
@@ -1457,51 +1457,36 @@ function renderCapCards(o){
     dbImagesLimit+=(d.images_limit||0);
     dbVideosUsed+=(d.videos_used_today||0);
     dbVideosLimit+=(d.videos_limit||0);
-    dbChats+=(d.chats_today||0);
   });
 
   const cards=[
-    {pid:'workbuddy',name:'WorkBuddy (腾讯)',unit:'积分',val:o.total_credits||0,desc:'CodeBuddy 开发者资源包 · 自动领用结算',count:(o.provider_count||{})['workbuddy']||0},
-    {pid:'trae',name:'Trae (字节 SOLO)',unit:'积分',val:o.total_ide_credits||0,desc:'OAuth PKCE 协议授权 · 每日配额巡检续期',count:(o.provider_count||{})['trae']||0},
-    {pid:'qwen',name:'Qwen 通义千问',unit:'次/天',val:o.qwen_remaining||0,isCapped:true,max:2000*Math.max(1,(o.provider_count||{})['qwen']||1),desc:'Web 端免费配额池 · 熔断保护动态切流',count:(o.provider_count||{})['qwen']||0},
-    {pid:'qoder',name:'Qoder (阿里)',unit:'credits',val:o.qoder_remaining||0,desc:'PAT 访问令牌纳管 · 每日平台奖励自动入账',count:((o.provider_count||{})['qoder']||0)+((o.provider_count||{})['qoder-intl']||0)},
-    {pid:'qwenwork',name:'千问办公 QwenWork',unit:'积分',val:o.qwenwork_remaining||0,desc:'企业凭证授权 · 每日登录积分自动同步',count:(o.provider_count||{})['qwenwork']||0},
-    {pid:'doubao',name:'豆包 Doubao (字节)',unit:'日额度',val:dbImagesLimit>0?(dbImagesLimit-dbImagesUsed):dbCount,isDoubao:true,dbData:{imagesUsed:dbImagesUsed,imagesLimit:dbImagesLimit,videosUsed:dbVideosUsed,videosLimit:dbVideosLimit,chats:dbChats},desc:'移动端扫码鉴权 · 文本 / Seedream 绘图 / Seedance 视频',count:dbCount}
+    {pid:'workbuddy',name:'WorkBuddy',unit:'积分',val:o.total_credits||0,count:(o.provider_count||{})['workbuddy']||0},
+    {pid:'trae',name:'Trae',unit:'积分',val:o.total_ide_credits||0,count:(o.provider_count||{})['trae']||0},
+    {pid:'qwen',name:'Qwen',unit:'次/天',val:o.qwen_remaining||0,count:(o.provider_count||{})['qwen']||0},
+    {pid:'qoder',name:'Qoder',unit:'credits',val:o.qoder_remaining||0,count:((o.provider_count||{})['qoder']||0)+((o.provider_count||{})['qoder-intl']||0)},
+    {pid:'qwenwork',name:'千问办公',unit:'积分',val:o.qwenwork_remaining||0,count:(o.provider_count||{})['qwenwork']||0},
+    {pid:'doubao',name:'豆包',unit:'次',val:dbImagesLimit>0?(dbImagesLimit-dbImagesUsed):dbCount,isDoubao:true,dbData:{imagesUsed:dbImagesUsed,imagesLimit:dbImagesLimit,videosUsed:dbVideosUsed,videosLimit:dbVideosLimit},count:dbCount}
   ];
 
-  el.innerHTML=cards.map((c,i)=>{
+  el.innerHTML=cards
+    // 过滤未接入或无剩余额度的厂商，只展示有可用额度的
+    .filter(c=>{
+      if(!c.count) return false; // 未接入
+      if(c.isDoubao) return (c.dbData.imagesLimit>0)||(c.dbData.videosLimit>0); // 豆包看图/视频额度
+      return c.val>0; // 其余看剩余额度>0
+    })
+    .map((c,i)=>{
     const tagCls=PROV_TAG[c.pid]||'plain';
     const countBadge=c.count?`<span class="tag ${tagCls}" style="padding:1px 7px;font-size:10.5px">${c.count} 实例</span>`:'<span class="tag plain" style="padding:1px 7px;font-size:10.5px">未接入</span>';
 
+    // 豆包：图/视频合并显示为一行
     if(c.isDoubao){
       const d=c.dbData;
-      const imgPct=d.imagesLimit>0?Math.min(100,Math.round(d.imagesUsed/d.imagesLimit*100)):0;
-      const vidPct=d.videosLimit>0?Math.min(100,Math.round(d.videosUsed/d.videosLimit*100)):0;
+      const imgTxt=d.imagesLimit?`图 ${d.imagesUsed}/${d.imagesLimit}`:'图 —';
+      const vidTxt=d.videosLimit?`视频 ${d.videosUsed}/${d.videosLimit}`:'视频 —';
       return `<div class="cap-card" style="animation-delay:${i*40}ms">
         <div class="cap-head"><span class="cap-title"><span class="tag ${tagCls}">DB</span> ${c.name}</span>${countBadge}</div>
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span class="muted">图片生成 (张/日)</span><b>${d.imagesUsed} / ${d.imagesLimit||'∞'}</b></div>
-          <div class="cap-track" style="margin-top:0"><div class="cap-fill ${imgPct>=100?'bad':imgPct>=75?'warn':'ok'}" style="width:${imgPct}%"></div></div>
-        </div>
-        <div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span class="muted">视频生成 (条/日)</span><b>${d.videosUsed} / ${d.videosLimit||'∞'}</b></div>
-          <div class="cap-track" style="margin-top:0"><div class="cap-fill ${vidPct>=100?'bad':vidPct>=75?'warn':'ok'}" style="width:${vidPct}%"></div></div>
-        </div>
-        <div class="cap-extra">${c.desc}</div>
-      </div>`;
-    }
-
-    if(c.isCapped&&c.max>0){
-      const pct=Math.max(Math.min(Math.round(c.val/c.max*100),100),0);
-      const cls=c.val<=0?'bad':(pct<20?'warn':'ok');
-      return `<div class="cap-card" style="animation-delay:${i*40}ms">
-        <div class="cap-head"><span class="cap-title"><span class="tag ${tagCls}">${c.pid.toUpperCase().slice(0,3)}</span> ${c.name}</span>${countBadge}</div>
-        <div class="cap-num ${cls}">${fmt(c.val)} <span class="unit">/ ${fmt(c.max)} ${c.unit}</span></div>
-        <div>
-          <div class="cap-track"><div class="cap-fill ${cls}" style="width:${pct}%"></div></div>
-          <div class="cap-ticks" style="margin-top:5px"><span>0</span><span>剩余 ${pct}%</span><span>${fmt(c.max)}</span></div>
-        </div>
-        <div class="cap-extra">${c.desc}</div>
+        <div class="cap-num">${imgTxt} · ${vidTxt}</div>
       </div>`;
     }
 
@@ -1509,11 +1494,6 @@ function renderCapCards(o){
     return `<div class="cap-card" style="animation-delay:${i*40}ms">
       <div class="cap-head"><span class="cap-title"><span class="tag ${tagCls}">${c.pid.toUpperCase().slice(0,3)}</span> ${c.name}</span>${countBadge}</div>
       <div class="cap-num ${zero?'bad':''}">${fmt(c.val)} <span class="unit">${c.unit}</span></div>
-      <div style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--green)">
-        <span class="live-dot" style="width:6px;height:6px"></span>
-        <span>${c.count?'实例就绪 · 纳入集群调度':'未接入该服务商实例'}</span>
-      </div>
-      <div class="cap-extra">${c.desc}</div>
     </div>`;
   }).join('');
 }
@@ -2257,6 +2237,136 @@ async function delModel(i){
   await savePublish();
 }
 function closeModelEditor(){$('#modelModal').classList.remove('open')}
+/* 常用模型官方参考价（$/1M tokens，OpenRouter/阿里云百炼口径，仅费用估算用）
+   键为小写模型名（去前缀），值 = {in, out, cache} */
+const MODEL_PRICE_TABLE = {
+  // ── Qwen 系列 ──
+  'qwen3.8-flash': {in:0.15, out:0.47, cache:0.015},
+  'qwen3.8-omni-flash': {in:0.15, out:0.47, cache:0.015},
+  'qwen3.8-max': {in:2.00, out:6.00, cache:0.20},
+  'qwen3.8-max-preview': {in:2.00, out:6.00, cache:0.20},
+  'qwen3-coder-flash': {in:0.195, out:0.975, cache:0.02},
+  'qwen3-coder': {in:0.30, out:1.00, cache:0.03},
+  'qwen3-flash': {in:0.15, out:0.47, cache:0.015},
+  'qwen3-coder-plus': {in:0.30, out:0.70, cache:0.03},
+  'qwen3-plus': {in:0.15, out:0.45, cache:0.015},
+  'qwen3-max': {in:0.70, out:2.20, cache:0.07},
+  'qwen3.5': {in:0.30, out:1.80, cache:0.03},
+  'qwen-3.5': {in:0.30, out:1.80, cache:0.03},
+  'qwen-3.7-plus': {in:0.30, out:1.80, cache:0.03},
+  'qwen3.5-plus': {in:0.30, out:1.80, cache:0.03},
+  'qwen-pro': {in:0.40, out:1.20, cache:0.04},
+  'flash': {in:0.15, out:0.47, cache:0.015}, // qwenwork 档位 flash
+  'pro': {in:0.40, out:1.20, cache:0.04},    // qwenwork 档位 pro
+  // ── GLM 系列（智谱）──
+  'glm-5.3-flash': {in:0.15, out:0.50, cache:0.03},
+  'glm-5.3-flashx': {in:0.37, out:1.25, cache:0.07},
+  'glm-5.3': {in:0.07, out:1.40, cache:0.014},
+  'glm-5.2': {in:0.03, out:7.00, cache:0.006},
+  'glm-5.1': {in:1.40, out:4.40, cache:0.14},
+  'glm-5': {in:1.40, out:4.40, cache:0.14},
+  'glm-5-turbo': {in:1.20, out:4.00, cache:0.12},
+  'glm-5v-turbo': {in:1.20, out:4.00, cache:0.12},
+  'glm-4.7': {in:0.54, out:1.98, cache:0.05},
+  'glm-4.7-auto': {in:0.54, out:1.98, cache:0.05},
+  'glm-4.6': {in:0.55, out:2.20, cache:0.06},
+  // ── DeepSeek 系列 ──
+  'deepseek-v4.1-flash': {in:0.02, out:1.00, cache:0.004},
+  'deepseek-flash': {in:0.02, out:1.00, cache:0.004},
+  'deepseek-v4-flash': {in:0.09, out:0.18, cache:0.018},
+  'deepseek-v4-pro': {in:0.78, out:1.55, cache:0.16},
+  'deepseek-v4': {in:0.02, out:1.00, cache:0.004},
+  'deepseek-v4.1': {in:0.20, out:0.80, cache:0.04},
+  'deepseek-chat': {in:0.27, out:1.10, cache:0.07},
+  'deepseek-reasoner': {in:0.55, out:2.19, cache:0.14},
+  // ── Kimi（月之暗面）──
+  'kimi-k3.1-pro': {in:2.00, out:10.00, cache:0.20},
+  'kimi-k3': {in:0.16, out:20.00, cache:0.016},
+  'kimi-k3-1': {in:0.16, out:20.00, cache:0.016},
+  'kimi-k2.8-preview': {in:0.65, out:3.41, cache:0.07},
+  'kimi-k2.7-code': {in:0.67, out:3.35, cache:0.07},
+  'kimi-k2.6': {in:0.65, out:3.41, cache:0.07},
+  'kimi-k2': {in:0.65, out:3.41, cache:0.07},
+  'space-bunny': {in:0.20, out:0.80, cache:0.02}, // Kimi 系开源模型，参考价
+  // ── 阶跃 / MiniMax / MiniMax / 小米 MoE ──
+  'step-5-preview': {in:1.00, out:2.70, cache:0.10},
+  'minimax-m3.1-flash': {in:0.15, out:0.60, cache:0.015},
+  'minimax-m3': {in:0.30, out:1.20, cache:0.03},
+  'minimax-m2.1': {in:0.15, out:0.60, cache:0.015},
+  'minimax-m2': {in:0.15, out:0.60, cache:0.015},
+  'mimo-v2.6-flash': {in:0.14, out:0.28, cache:0.014},
+  'mimo-v2.6-pro': {in:0.44, out:0.87, cache:0.04},
+  'mimo-v2.5-pro': {in:0.30, out:0.61, cache:0.03},
+  'mimo-v2.5': {in:0.30, out:0.61, cache:0.03},
+  'mimo-v2.5-flash': {in:0.14, out:0.28, cache:0.014},
+  // ── 混元（腾讯）──
+  'hy4-preview': {in:0.83, out:2.50, cache:0.08},
+  'hy3': {in:0.13, out:0.53, cache:0.013},
+  // ── 豆包（字节，图片/视频按次）──
+  'doubao-chat': {in:0.02, out:0.06, cache:0.004},
+  'seedream-5.0-flash': {perCall:0.04},
+  'seedream-5.0-pro': {perCall:0.08},
+  'seedream-4.5': {perCall:0.04},
+  'seedream-4.0': {perCall:0.04},
+  'seedance-2.5': {perCall:0.20},
+  'seedance-2.0': {perCall:0.15},
+  'seedance-2.0-pro': {perCall:0.30},
+  'seedance-2.0-fast': {perCall:0.10},
+  'seedance-2.0-mini': {perCall:0.08},
+  'seedance-1.0': {perCall:0.15},
+  'doubao-seedream': {perCall:0.04},
+  'doubao-seedance': {perCall:0.20},
+  // trae 里的豆包模型（映射按次价）
+  'doubao-seed-2.1-turbo': {perCall:0.04},
+  'doubao-seed-2.1-pro': {perCall:0.08},
+  'doubao-seed-evolving': {perCall:0.10},
+  'doubao_1_6': {in:0.02, out:0.06, cache:0.004},
+  'doubao-seed-code': {in:0.02, out:0.06, cache:0.004},
+  'doubao-seed-2.0-code': {in:0.02, out:0.06, cache:0.004},
+  'doubao-for-auto': {in:0.02, out:0.06, cache:0.004},
+};
+
+/* Qoder 内部代号 → 真实模型（d=DeepSeek g=GLM k=Kimi m=MiniMax q=Qwen sm=标准 cm=超值 f=flash档）
+   代号指向的具体版本随平台调整，价格为对应家族的参考价 */
+const QODER_CODEMAP = {
+  'dmodel': 'deepseek-v4.1-flash', 'dfmodel': 'deepseek-v4.1-flash',
+  'gmodel': 'glm-5.3-flash', 'gfmodel': 'glm-5.3-flash',
+  'kmodel': 'kimi-k3', 'kmodel_latest': 'kimi-k3.1-pro',
+  'mmodel': 'minimax-m3',
+  'qmodel_38max': 'qwen3.8-max', 'qfmodel': 'qwen3.8-flash',
+  'smodel': 'kimi-k3', 'cmodel': 'deepseek-v4.1-flash',
+  'ultimate': 'qwen3.8-max', 'efficient': 'qwen3.8-flash',
+  'auto': 'qwen3.8-flash',
+};
+
+/* 输入模型名自动带出已核实的官方单价（新建/改名时；已有手动价格不覆盖） */
+function autoFillPrice(){
+  const id=(($('#mmId').value)||'').trim().toLowerCase();
+  if(!id) return;
+  // 去掉 provider 前缀（如 qwen: / workbuddy: / qwenwork:）取裸模型名
+  const bare=id.includes(':')?id.slice(id.lastIndexOf(':')+1):id;
+  // 精确匹配优先，其次模糊（名称包含关系）
+  let hit=MODEL_PRICE_TABLE[bare]||null;
+  if(!hit){
+    for(const k in MODEL_PRICE_TABLE){
+      if(bare.includes(k)||k.includes(bare)){ hit=MODEL_PRICE_TABLE[k]; break; }
+    }
+  }
+  if(!hit) return;
+  // 编辑已有模型且有价格时，不覆盖用户手填的值
+  if(ED && ED.pricing && (ED.pricing.input>0||ED.pricing.output>0||ED.pricing.per_call>0)) return;
+  const media=(ED&&ED.type==='image')||(ED&&ED.type==='video');
+  if(hit.perCall!==undefined&&media){
+    $('#mmIn').value=hit.perCall; // 按次计费用 per_call
+    $('#mmOut').value=''; $('#mmCache').value='';
+  } else if(!media&&(hit.in>0||hit.out>0)){
+    $('#mmIn').value=hit.in||''; $('#mmOut').value=hit.out||''; $('#mmCache').value=hit.cache||'';
+  }
+  // 提示已自动填写
+  $('#mmStatus').textContent='✓ 已按官方参考价自动填写（可在下方修改）';
+  $('#mmStatus').className='status-line ok';
+}
+
 function openModelEditor(i){
   ED_IDX=i;
   ED=i<0?{id:'',note:'',type:'',pricing:null,channels:[]}:JSON.parse(JSON.stringify(PUB.models[i]));
@@ -2371,8 +2481,35 @@ function renderModels(){
   });
   const list=(MODELS&&MODELS[MODEL_TAB])||[];
   const tb=$('#modelTable tbody');
-  if(!list.length){tb.innerHTML='<tr><td colspan="5" class="empty">当前服务商暂未接入有效实例，或原生模型目录正在同步中（接入实例后将自动拉取）</td></tr>';return}
-  tb.innerHTML=list.map((m,i)=>`<tr style="--r:${i}"><td onclick="copyText('${esc(m.id)}','已复制模型 ID')" style="cursor:pointer" title="点击复制模型 ID"><code>${esc(m.id)} 📋</code>${m.kind&&m.kind!=='chat'?` <span class="tag plain">${m.kind==='image'?'图':'视频'}</span>`:''}</td><td onclick="copyText('${MODEL_TAB}:${esc(m.id)}','已复制直连名')" style="cursor:pointer" title="点击复制直连名"><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)} 📋</code></td><td class="mini">${esc(m.name||'—')}</td><td>${m.context_window?fmt(m.context_window):'—'}</td><td class="mini">${esc(m.credits||'—')}</td></tr>`).join('');
+  if(!list.length){tb.innerHTML='<tr><td colspan="6" class="empty">当前服务商暂未接入有效实例，或原生模型目录正在同步中（接入实例后将自动拉取）</td></tr>';return}
+  tb.innerHTML=list.map((m,i)=>{
+    const pr=priceOf(m.id);
+    const priceHtml=pr
+      ?(pr.perCall!==undefined?`<span style="color:var(--accent)">$${pr.perCall}/次</span>`
+        :`<span class="mini">$${pr.in||0}/${pr.out||0}<span class="faint">/1M${pr.cache?` · 缓存$${pr.cache}`:''}</span></span>`)
+      :'<span class="muted">未收录</span>';
+    return `<tr style="--r:${i}"><td onclick="copyText('${esc(m.id)}','已复制模型 ID')" style="cursor:pointer" title="点击复制模型 ID"><code>${esc(m.id)} 📋</code>${m.kind&&m.kind!=='chat'?` <span class="tag plain">${m.kind==='image'?'图':'视频'}</span>`:''}</td><td onclick="copyText('${MODEL_TAB}:${esc(m.id)}','已复制直连名')" style="cursor:pointer" title="点击复制直连名"><code style="color:var(--green)">${MODEL_TAB}:${esc(m.id)} 📋</code></td><td class="mini">${esc(m.name||'—')}</td><td>${m.context_window?fmt(m.context_window):'—'}</td><td class="mini">${esc(m.credits||'—')}</td><td>${priceHtml}</td></tr>`;
+  }).join('');
+}
+
+/* 从官方参考价表匹配模型价格（精确优先，其次模糊包含，再查 Qoder 代号映射） */
+function priceOf(mid){
+  if(!mid) return null;
+  const low=String(mid).toLowerCase();
+  const bare=low.includes(':')?low.slice(low.lastIndexOf(':')+1):low;
+  if(MODEL_PRICE_TABLE[bare]) return MODEL_PRICE_TABLE[bare];
+  // Qoder 代号映射
+  if(QODER_CODEMAP[bare]){
+    const real=QODER_CODEMAP[bare];
+    if(MODEL_PRICE_TABLE[real]) return Object.assign({qoderOf:bare}, MODEL_PRICE_TABLE[real]);
+  }
+  // 模糊：去掉常见后缀再匹配（如 -latest / -preview / 日期后缀）
+  for(const k in MODEL_PRICE_TABLE){
+    if(bare===k||bare.startsWith(k)||k.startsWith(bare)||bare.replace(/-[a-z0-9.]+$/,'')===k){
+      return MODEL_PRICE_TABLE[k];
+    }
+  }
+  return null;
 }
 
 /* ── 账号操作 ─────────────────────────── */

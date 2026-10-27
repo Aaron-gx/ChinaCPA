@@ -975,6 +975,12 @@ func (p *Panel) handleRequests(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
 	}
+	// 成本现已不在写入时固化：用当前发布模型价格重算历史成本，
+	// 避免 price 调整后旧请求仍按旧价计费
+	stats.CostCNY = 0
+	for _, mc := range stats.CostByModel {
+		stats.CostCNY += p.usage.CostFull(mc.Model, mc.Prompt, mc.Complete, mc.Cache, 0, "")
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"entries": entries,
 		"stats":   stats,
