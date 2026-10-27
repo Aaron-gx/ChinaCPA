@@ -77,11 +77,12 @@ func main() {
 		log.Fatalf("初始化用量目录失败: %v", err)
 	}
 
-	// 发布模型（对外模型 → 多渠道路由 + 单价）
-	pub, err := pubmodel.Load(filepath.Join(cfg.DataDir, "models.json"))
+	// 发布模型（对外模型 → 多渠道路由 + 单价）；渠道计数独立落盘，跨重启保留
+	pub, err := pubmodel.Load(filepath.Join(cfg.DataDir, "models.json"), filepath.Join(cfg.DataDir, "channel_stats.json"))
 	if err != nil {
 		log.Fatalf("加载发布模型失败: %v", err)
 	}
+	pub.StartStatsFlusher(10 * time.Second)
 	pl.SetPublished(pub)
 	pubPrices := map[string]usage.PubPrice{}
 	for k, v := range pub.PricingMap() {

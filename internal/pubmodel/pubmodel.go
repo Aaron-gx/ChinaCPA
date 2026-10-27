@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Channel 一个上游渠道：某平台的一个真实模型。
@@ -80,9 +81,12 @@ type Manager struct {
 	file string
 	cfg  *Config
 
-	// stats 渠道调用计数（运行期，重启清零）：key = lower(pubID)|provider|model
-	statsMu sync.Mutex
-	stats   map[string]*ChanStat
+	// stats 渠道调用计数：key = lower(pubID)|provider|model。
+	// 独立落盘 statsFile（Load 恢复 + 后台周期刷盘），跨重启保留。
+	statsMu    sync.Mutex
+	stats      map[string]*ChanStat
+	statsFile  string
+	statsDirty bool
 }
 
 // ChanStat 渠道成功/失败计数。
@@ -95,7 +99,7 @@ func chanStatKey(pubID, provider, model string) string {
 	return strings.ToLower(strings.TrimSpace(pubID)) + "|" + provider + "|" + model
 }
 
-// BumpChannel 渠道调用计数 +1。
+// BumpChannel 渠道调用计数 +1（标脏，由后台刷盘器持久化）。
 func (m *Manager) BumpChannel(pubID, provider, model string, ok bool) {
 	m.statsMu.Lock()
 	defer m.statsMu.Unlock()
@@ -112,6 +116,7 @@ func (m *Manager) BumpChannel(pubID, provider, model string, ok bool) {
 	} else {
 		st.Fail++
 	}
+	m.statsDirty = true
 }
 
 // ChannelStats 渠道计数快照。
@@ -125,9 +130,54 @@ func (m *Manager) ChannelStats() map[string]ChanStat {
 	return out
 }
 
-// Load 从文件加载；文件不存在返回空配置。
-func Load(file string) (*Manager, error) {
-	m := &Manager{file: file, cfg: &Config{}}
+// FlushStats 脏则原子写盘（后台刷盘器与测试共用）。
+func (m *Manager) FlushStats() error {
+	m.statsMu.Lock()
+	if !m.statsDirty || m.statsFile == "" {
+		m.statsMu.Unlock()
+		return nil
+	}
+	snap := map[string]ChanStat{}
+	for k, v := range m.stats {
+		snap[k] = *v
+	}
+	m.statsDirty = false
+	m.statsMu.Unlock()
+	raw, err := json.MarshalIndent(snap, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(m.statsFile, raw)
+}
+
+// StartStatsFlusher 启动后台周期刷盘（interval 内至多一次写盘，进程无常驻退出钩子时兜底）。
+func (m *Manager) StartStatsFlusher(interval time.Duration) {
+	if m.statsFile == "" {
+		return
+	}
+	go func() {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for range t.C {
+			_ = m.FlushStats()
+		}
+	}()
+}
+
+// Load 从文件加载；文件不存在返回空配置。statsFile 为渠道计数持久化路径（空 = 不持久化）。
+func Load(file, statsFile string) (*Manager, error) {
+	m := &Manager{file: file, cfg: &Config{}, statsFile: statsFile, stats: map[string]*ChanStat{}}
+	if statsFile != "" {
+		if raw, err := os.ReadFile(statsFile); err == nil {
+			var snap map[string]ChanStat
+			if json.Unmarshal(raw, &snap) == nil {
+				for k, v := range snap {
+					c := v
+					m.stats[k] = &c
+				}
+			}
+		}
+	}
 	raw, err := os.ReadFile(file)
 	if err != nil {
 		if os.IsNotExist(err) {

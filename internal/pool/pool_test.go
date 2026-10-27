@@ -47,7 +47,7 @@ func testPubManager(t *testing.T, models []*pubmodel.Model) *pubmodel.Manager {
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	m, err := pubmodel.Load(path)
+	m, err := pubmodel.Load(path, "")
 	if err != nil {
 		t.Fatalf("load pubmodel: %v", err)
 	}

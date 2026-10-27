@@ -156,7 +156,9 @@ func (d *DB) Add(e Entry) {
 		return
 	}
 	key := make([]byte, 8)
-	binary.BigEndian.PutUint64(key, d.keyNano(e.TS))
+	// 键必须用纳秒时钟（传 0 = 走 time.Now().UnixNano）：
+	// 若用 e.TS（秒级），同一秒内的多条请求键相同，bbolt Put 会相互覆盖丢日志
+	binary.BigEndian.PutUint64(key, d.keyNano(0))
 	_ = d.db.Batch(func(tx *bolt.Tx) error {
 		return tx.Bucket(bucketName).Put(key, raw)
 	})

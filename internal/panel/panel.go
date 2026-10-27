@@ -954,9 +954,9 @@ func (p *Panel) handleRequests(w http.ResponseWriter, r *http.Request) {
 		from = todayStart.AddDate(0, 0, -29).Unix()
 	default: // all
 	}
-	limit := 100
+	limit := 50
 	if n, err := fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit); err != nil || n < 1 || limit < 1 || limit > 1000 {
-		limit = 100
+		limit = 50
 	}
 	offset := 0
 	if n, err := fmt.Sscanf(r.URL.Query().Get("offset"), "%d", &offset); err != nil || n < 1 || offset < 0 {
