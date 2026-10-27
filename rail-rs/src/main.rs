@@ -142,8 +142,11 @@ unsafe fn run() -> Result<()> {
         };
         RegisterClassExW(&wc);
 
-        let initial_w = 340;
-        let initial_h = 560;
+        // 初始窗口直接建成细条尺寸（6×96），而不是 340×560：
+        // 窗口一出现就该是收起的细线，展开由 openness 动画驱动。
+        // 早前固定 340×560，收起来之前整块罩在屏幕上，用户看到的是灰块。
+        let initial_w = 6;
+        let initial_h = 96;
 
     std::panic::set_hook(Box::new(|info| {
         log_msg(&format!("PANIC: {:?}", info));
@@ -213,8 +216,9 @@ unsafe fn run() -> Result<()> {
             *s.borrow_mut() = Some(state);
         });
 
-        // 定位窗口贴在主屏右侧
+        // 定位窗口贴在主屏右侧（初始即细条尺寸）
         reposition_window(hwnd, initial_w, initial_h);
+        sync_window_size(hwnd);
 
         // 启动后台网络与 SSE 数据采集线程
         if !is_demo {
@@ -267,6 +271,75 @@ fn reposition_window(hwnd: HWND, w: i32, h: i32) {
     }
 }
 
+/// 按当前 openness 把窗口物理尺寸同步到"细条 ↔ 展开胶囊"。
+///
+/// Pulse 的 rail 是一整条实心窗口：收起时窗口本身就窄到 6px，展开时才
+/// 长到 64px（卡片作为 overlay 另算，不占窗口）。
+///
+/// 这里必须真的改窗口尺寸，而不是只改绘制范围 —— 分层/透明窗口的
+/// 未绘制像素在视觉上仍是一块盖在屏幕上的区域，鼠标能穿透、眼睛穿不过。
+fn sync_window_size(hwnd: HWND) {
+    unsafe {
+        STATE.with(|s| {
+            if let Some(state) = s.borrow_mut().as_mut() {
+                let scale = state.scale;
+                let lm = LayoutMetrics::new(scale);
+                let openness = state.openness.cur.clamp(0.0, 1.0);
+
+                // 宽度：细条 6pt ↔ 胶囊 64pt 随 openness 插值。
+                // 卡片展开时额外加一个卡片宽度，避免卡片被窗口裁掉。
+                let card_extra = if state.card_openness.cur > 0.01 {
+                    lm.card_w + 28.0 * scale
+                } else {
+                    0.0
+                };
+                let want_w = lm.sliver_w + (lm.pill_w - lm.sliver_w) * openness + card_extra;
+
+                // 高度：细条 96pt ↔ 内容高度随 openness 插值。
+                let n = state.metrics.len().min(8);
+                let slot_h = lm.ring_d + 6.0 * scale + 16.0 * scale + lm.item_spacing;
+                let content_h = if n == 0 {
+                    lm.sliver_h
+                } else {
+                    (n as f32) * slot_h - lm.item_spacing + 46.0 * scale * 2.0
+                };
+                let want_h = lm.sliver_h + (content_h - lm.sliver_h).max(0.0) * openness;
+
+                // 内容变多时窗口要跟着长，但收缩时用当前内容高度兜底，
+                // 避免 hover 期间高度忽大忽小。
+                let want_h = want_h.max(lm.sliver_h * 0.5);
+
+                let mut wr = RECT::default();
+                GetWindowRect(hwnd, &mut wr).ok();
+                let cur_w = (wr.right - wr.left) as f32;
+                let cur_h = (wr.bottom - wr.top) as f32;
+
+                // 1px 以内不动，避免每帧都 SetWindowPos 抖屏
+                if (want_w - cur_w).abs() < 1.0 && (want_h - cur_h).abs() < 1.0 {
+                    return;
+                }
+
+                reposition_window(hwnd, want_w.round() as i32, want_h.round() as i32);
+
+                // D2D 交换链也必须跟着改尺寸。
+                //
+                // 窗口缩到细条而交换链还停在 340×560 时，DXGI 会把旧尺寸的
+                // 后台缓冲按新窗口裁切/拉伸，画出来就是一块灰 —— 那才是
+                // 用户看到的"灰色遮罩"，窗口尺寸只是它的一半原因。
+                let new_w = want_w.round().max(1.0) as u32;
+                let new_h = want_h.round().max(1.0) as u32;
+                if let Err(e) = state.engine.resize(new_w, new_h) {
+                    log_msg(&format!("engine resize failed: {:?}", e));
+                }
+
+                // 记录到 state，供 hit-test 与绘制使用
+                state.width = want_w;
+                state.height = want_h;
+            }
+        });
+    }
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_PAINT => {
@@ -304,6 +377,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             }
                         }
                     });
+                    // 先按当前 openness 同步窗口物理尺寸，再绘制。
+                    //
+                    // 早前这里只更新 openness 而不改窗口尺寸：窗口从创建起就固定
+                    // 340×560，收成细条时只是内部绘制变窄，那一大块窗口仍然罩在
+                    // 屏幕上，把后面的浏览器整片盖住 —— 用户看到的就是一块灰。
+                    sync_window_size(hwnd);
                     draw_now();
                     if !still_busy {
                         STATE.with(|s| {
