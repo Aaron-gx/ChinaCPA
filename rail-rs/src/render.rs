@@ -15,6 +15,8 @@ pub struct RingAnimState {
     pub halo: FadeValue,
     /// 刷新扫光进度：0=无，>0 时沿环走一圈（16% 弧，0.85s）。点环刷新后触发。
     pub sweep: f32,
+    /// 窗口时钟弧平滑值（reset 跳回时 easeOut 过渡）
+    pub clock: SpringValue,
 }
 
 impl RingAnimState {
@@ -23,6 +25,7 @@ impl RingAnimState {
             arc: SpringValue::new(val),
             halo: FadeValue::new(0.0, 5.0),
             sweep: 0.0,
+            clock: SpringValue::new(0.0),
         }
     }
 }
@@ -176,6 +179,7 @@ pub fn render_frame(
                 let cur_val = anims.get(i).map(|a| a.arc.cur).unwrap_or(m.used as f32);
                 let halo_val = anims.get(i).map(|a| a.halo.cur).unwrap_or(0.0);
                 let sweep_val = anims.get(i).map(|a| a.sweep).unwrap_or(0.0);
+                let clock_val = anims.get(i).map(|a| a.clock.cur).unwrap_or(-1.0);
 
                 draw_usage_ring(
                     eng,
@@ -188,6 +192,7 @@ pub fn render_frame(
                     ring_alpha,
                     busy_spin,
                     sweep_val,
+                    clock_val,
                     &lm,
                 )?;
             }
@@ -310,6 +315,7 @@ unsafe fn draw_usage_ring(
     ring_alpha: f32,
     busy_spin: f32,
     sweep: f32,
+    clock: f32,
     lm: &LayoutMetrics,
 ) -> Result<()> {
     let rt = &eng.rt;
@@ -379,6 +385,29 @@ unsafe fn draw_usage_ring(
         let busy_r = 13.0 * lm.scale;
         let busy_deg = (busy_spin * 180.0 / std::f32::consts::PI) % 360.0;
         draw_arc(eng, cx, cy, busy_r, busy_deg, 60.0, 1.8 * lm.scale, &eng.brush_text_primary)?;
+    }
+
+    // 5b. 窗口时钟弧（Pulse windowClock）：外圈 hairline，半径 = 环外缘 + 4pt·scale。
+    //     轨道 0.16 / 弧 0.7 中性灰白、2pt 圆头、12 点起顺时针；数据不全不画。
+    if clock > -0.5 {
+        let clw = 2.0 * lm.scale;
+        let cr = r + lm.ring_line / 2.0 + 4.0 * lm.scale;
+        let track_col = D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 0.16 * ring_alpha };
+        if let Ok(tb) = rt.CreateSolidColorBrush(&track_col, None) {
+            rt.DrawEllipse(
+                &D2D1_ELLIPSE { point: D2D_POINT_2F { x: cx, y: cy }, radiusX: cr, radiusY: cr },
+                &tb,
+                clw,
+                None,
+            );
+        }
+        if clock > 0.005 {
+            let arc_col = D2D1_COLOR_F { r: 1.0, g: 1.0, b: 1.0, a: 0.7 * ring_alpha };
+            if let Ok(ab) = rt.CreateSolidColorBrush(&arc_col, None) {
+                let deg = (clock * 360.0).clamp(0.0, 359.9);
+                draw_arc(eng, cx, cy, cr, -90.0, deg, clw, &ab)?;
+            }
+        }
     }
 
     // 6. 平台图标贴图

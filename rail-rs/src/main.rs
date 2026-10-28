@@ -449,6 +449,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 if a.halo.step(dt) {
                                     still_busy = true;
                                 }
+                                if a.clock.step(dt) {
+                                    still_busy = true;
+                                }
                                 // 刷新扫光：0.85s 走完一圈（Pulse refreshMark）
                                 if a.sweep > 0.0 {
                                     a.sweep = (a.sweep + dt / 0.85).min(1.0);
@@ -844,6 +847,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                         for (i, m) in new_metrics.iter().enumerate() {
                             state.anims[i].arc.set(m.used as f32);
+                            // 窗口时钟：-1 = 数据不全，弹簧目标 -1（绘制侧 >-0.5 才画）
+                            state.anims[i].clock.set(m.clock_frac as f32);
                         }
                         state.metrics = new_metrics;
                         need_anim = true;
