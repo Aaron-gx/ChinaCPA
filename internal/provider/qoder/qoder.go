@@ -632,6 +632,7 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 			detail["quota_exceeded"] = usage.IsQuotaExceeded
 			if usage.ExpiresAtMs > 0 {
 				detail["resets_at"] = time.UnixMilli(usage.ExpiresAtMs).Format("01-02 15:04")
+				detail["resets_at_unix"] = usage.ExpiresAtMs / 1000
 			}
 		} else if err != nil {
 			detail["quota_error"] = err.Error()

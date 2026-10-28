@@ -240,6 +240,8 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		CooldownUntil  int64                `json:"cooldown_until"`
 		CooldownModels []string             `json:"cooldown_models,omitempty"` // 冷却中的模型（""=账号级）
 		Quota          *model.QuotaInfo     `json:"quota,omitempty"`
+		ResetsAtUnix   int64                `json:"resets_at_unix,omitempty"`  // 额度窗口重置时刻（rail 时钟弧/预测用，0=未知）
+		WindowSeconds  int64                `json:"window_seconds,omitempty"`  // 窗口总长秒数（0=未知，绝不猜）
 		CheckinToday   *model.CheckinResult `json:"checkin_today,omitempty"`
 		Inflight       int64                `json:"inflight"` // 当前进行中的请求数（实时负载）
 		Status         string               `json:"status"` // ok / relogin / cooldown / disabled / expired
@@ -293,6 +295,30 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 		if q := p.st.GetQuota(a.Provider, a.UID); q != nil {
 			v.Quota = q
+			// 机器可读的额度窗口：resets_at_unix 优先（qoder 等），否则 daily 配额
+			// 派生为"下一个本地午夜"；非 daily 且无显式时间戳 = 未知（0，绝不猜）。
+			now := time.Now()
+			if q.Detail != nil {
+				if ru, ok := q.Detail["resets_at_unix"]; ok {
+					var unix int64
+					switch n := ru.(type) {
+					case int64:
+						unix = n
+					case float64:
+						unix = int64(n)
+					}
+					if unix > now.Unix() {
+						v.ResetsAtUnix = unix
+						// 窗口起点未知 → WindowSeconds 留 0（绝不猜，rail 不画时钟弧）
+					}
+				}
+			}
+			if v.ResetsAtUnix == 0 && q.Daily {
+				next := now.Add(24 * time.Hour)
+				mid := time.Date(next.Year(), next.Month(), next.Day(), 0, 0, 0, 0, now.Location())
+				v.ResetsAtUnix = mid.Unix()
+				v.WindowSeconds = 86400
+			}
 			switch a.Provider {
 			case "workbuddy", "workbuddy-intl":
 				totalCredits += float64(q.Credits)

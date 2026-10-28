@@ -99,6 +99,22 @@ impl Client {
     }
 }
 
+/// 点环刷新：POST /api/accounts/action {provider, uid, action:"quota"}。
+/// 后端刷新完成后经 SSE 推回，rail 自动收到新数据。
+/// 独立线程 fire-and-forget 调用，失败静默（轮询/SSE 会兜底）。
+pub fn spawn_refresh(base_url: String, password: String, provider: String, uid: String) {
+    thread::spawn(move || {
+        let client = Client::new(base_url, password);
+        let cookie = match client.login() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let url = format!("{}/api/accounts/action", client.base_url);
+        let body = serde_json::json!({ "provider": provider, "uid": uid, "action": "quota" });
+        let _ = client.agent.post(&url).set("Cookie", &cookie).send_json(body);
+    });
+}
+
 pub fn spawn_network_worker(
     base_url: String,
     password: String,

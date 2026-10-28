@@ -25,6 +25,12 @@ pub struct Metric {
     pub spent: bool,
     pub has_second_ring: bool,
     pub second_used: f64,
+    /// 该 provider 下所有账号 uid（点环刷新时逐个 POST action）
+    pub uids: Vec<String>,
+    /// 额度窗口重置时刻（unix 秒；0=未知）
+    pub resets_at_unix: i64,
+    /// 窗口总长秒数（0=未知 → 不画时钟弧、不做预测）
+    pub window_seconds: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -74,6 +80,10 @@ pub struct Account {
     #[serde(default)]
     pub status: String,
     pub quota: Option<Quota>,
+    #[serde(default)]
+    pub resets_at_unix: i64,
+    #[serde(default)]
+    pub window_seconds: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,6 +107,9 @@ pub fn metrics_from_overview(ov: &Overview) -> Vec<Metric> {
         quota_exceeded: bool,
         unhealthy: bool,
         provider_name: String,
+        uids: Vec<String>,
+        resets_at_unix: i64,
+        window_seconds: i64,
     }
 
     let mut by_provider: HashMap<String, ProviderGroup> = HashMap::new();
@@ -124,6 +137,9 @@ pub fn metrics_from_overview(ov: &Overview) -> Vec<Metric> {
             } else {
                 a.provider.clone()
             },
+            uids: Vec::new(),
+            resets_at_unix: 0,
+            window_seconds: 0,
         });
 
         g.used += q.used;
@@ -131,6 +147,12 @@ pub fn metrics_from_overview(ov: &Overview) -> Vec<Metric> {
         g.remaining += q.remaining;
         g.daily = g.daily || q.daily;
         g.count += 1;
+        g.uids.push(a.uid.clone());
+        // 窗口时间：取账号中最早的重置时刻（同一 provider 窗口一致）
+        if a.resets_at_unix > 0 && (g.resets_at_unix == 0 || a.resets_at_unix < g.resets_at_unix) {
+            g.resets_at_unix = a.resets_at_unix;
+            g.window_seconds = a.window_seconds;
+        }
 
         if !q.unit.is_empty() {
             g.unit = q.unit.clone();
@@ -208,6 +230,19 @@ pub fn metrics_from_overview(ov: &Overview) -> Vec<Metric> {
                 "—".to_string()
             };
 
+            // 窗口时钟比例：elapsed/window。数据不全 → -1（绝不猜，不画弧）
+            let clock_frac = if g.window_seconds > 0 && g.resets_at_unix > 0 {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let remaining = (g.resets_at_unix - now).max(0) as f64;
+                let frac = 1.0 - remaining / g.window_seconds as f64;
+                frac.clamp(0.0, 1.0)
+            } else {
+                -1.0
+            };
+
             out.push(Metric {
                 label: display_name(pid),
                 full: g.provider_name.clone(),
@@ -219,11 +254,14 @@ pub fn metrics_from_overview(ov: &Overview) -> Vec<Metric> {
                 balance,
                 rows: g.rows.clone(),
                 account_count: g.count,
-                clock_frac: -1.0,
+                clock_frac,
                 busy: false,
                 spent: g.quota_exceeded || g.unhealthy,
                 has_second_ring: false,
                 second_used: 0.0,
+                uids: g.uids.clone(),
+                resets_at_unix: g.resets_at_unix,
+                window_seconds: g.window_seconds,
             });
         }
     }
@@ -256,6 +294,9 @@ pub fn demo_metrics() -> Vec<Metric> {
             spent: false,
             has_second_ring: false,
             second_used: 0.0,
+            uids: vec![],
+            resets_at_unix: 0,
+            window_seconds: 0,
         },
         Metric {
             label: "WorkBuddy".into(),
@@ -280,6 +321,9 @@ pub fn demo_metrics() -> Vec<Metric> {
             spent: false,
             has_second_ring: false,
             second_used: 0.0,
+            uids: vec![],
+            resets_at_unix: 0,
+            window_seconds: 0,
         },
         Metric {
             label: "Trae".into(),
@@ -304,6 +348,9 @@ pub fn demo_metrics() -> Vec<Metric> {
             spent: false,
             has_second_ring: false,
             second_used: 0.0,
+            uids: vec![],
+            resets_at_unix: 0,
+            window_seconds: 0,
         },
         Metric {
             label: "Qoder".into(),
@@ -328,6 +375,9 @@ pub fn demo_metrics() -> Vec<Metric> {
             spent: false,
             has_second_ring: false,
             second_used: 0.0,
+            uids: vec![],
+            resets_at_unix: 0,
+            window_seconds: 0,
         },
     ]
 }
