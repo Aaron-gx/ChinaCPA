@@ -96,6 +96,8 @@ pub fn render_frame(
     scale: f32,
     segmented: bool,
     dock: Dock,
+    pulled: f32,
+    thinning: f32,
     hwnd: HWND,
 ) -> Result<()> {
     unsafe {
@@ -130,10 +132,15 @@ pub fn render_frame(
         let cur_h = collapsed_h + (expanded_h - collapsed_h) * openness;
 
         // 规范空间几何（bu=沿厚度轴宽, bv=沿长度轴高）
+        // 液颈拉伸：pulled>0 时 rail 整体从贴边侧内移 drawn 距离，
+        // 并在贴边侧画一条收窄的液颈连回边缘（Pulse DropletTether）。
+        let rest = 1.0 - (pulled / 80.0).clamp(0.0, 1.0);
+        let drawn = pulled * (1.0 - (1.0 - 0.15) * rest * rest);
+        let necking = thinning.clamp(0.0, 1.0);
         let dock_top = (bv - cur_h) / 2.0;
         let dock_bottom = dock_top + cur_h;
-        let dock_left = bu - cur_w;
-        let dock_right = bu;
+        let dock_left = bu - cur_w - drawn;
+        let dock_right = bu - drawn;
 
         // 2. 绘制 Pulse S 型贴边凹弧胶囊
         //    收起态告警染色（Pulse alertTint）：sliver 在最高额度 ≥ 阈值或耗尽
@@ -170,6 +177,23 @@ pub fn render_frame(
             alert,
             &lm,
         )?;
+
+        // 液颈：把 rail 贴边侧拉一条收窄的桥接到屏幕边缘（Pulse fluidTurn 近似）。
+        // waistHalf 随张力收细（1-u^2.2 的精简版：necking 越小越细）。
+        if drawn > 0.5 {
+            let half_h = cur_h * 0.5;
+            let waist = half_h * (0.45 * necking).clamp(0.02, 0.45);
+            let neck = eng.d2d_factory.CreatePathGeometry()?;
+            let s = neck.Open()?;
+            let (cy, bx) = ((dock_top + dock_bottom) / 2.0, dock_right);
+            s.BeginFigure(D2D_POINT_2F { x: bx, y: cy - waist }, D2D1_FIGURE_BEGIN_FILLED);
+            s.AddLine(D2D_POINT_2F { x: bu, y: cy - waist * 0.7 });
+            s.AddLine(D2D_POINT_2F { x: bu, y: cy + waist * 0.7 });
+            s.AddLine(D2D_POINT_2F { x: bx, y: cy + waist });
+            s.EndFigure(D2D1_FIGURE_END_CLOSED);
+            s.Close()?;
+            rt.FillGeometry(&neck, alert.unwrap_or(&eng.brush_rail), None);
+        }
 
         // 3. 闲置状态居中彩色呼吸指示条（openness < 0.6 时平滑呈现）
         if openness < 0.6 {

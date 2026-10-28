@@ -91,7 +91,27 @@ pub struct AppState {
     pub left_at: u64,
     /// rail 本次展开的时刻（ms），点环刷新 0.3s 防误触用
     pub rail_opened_at: u64,
+
+    // ── 液态吸附（Pulse DropletTether）──
+    /// 液颈细度 0..1（1=完全贴边无颈，0=极细）；贴上瞬间置 0.85 后按 exp(-dt/0.22) 衰减
+    pub thinning: f32,
+    /// 断开融合 0..1；断边瞬间置 1 后按 exp(-dt/0.14) 衰减
+    pub fusion: f32,
+    /// 液颈拉伸距离（px，0=贴边）；由指针-贴边距离推出，≥80 触发断裂
+    pub pulled: f32,
+    /// 正在断开的计时（ms），0=不在断裂中
+    pub parting_since: u64,
+    /// 断开进度 0..1（两段回缩）
+    pub parted: f32,
+    /// 拖拽速度（px/s，用于抛掷拉伸）
+    pub vel: (f32, f32),
+    pub last_drag_pt: POINT,
+    pub last_drag_ms: u64,
 }
+
+const TETHER_BREAK: f32 = 80.0;
+const TETHER_GRIP: f32 = 0.15;
+const TETHER_PARTING_MS: u64 = 220;
 
 fn main() {
     unsafe {
@@ -240,6 +260,14 @@ unsafe fn run() -> Result<()> {
             dock,
             left_at: 0,
             rail_opened_at: 0,
+            thinning: 1.0,
+            fusion: 0.0,
+            pulled: 0.0,
+            parting_since: 0,
+            parted: 0.0,
+            vel: (0.0, 0.0),
+            last_drag_pt: POINT::default(),
+            last_drag_ms: 0,
         };
 
         STATE.with(|s| {
@@ -427,6 +455,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             match wparam.0 {
                 TIMER_ANIM => {
                     let mut still_busy = false;
+                    let mut tether_freed = false;
                     STATE.with(|s| {
                         if let Some(state) = s.borrow_mut().as_mut() {
                             let dt = 1.0 / 60.0;
@@ -451,6 +480,36 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 if a.clock.step(dt) {
                                     still_busy = true;
                                 }
+                                // 液颈细度/融合指数衰减（Pulse: exp(-dt/0.22) / exp(-dt/0.14)）
+                                state.thinning *= (-dt / 0.22).exp();
+                                state.fusion *= (-dt / 0.14).exp();
+                                if state.thinning < 0.005 {
+                                    state.thinning = 0.0;
+                                    still_busy = true;
+                                }
+                                if state.fusion < 0.005 {
+                                    state.fusion = 0.0;
+                                    still_busy = true;
+                                }
+                                // 断裂进程：0.22s 内 parted 0→1（两段回缩），完成转自由态
+                                if state.parting_since > 0 {
+                                    let p = (now_ms() - state.parting_since) as f32 / TETHER_PARTING_MS as f32;
+                                    if p >= 1.0 {
+                                        state.parted = 1.0;
+                                        state.parting_since = 0;
+                                        // standFree：转为自由态（保留轴向）
+                                        let v = state.dock.vertical();
+                                        state.dock = Dock::Floating(v);
+                                        state.place.set_dock(state.dock);
+                                        state.pulled = 0.0;
+                                        state.thinning = 0.0;
+                                        tether_freed = true;
+                                    } else {
+                                        state.parted = 1.0 - (1.0 - p) * (1.0 - p);
+                                    }
+                                    still_busy = true;
+                                }
+
                                 // 刷新扫光：0.85s 走完一圈（Pulse refreshMark）
                                 if a.sweep > 0.0 {
                                     a.sweep = (a.sweep + dt / 0.85).min(1.0);
@@ -467,6 +526,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 早前这里只更新 openness 而不改窗口尺寸：窗口从创建起就固定
                     // 340×560，收成细条时只是内部绘制变窄，那一大块窗口仍然罩在
                     // 屏幕上，把后面的浏览器整片盖住 —— 用户看到的就是一块灰。
+                    if tether_freed {
+                        // 自由态：按当前窗口位置重算比例并持久化
+                        STATE.with(|s| {
+                            if let Some(st) = s.borrow_mut().as_mut() {
+                                let mut wr = RECT::default();
+                                GetWindowRect(hwnd, &mut wr).ok();
+                                let g = monitor_geom(hwnd);
+                                let room = placement::room_for(st.dock, st.place.snaps, &g);
+                                let (h, v) = placement::ratios(wr, room, (wr.right - wr.left) as f32, (wr.bottom - wr.top) as f32);
+                                st.place.h = h;
+                                st.place.v = v;
+                                save_placement(&st.place.clone());
+                            }
+                        });
+                    }
                     sync_window_size(hwnd);
                     draw_now();
                     if !still_busy {
@@ -598,15 +672,48 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
                         let new_x = state.drag_start_window.left + dx;
                         let new_y = state.drag_start_window.top + dy;
-                        SetWindowPos(
-                            hwnd,
-                            None,
-                            new_x,
-                            new_y,
-                            0,
-                            0,
-                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                        ).ok();
+
+                        // ── 液态吸附（Pulse DropletTether）──
+                        // 贴边时指针拉离贴边方向 d ≤ 80px：rail 只走 displayPull
+                        // = d·(1-(1-grip)·rest²)（grip 0.15，二次逼近），差额画成液颈；
+                        // d ≥ 80 = 断裂，进入 0.22s parting，两段各自回缩后 standFree。
+                        let dock_edge = state.dock;
+                        if let Some(e) = dock_edge.edge() {
+                            let oxf = state.drag_start_window.left as f32;
+                            let oyf = state.drag_start_window.top as f32;
+                            let ww = state.width.max(1.0);
+                            let wh = state.height.max(1.0);
+                            // 沿"离开贴边"方向的原始位移 d
+                            let d = match e {
+                                Edge::Right => (oxf + ww - (new_x as f32 + ww)) as f32 * -1.0,
+                                Edge::Left => new_x as f32 - oxf,
+                                Edge::Top => new_y as f32 - oyf,
+                                Edge::Bottom => (oyf + wh - (new_y as f32 + wh)) * -1.0,
+                            };
+                            let d = d.max(0.0);
+                            state.pulled = d;
+                            if state.parting_since == 0 && state.parted == 0.0 {
+                                if d >= TETHER_BREAK {
+                                    state.parting_since = now_ms();
+                                    state.fusion = 1.0;
+                                } else {
+                                    // displayPull：起始 15% 速度、在 80 处与指针同位同速
+                                    let rest = 1.0 - (d / TETHER_BREAK).clamp(0.0, 1.0);
+                                    let drawn = d * (1.0 - (1.0 - TETHER_GRIP) * rest * rest);
+                                    state.thinning = (1.0 - drawn / TETHER_BREAK).clamp(0.0, 1.0);
+                                }
+                            }
+                            // 断裂/回缩期间窗口停在原地
+                            let (sx, sy) = if state.parting_since > 0 || state.parted > 0.0 {
+                                (state.drag_start_window.left, state.drag_start_window.top)
+                            } else {
+                                (new_x, new_y)
+                            };
+                            SetWindowPos(hwnd, None, sx, sy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
+                        } else {
+                            SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
+                        }
+
                         // Pulse dragDock：拖拽中实时判定吸附边
                         let rail = RECT {
                             left: new_x,
@@ -619,10 +726,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if nd != state.dock {
                             state.dock = nd;
                             state.place.set_dock(nd);
-                            // 换边 → 物理宽高要交换，标记强制 sync（闭包外执行防嵌套借用）
+                            // 换边 → 物理宽高要交换，标记强制 sync
                             state.width = -1.0;
                             state.height = -1.0;
                             dock_changed = true;
+                            // 贴上瞬间：thinning 置 0.85（Pulse attachThinning）
+                            if nd.is_docked() {
+                                state.thinning = 0.85;
+                            }
                         }
                         return;
                     }
@@ -788,8 +899,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if state.dragging {
                         state.dragging = false;
                         ReleaseCapture().ok();
-                        if state.did_drag {
-                            // 拖拽结束：把 rail 沿边轴的位置比例写回并持久化
+                        // 拖拽结束：自由态保留当前位置；停靠态按比例贴回
+                        state.parting_since = 0;
+                        state.parted = 0.0;
+                        state.pulled = 0.0;
+                        state.thinning = 1.0;
+                        if state.did_drag && state.dock.is_docked() {
                             let mut wr = RECT::default();
                             GetWindowRect(hwnd, &mut wr).ok();
                             let g = monitor_geom(hwnd);
@@ -951,6 +1066,8 @@ fn draw_now() {
                 state.scale,
                 state.place.bar_style == "segmented",
                 state.dock,
+                state.pulled,
+                state.thinning,
                 state.hwnd,
             ) {
                 log_msg(&format!("render_frame err: {:?}", e));
