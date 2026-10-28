@@ -13,6 +13,8 @@ use crate::spring::{FadeValue, SpringValue};
 pub struct RingAnimState {
     pub arc: SpringValue,
     pub halo: FadeValue,
+    /// 刷新扫光进度：0=无，>0 时沿环走一圈（16% 弧，0.85s）。点环刷新后触发。
+    pub sweep: f32,
 }
 
 impl RingAnimState {
@@ -20,6 +22,7 @@ impl RingAnimState {
         Self {
             arc: SpringValue::new(val),
             halo: FadeValue::new(0.0, 5.0),
+            sweep: 0.0,
         }
     }
 }
@@ -106,6 +109,30 @@ pub fn render_frame(
         let dock_right = w;
 
         // 2. 绘制 Pulse S 型贴边凹弧胶囊
+        //    收起态告警染色（Pulse alertTint）：sliver 在最高额度 ≥ 阈值或耗尽
+        //    时整条染告警色；展开即回黑（环本身携带状态）。
+        //    balance（积分余额型）不参与告警折叠：其 used_frac 恒为 1.0 是
+        //    "有余额"而非"快用完"，染色会误报（Pulse 用 isExhausted 表耗尽）。
+        let alert = if openness < 0.3 {
+            let worst = metrics.iter().fold(None::<&Metric>, |acc, m| {
+                if m.balance {
+                    return acc;
+                }
+                match acc {
+                    None => Some(m),
+                    Some(a) if m.used > a.used => Some(m),
+                    Some(a) => Some(a),
+                }
+            });
+            match worst {
+                Some(m) if m.spent || m.used >= 0.75 => {
+                    Some(eng.color_for_fraction(m.used as f32, false, m.spent))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         draw_pulse_berth_shape(
             eng,
             dock_left,
@@ -113,6 +140,7 @@ pub fn render_frame(
             dock_right,
             dock_bottom,
             openness,
+            alert,
             &lm,
         )?;
 
@@ -147,6 +175,7 @@ pub fn render_frame(
                 let cx = dock_left + cur_w / 2.0;
                 let cur_val = anims.get(i).map(|a| a.arc.cur).unwrap_or(m.used as f32);
                 let halo_val = anims.get(i).map(|a| a.halo.cur).unwrap_or(0.0);
+                let sweep_val = anims.get(i).map(|a| a.sweep).unwrap_or(0.0);
 
                 draw_usage_ring(
                     eng,
@@ -158,6 +187,7 @@ pub fn render_frame(
                     hover_index == Some(i),
                     ring_alpha,
                     busy_spin,
+                    sweep_val,
                     &lm,
                 )?;
             }
@@ -194,6 +224,7 @@ unsafe fn draw_pulse_berth_shape(
     right: f32,
     bottom: f32,
     openness: f32,
+    alert: Option<&ID2D1SolidColorBrush>,
     lm: &LayoutMetrics,
 ) -> Result<()> {
     let rt = &eng.rt;
@@ -262,7 +293,7 @@ unsafe fn draw_pulse_berth_shape(
     sink.EndFigure(D2D1_FIGURE_END_CLOSED);
     sink.Close()?;
 
-    rt.FillGeometry(&path, &eng.brush_rail, None);
+    rt.FillGeometry(&path, alert.unwrap_or(&eng.brush_rail), None);
     rt.DrawGeometry(&path, &eng.brush_hairline, 0.75, None);
 
     Ok(())
@@ -278,6 +309,7 @@ unsafe fn draw_usage_ring(
     is_hovered: bool,
     ring_alpha: f32,
     busy_spin: f32,
+    sweep: f32,
     lm: &LayoutMetrics,
 ) -> Result<()> {
     let rt = &eng.rt;
@@ -309,10 +341,30 @@ unsafe fn draw_usage_ring(
     );
 
     // 3. 动态进度弧 (使用 Direct2D PathGeometry 顺时针圆头绘制)
+    //    刷新扫光进行中时，原弧 dim 到 0.3（Pulse refreshMark 行为）
     let sweep_deg = (val * 360.0).clamp(0.0, 359.9);
     if sweep_deg > 0.5 {
         let arc_brush = eng.color_for_fraction(val, m.balance, m.spent);
-        draw_arc(eng, cx, cy, r, -90.0, sweep_deg, lm.ring_line, arc_brush)?;
+        if sweep > 0.0 {
+            let dim = D2D1_COLOR_F {
+                r: arc_brush.GetColor().r,
+                g: arc_brush.GetColor().g,
+                b: arc_brush.GetColor().b,
+                a: 0.3 * ring_alpha,
+            };
+            if let Ok(b) = rt.CreateSolidColorBrush(&dim, None) {
+                draw_arc(eng, cx, cy, r, -90.0, sweep_deg, lm.ring_line, &b)?;
+            }
+        } else {
+            draw_arc(eng, cx, cy, r, -90.0, sweep_deg, lm.ring_line, arc_brush)?;
+        }
+    }
+
+    // 3b. 刷新扫光：16% 弧沿整圈匀速走（0.85s 走完 sweep 0→1），同环色
+    if sweep > 0.0 && sweep < 1.0 {
+        let arc_brush = eng.color_for_fraction(val, m.balance, m.spent);
+        let mark_start = -90.0 + sweep * 360.0;
+        draw_arc(eng, cx, cy, r, mark_start, 57.6, lm.ring_line, arc_brush)?;
     }
 
     // 4. 中心深色圆盘 (Pulse: centreDiameter = 20pt)

@@ -18,18 +18,19 @@ use std::sync::mpsc::{channel, Receiver};
 mod client;
 mod graphics;
 mod metrics;
+mod placement;
 mod render;
 mod spring;
 
 use client::spawn_network_worker;
 use graphics::D2DEngine;
 use metrics::{demo_metrics, Metric};
+use placement::{load_placement, monitor_geom, save_placement, Dock, Edge, Placement};
 use render::{render_frame, RingAnimState, LayoutMetrics};
 use spring::SpringValue;
 
 const TIMER_ANIM: usize = 1;
 const TIMER_WATCHDOG: usize = 2;
-const TIMER_SLIVER: usize = 3;
 
 const WM_APP_DATA: u32 = WM_USER + 101;
 const WM_MOUSELEAVE_MSG: u32 = 0x02A3;
@@ -51,6 +52,14 @@ pub(crate) fn log_msg(msg: &str) {
     }
 }
 
+/// 单调毫秒时钟（状态机延迟与防误触用）
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 pub struct AppState {
     pub hwnd: HWND,
     pub engine: D2DEngine,
@@ -68,11 +77,20 @@ pub struct AppState {
     pub height: f32,
     pub scale: f32,
     pub base_url: String,
+    pub password: String,
     pub rx: Receiver<Vec<Metric>>,
     pub anim_active: bool,
     pub dragging: bool,
+    pub did_drag: bool,
     pub drag_start_cursor: POINT,
     pub drag_start_window: RECT,
+    /// 停靠布局与持久化状态
+    pub place: Placement,
+    pub dock: Dock,
+    /// 指针最近一次离开内容的时间戳（ms）；0=在内容内
+    pub left_at: u64,
+    /// rail 本次展开的时刻（ms），点环刷新 0.3s 防误触用
+    pub rail_opened_at: u64,
 }
 
 fn main() {
@@ -179,15 +197,31 @@ unsafe fn run() -> Result<()> {
             let client = client::Client::new(base_url.clone(), password.clone());
             client.fetch().unwrap_or_else(|_| demo_metrics())
         };
-        let anims = initial_metrics.iter().map(|m| RingAnimState::new(m.used as f32)).collect();
+
+        // 恢复停靠布局；按持久化顺序重排 metrics（Pulse orderedAccounts 规则：
+        // 已存序在前，新账号按显示名追加）
+        let mut place = load_placement();
+        let mut metrics = initial_metrics;
+        if !place.order.is_empty() {
+            metrics.sort_by_key(|m| {
+                place
+                    .order
+                    .iter()
+                    .position(|p| p == &m.provider)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        let dock = place.dock();
+        let anims: Vec<RingAnimState> =
+            metrics.iter().map(|m| RingAnimState::new(m.used as f32)).collect();
 
         let state = AppState {
             hwnd,
             engine,
-            metrics: initial_metrics,
+            metrics,
             anims,
             hover_index: None,
-            openness: SpringValue::new(1.0),
+            openness: SpringValue::new(0.0),
             card_openness: SpringValue::new(0.0),
             pointer_y: SpringValue::new((initial_h / 2) as f32),
             busy_spin: 0.0,
@@ -195,19 +229,32 @@ unsafe fn run() -> Result<()> {
             height: initial_h as f32,
             scale: 1.0,
             base_url: base_url.clone(),
+            password: password.clone(),
             rx,
             anim_active: false,
             dragging: false,
+            did_drag: false,
             drag_start_cursor: POINT::default(),
             drag_start_window: RECT::default(),
+            place: std::mem::take(&mut place),
+            dock,
+            left_at: 0,
+            rail_opened_at: 0,
         };
 
         STATE.with(|s| {
             *s.borrow_mut() = Some(state);
         });
 
-        // 定位窗口贴在主屏右侧（初始即细条尺寸）
-        reposition_window(hwnd, initial_w, initial_h);
+        // 按持久化 dock + 比例定位（初始即细条尺寸）
+        let (dock0, place0) = STATE.with(|s| {
+            let st = s.borrow();
+            (
+                st.as_ref().map(|x| x.dock).unwrap_or(Dock::Edge(Edge::Right)),
+                st.as_ref().map(|x| x.place.clone()).unwrap_or_default(),
+            )
+        });
+        place_window(hwnd, initial_w, initial_h, dock0, &place0);
         sync_window_size(hwnd);
 
         // 启动后台网络与 SSE 数据采集线程
@@ -222,10 +269,8 @@ unsafe fn run() -> Result<()> {
             });
         }
 
-        // 设置常驻看门狗定时器 (200ms)
+        // 常驻看门狗（200ms 采样指针，320ms 拖尾收起状态机）
         SetTimer(hwnd, TIMER_WATCHDOG, 200, None);
-        // 启动后若用户未触碰，2.5 秒后自动收敛为 6px 细条
-        SetTimer(hwnd, TIMER_SLIVER, 2500, None);
 
         log_msg("Showing window and initial render...");
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
@@ -259,6 +304,41 @@ fn reposition_window(hwnd: HWND, w: i32, h: i32) {
             SWP_NOACTIVATE | SWP_NOZORDER,
         ).ok();
     }
+}
+
+/// 按当前 dock + 持久化比例放置窗口（窗口 = rail 本体 + 卡片空间）。
+/// 阶段 2a 先支持右/左边（位置侧），渲染镜像在 2b。
+unsafe fn place_window(hwnd: HWND, w: i32, h: i32, dock: Dock, place: &Placement) {
+    let g = monitor_geom(hwnd);
+    let room = placement::room_for(dock, place.snaps, &g);
+    let (x, y) = match dock {
+        Dock::Edge(Edge::Left) => (room.left, 0i32),
+        Dock::Edge(Edge::Right) => (room.right - w, 0i32),
+        Dock::Edge(Edge::Top) => (0, room.top),
+        Dock::Edge(Edge::Bottom) => (0, room.bottom - h),
+        Dock::Floating(_) => (0, 0),
+    };
+    // 沿边轴用比例定位（y-down：v 沿工作区高度/宽度分布）
+    let (x, y) = match dock {
+        Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
+            let span = (room.bottom - room.top - h).max(0);
+            (x, room.top + (place.v * span as f64).round() as i32)
+        }
+        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => {
+            let span = (room.right - room.left - w).max(0);
+            (room.left + (place.h * span as f64).round() as i32, y)
+        }
+        Dock::Floating(_) => (x, y),
+    };
+    SetWindowPos(
+        hwnd,
+        HWND_TOPMOST,
+        x,
+        y,
+        w,
+        h,
+        SWP_NOACTIVATE | SWP_NOZORDER,
+    ).ok();
 }
 
 /// 按当前 openness 把窗口物理尺寸同步到"细条 ↔ 展开胶囊"。
@@ -310,7 +390,7 @@ fn sync_window_size(hwnd: HWND) {
                     return;
                 }
 
-                reposition_window(hwnd, want_w.round() as i32, want_h.round() as i32);
+                place_window(hwnd, want_w.round() as i32, want_h.round() as i32, state.dock, &state.place.clone());
 
                 // 先更新逻辑尺寸，区域与绘制都按新窗口尺寸计算
                 state.width = want_w;
@@ -369,6 +449,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 if a.halo.step(dt) {
                                     still_busy = true;
                                 }
+                                // 刷新扫光：0.85s 走完一圈（Pulse refreshMark）
+                                if a.sweep > 0.0 {
+                                    a.sweep = (a.sweep + dt / 0.85).min(1.0);
+                                    still_busy = true; // 含收尾帧：清零后还要再画一次
+                                    if a.sweep >= 1.0 {
+                                        a.sweep = 0.0;
+                                    }
+                                }
                             }
                         }
                     });
@@ -389,41 +477,97 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
                 TIMER_WATCHDOG => {
+                    // Pulse 状态机：指针离开"内容区"后延迟 320ms 收起；
+                    // 拖拽/自由态不自动收起（自由 rail 是用户故意放的）。
                     let mut pt = POINT::default();
                     GetCursorPos(&mut pt).ok();
                     let mut wr = RECT::default();
                     GetWindowRect(hwnd, &mut wr).ok();
 
-                    let inside = pt.x >= wr.left && pt.x < wr.right && pt.y >= wr.top && pt.y < wr.bottom;
-                    if !inside {
-                        let mut need_anim = false;
-                        STATE.with(|s| {
-                            if let Some(state) = s.borrow_mut().as_mut() {
-                                if state.card_openness.target > 0.01 || state.hover_index.is_some() {
-                                    state.card_openness.set(0.0);
-                                    state.hover_index = None;
-                                    for a in &mut state.anims {
-                                        a.halo.set(0.0);
+                    let over_content = STATE.with(|s| {
+                        if let Some(state) = s.borrow().as_ref() {
+                            let scale = state.scale;
+                            let lm = LayoutMetrics::new(scale);
+                            let lx = pt.x - wr.left;
+                            let ly = pt.y - wr.top;
+                            let slack = 8.0;
+                            if state.openness.cur < 0.3 {
+                                // sliver 命中：20pt 磁吸宽 + slack
+                                let hit = match state.dock {
+                                    Dock::Edge(Edge::Left) => {
+                                        (lx as f32) <= 20.0 * scale + slack
                                     }
-                                    need_anim = true;
-                                }
+                                    Dock::Edge(Edge::Right) => {
+                                        (lx as f32) >= state.width - 20.0 * scale - slack
+                                    }
+                                    Dock::Edge(Edge::Top) => {
+                                        (ly as f32) <= 20.0 * scale + slack
+                                    }
+                                    Dock::Edge(Edge::Bottom) => {
+                                        (ly as f32) >= state.height - 20.0 * scale - slack
+                                    }
+                                    Dock::Floating(_) => true,
+                                };
+                                hit
+                            } else {
+                                // 展开态：rail 条带 + 卡片条带（全幅，Pulse isOverContent）
+                                let rail_band = match state.dock {
+                                    Dock::Edge(Edge::Left) => {
+                                        (lx as f32) <= lm.pill_w + slack
+                                    }
+                                    Dock::Edge(Edge::Right) => {
+                                        (lx as f32) >= state.width - lm.pill_w - slack
+                                    }
+                                    Dock::Edge(Edge::Top) => {
+                                        (ly as f32) <= lm.pill_w + slack
+                                    }
+                                    Dock::Edge(Edge::Bottom) => {
+                                        (ly as f32) >= state.height - lm.pill_w - slack
+                                    }
+                                    Dock::Floating(_) => true,
+                                };
+                                rail_band
                             }
-                        });
-                        if need_anim {
-                            ensure_anim_ticker(hwnd);
-                        }
-                    }
-                }
-                TIMER_SLIVER => {
-                    STATE.with(|s| {
-                        if let Some(state) = s.borrow_mut().as_mut() {
-                            state.openness.set(0.0);
-                            state.card_openness.set(0.0);
-                            state.hover_index = None;
+                        } else {
+                            false
                         }
                     });
-                    ensure_anim_ticker(hwnd);
-                    KillTimer(hwnd, TIMER_SLIVER).ok();
+
+                    let mut need_anim = false;
+                    STATE.with(|s| {
+                        if let Some(state) = s.borrow_mut().as_mut() {
+                            if over_content || state.dragging {
+                                state.left_at = 0;
+                                return;
+                            }
+                            let free = !state.dock.is_docked();
+                            if free {
+                                return; // 自由态永不自动收起
+                            }
+                            if state.left_at == 0 {
+                                state.left_at = now_ms();
+                                return;
+                            }
+                            if now_ms() - state.left_at < 320 {
+                                return; // Pulse scheduleHide 延迟
+                            }
+                            if state.card_openness.target > 0.01 || state.hover_index.is_some() {
+                                state.card_openness.set(0.0);
+                                state.hover_index = None;
+                                for a in &mut state.anims {
+                                    a.halo.set(0.0);
+                                }
+                                need_anim = true;
+                            }
+                            if state.openness.target > 0.01 && state.place.auto_collapse {
+                                state.openness.set(0.0);
+                                need_anim = true;
+                            }
+                        }
+                    });
+                    if need_anim {
+                        ensure_anim_ticker(hwnd);
+                    }
                 }
                 _ => {}
             }
@@ -442,6 +586,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         GetCursorPos(&mut cur).ok();
                         let dx = cur.x - state.drag_start_cursor.x;
                         let dy = cur.y - state.drag_start_cursor.y;
+                        if dx != 0 || dy != 0 {
+                            state.did_drag = true;
+                        }
                         SetWindowPos(
                             hwnd,
                             None,
@@ -454,8 +601,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         return;
                     }
 
-                    KillTimer(hwnd, TIMER_SLIVER).ok();
+                    state.left_at = 0;
                     if state.openness.target < 0.99 {
+                        if state.openness.cur < 0.3 {
+                            // 刚展开：记录展开时刻（点环刷新 0.3s 防误触）
+                            state.rail_opened_at = now_ms();
+                        }
                         state.openness.set(1.0);
                         need_anim = true;
                     }
@@ -535,7 +686,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 }
             });
             ensure_anim_ticker(hwnd);
-            SetTimer(hwnd, TIMER_SLIVER, 2500, None);
             LRESULT(0)
         }
         WM_NCHITTEST => {
@@ -588,6 +738,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if state.dragging {
                         state.dragging = false;
                         ReleaseCapture().ok();
+                        if state.did_drag {
+                            // 拖拽结束：把 rail 沿边轴的位置比例写回并持久化
+                            let mut wr = RECT::default();
+                            GetWindowRect(hwnd, &mut wr).ok();
+                            let g = monitor_geom(hwnd);
+                            let room = placement::room_for(state.dock, state.place.snaps, &g);
+                            match state.dock {
+                                Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
+                                    let span = (room.bottom - room.top - (wr.bottom - wr.top)).max(0);
+                                    if span > 0 {
+                                        state.place.v = ((wr.top - room.top) as f64 / span as f64)
+                                            .clamp(0.0, 1.0);
+                                    }
+                                }
+                                Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => {
+                                    let span = (room.right - room.left - (wr.right - wr.left)).max(0);
+                                    if span > 0 {
+                                        state.place.h = ((wr.left - room.left) as f64 / span as f64)
+                                            .clamp(0.0, 1.0);
+                                    }
+                                }
+                                Dock::Floating(_) => {}
+                            }
+                            save_placement(&state.place.clone());
+                            // 归位：按新比例重新贴边（拖拽可能把窗口拖离边缘）
+                            let dock = state.dock;
+                            let place = state.place.clone();
+                            let w = wr.right - wr.left;
+                            let h = wr.bottom - wr.top;
+                            place_window(hwnd, w, h, dock, &place);
+                        }
+                        state.did_drag = false;
                     }
                 }
             });
