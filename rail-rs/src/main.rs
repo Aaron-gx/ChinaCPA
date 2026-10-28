@@ -670,47 +670,64 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 state.hover_index = None;
                             }
                         }
-                        let new_x = state.drag_start_window.left + dx;
-                        let new_y = state.drag_start_window.top + dy;
+                        let mut new_x = state.drag_start_window.left + dx;
+                        let mut new_y = state.drag_start_window.top + dy;
+                        {
+                            // 限制窗口留在指针所在屏内（跨屏拖拽不会算出屏外坐标）
+                            if let Some(sg) = placement::monitor_at(cur) {
+                                let ww = state.drag_start_window.right - state.drag_start_window.left;
+                                let hh = state.drag_start_window.bottom - state.drag_start_window.top;
+                                new_x = new_x.clamp(sg.full.left, (sg.full.right - ww).max(sg.full.left));
+                                new_y = new_y.clamp(sg.full.top, (sg.full.bottom - hh).max(sg.full.top));
+                            }
+                        }
 
                         // ── 液态吸附（Pulse DropletTether）──
-                        // 贴边时指针拉离贴边方向 d ≤ 80px：rail 只走 displayPull
-                        // = d·(1-(1-grip)·rest²)（grip 0.15，二次逼近），差额画成液颈；
-                        // d ≥ 80 = 断裂，进入 0.22s parting，两段各自回缩后 standFree。
-                        let dock_edge = state.dock;
-                        if let Some(e) = dock_edge.edge() {
-                            let oxf = state.drag_start_window.left as f32;
-                            let oyf = state.drag_start_window.top as f32;
+                        // 只在"从贴边刚刚拉出"这一小段（d<80）让 rail 滞后跟随并把差额
+                        // 画成液颈；d>=80 立即断裂转自由态、窗口恢复跟随指针。
+                        // 注意不能"冻结窗口"——那会让窗口停在旧位置而指针跑掉。
+                        if let Some(e) = state.dock.edge() {
                             let ww = state.width.max(1.0);
                             let wh = state.height.max(1.0);
-                            // 沿"离开贴边"方向的原始位移 d
+                            // d = 指针沿"离开贴边"方向相对吸附位置的位移。
+                            // 吸附位置：Right/Top → 起点；Left/Bottom → 起点（窗口已贴边）
+                            let _ = (ww, wh);
                             let d = match e {
-                                Edge::Right => (oxf + ww - (new_x as f32 + ww)) as f32 * -1.0,
-                                Edge::Left => new_x as f32 - oxf,
-                                Edge::Top => new_y as f32 - oyf,
-                                Edge::Bottom => (oyf + wh - (new_y as f32 + wh)) * -1.0,
+                                Edge::Right => state.drag_start_window.left as f32 - new_x as f32,
+                                Edge::Left => new_x as f32 - state.drag_start_window.left as f32,
+                                Edge::Top => new_y as f32 - state.drag_start_window.top as f32,
+                                Edge::Bottom => state.drag_start_window.top as f32 - new_y as f32,
                             };
-                            let d = d.max(0.0);
-                            state.pulled = d;
-                            if state.parting_since == 0 && state.parted == 0.0 {
-                                if d >= TETHER_BREAK {
-                                    state.parting_since = now_ms();
-                                    state.fusion = 1.0;
-                                } else {
-                                    // displayPull：起始 15% 速度、在 80 处与指针同位同速
-                                    let rest = 1.0 - (d / TETHER_BREAK).clamp(0.0, 1.0);
-                                    let drawn = d * (1.0 - (1.0 - TETHER_GRIP) * rest * rest);
-                                    state.thinning = (1.0 - drawn / TETHER_BREAK).clamp(0.0, 1.0);
-                                }
-                            }
-                            // 断裂/回缩期间窗口停在原地
-                            let (sx, sy) = if state.parting_since > 0 || state.parted > 0.0 {
-                                (state.drag_start_window.left, state.drag_start_window.top)
+                            if d > 0.0 && d < TETHER_BREAK {
+                                let rest = 1.0 - (d / TETHER_BREAK).clamp(0.0, 1.0);
+                                let drawn = d * (1.0 - (1.0 - TETHER_GRIP) * rest * rest);
+                                state.pulled = drawn;
+                                state.thinning = (drawn / TETHER_BREAK).clamp(0.0, 1.0);
+                                let lag = (d - drawn) as i32;
+                                let (sx, sy) = match e {
+                                    Edge::Right => (new_x + lag, new_y),
+                                    Edge::Left => (new_x - lag, new_y),
+                                    Edge::Top => (new_x, new_y - lag),
+                                    Edge::Bottom => (new_x, new_y + lag),
+                                };
+                                SetWindowPos(hwnd, None, sx, sy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
+                            } else if d >= TETHER_BREAK {
+                                let v = state.dock.vertical();
+                                state.dock = Dock::Floating(v);
+                                state.place.set_dock(state.dock);
+                                state.pulled = 0.0;
+                                state.thinning = 0.0;
+                                state.fusion = 1.0;
+                                dock_changed = true;
+                                SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
                             } else {
-                                (new_x, new_y)
-                            };
-                            SetWindowPos(hwnd, None, sx, sy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
+                                state.pulled = 0.0;
+                                state.thinning = 1.0;
+                                SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
+                            }
                         } else {
+                            state.pulled = 0.0;
+                            state.thinning = 1.0;
                             SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
                         }
 

@@ -264,7 +264,7 @@ pub fn render_frame(
                 Dock::Edge(Edge::Top) | Dock::Floating(false) => 2,
                 Dock::Edge(Edge::Bottom) => 3,
             };
-            draw_detail_card(eng, m, pcx, pcy, w, h, side, card_openness, segmented, &lm)?;
+            draw_detail_card(eng, m, pcx, pcy, w, h, side, card_openness, segmented, &m3x2, &lm)?;
         }
 
         rt.SetTransform(&IDENTITY);
@@ -596,10 +596,13 @@ unsafe fn draw_detail_card(
     side: u8, // 0=Right 1=Left 2=Top 3=Bottom
     card_openness: f32,
     segmented: bool,
+    m3x2: &Matrix3x2,
     lm: &LayoutMetrics,
 ) -> Result<()> {
     let rt = &eng.rt;
     let scale = lm.scale;
+    // 卡片内容（文字/进度条）恒正立：切恒等变换；结束时由调用方恢复
+    rt.SetTransform(&IDENTITY);
 
     let rows_count = m.rows.len().clamp(1, 4);
     let header_h = 20.0 * scale;
@@ -616,9 +619,12 @@ unsafe fn draw_detail_card(
 
     // 卡片矩形（物理空间恒正立）+ 尾巴方向
     // tail_dir: 0=+x(右) 1=-x(左) 2=+y(下) 3=-y(上)
+    // 尾巴朝"环"的方向伸出（卡片在环的对侧）：
+    // 右停靠 → 卡片在左 → 尾巴朝右(+x=0)；左停靠 → 卡片在右 → 尾巴朝左(-x=1)
+    // 顶停靠 → 卡片在下 → 尾巴朝上(-y=3)；底停靠 → 卡片在上 → 尾巴朝下(+y=2)
     let (mut card_l, mut card_t, tail_dir) = match side {
-        0 => (ring_cx - lm.pill_w / 2.0 - gap - card_w - slide, 0.0, 1),
-        1 => (ring_cx + lm.pill_w / 2.0 + gap + slide, 0.0, 0),
+        0 => (ring_cx - lm.pill_w / 2.0 - gap - card_w - slide, 0.0, 0),
+        1 => (ring_cx + lm.pill_w / 2.0 + gap + slide, 0.0, 1),
         2 => (0.0, ring_cy + lm.pill_w / 2.0 + gap + slide, 3),
         _ => (0.0, ring_cy - lm.pill_w / 2.0 - gap - card_h - slide, 2),
     };
@@ -859,6 +865,7 @@ unsafe fn draw_detail_card(
         cur_y += 14.0 * scale;
     }
 
+    rt.SetTransform(m3x2);
     Ok(())
 }
 

@@ -213,23 +213,22 @@ pub fn drag_dock(
     if !snaps {
         return Dock::Floating(vertical);
     }
-    let (l, r) = if vertical {
-        (rail.left as f32, rail.right as f32)
-    } else {
-        (pointer.x as f32, pointer.x as f32)
-    };
+    // 本实现的拖拽是"窗口整体跟随指针"，因此判据统一用指针到边的距离，
+    // 不能用 rail 自身边缘（那会恒差半个胶囊宽度，导致永远吸不上边）。
+    // Pulse 用 rail 边缘是因为它的 rail 在窗口内另有偏移。
+    let px = pointer.x as f32;
+    let py = pointer.y as f32;
+    let _ = rail;
     let stays_on_bottom =
         current == Dock::Edge(Edge::Bottom) && (screen.full.bottom - rail.bottom) as f32 <= DOCK_DISTANCE;
-    if (pointer.y as f32 - screen.work.top as f32) <= DOCK_DISTANCE {
+
+    if py - screen.work.top as f32 <= DOCK_DISTANCE {
         Dock::Edge(Edge::Top)
-    } else if stays_on_bottom || (screen.full.bottom - pointer.y) as f32 <= DOCK_DISTANCE {
+    } else if stays_on_bottom || (screen.work.bottom as f32 - py) <= DOCK_DISTANCE {
         Dock::Edge(Edge::Bottom)
-    } else if (screen.work.bottom - pointer.y) as f32 <= DOCK_DISTANCE {
-        // 指针进入任务栏条带 → 自由横条（Pulse：Dock 上方）
-        Dock::Floating(false)
-    } else if (l - screen.work.left as f32) <= DOCK_DISTANCE {
+    } else if px - screen.work.left as f32 <= DOCK_DISTANCE {
         Dock::Edge(Edge::Left)
-    } else if (screen.work.right as f32 - r) <= DOCK_DISTANCE {
+    } else if (screen.work.right as f32 - px) <= DOCK_DISTANCE {
         Dock::Edge(Edge::Right)
     } else {
         Dock::Floating(vertical)
@@ -306,13 +305,28 @@ pub fn window_to_canon(dock: Dock, x: f32, y: f32, bu: f32, bv: f32) -> (f32, f3
 }
 
 /// 规范空间 → 窗口物理的 D2D 仿射矩阵（形状绘制用；文字不走矩阵保持正立）。
+///
+/// D2D 约定：x' = x·M11 + y·M21 + M31；y' = x·M12 + y·M22 + M32。
+/// 必须与 canon_to_window 完全一致，否则形状会画到窗口外。
 pub fn canon_matrix(dock: Dock, bu: f32, bv: f32) -> windows::Foundation::Numerics::Matrix3x2 {
     use windows::Foundation::Numerics::Matrix3x2;
     match dock {
-        Dock::Edge(Edge::Right) | Dock::Floating(true) => Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 },
-        Dock::Edge(Edge::Left) => Matrix3x2 { M11: -1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: bu, M32: 0.0 },
-        Dock::Edge(Edge::Top) | Dock::Floating(false) => Matrix3x2 { M11: 0.0, M12: 1.0, M21: -1.0, M22: 0.0, M31: 0.0, M32: bu },
-        Dock::Edge(Edge::Bottom) => Matrix3x2 { M11: 0.0, M12: -1.0, M21: 1.0, M22: 0.0, M31: bv, M32: 0.0 },
+        // (u,v) → (u,v)
+        Dock::Edge(Edge::Right) | Dock::Floating(true) => {
+            Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 }
+        }
+        // (u,v) → (bu-u, v)：水平镜像
+        Dock::Edge(Edge::Left) => {
+            Matrix3x2 { M11: -1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: bu, M32: 0.0 }
+        }
+        // (u,v) → (v, bu-u)：u=bu（贴屏边）→ y=0，u=0（卡片侧）→ y=bu
+        Dock::Edge(Edge::Top) | Dock::Floating(false) => {
+            Matrix3x2 { M11: 0.0, M12: -1.0, M21: 1.0, M22: 0.0, M31: 0.0, M32: bu }
+        }
+        // (u,v) → (bv-v, u)
+        Dock::Edge(Edge::Bottom) => {
+            Matrix3x2 { M11: 0.0, M12: 1.0, M21: -1.0, M22: 0.0, M31: bv, M32: 0.0 }
+        }
     }
 }
 
