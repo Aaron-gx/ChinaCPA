@@ -6,8 +6,19 @@ use windows::{
     Win32::Foundation::HWND,
 };
 
+use windows::Foundation::Numerics::Matrix3x2;
+
+/// draw_detail_card 每帧写入的卡片物理矩形（含尾巴膨胀），供 NCHITTEST 命中。
+thread_local! {
+    pub static CARD_RECT: std::cell::Cell<(f32, f32, f32, f32)> =
+        const { std::cell::Cell::new((0.0, 0.0, 0.0, 0.0)) };
+}
+
+const IDENTITY: Matrix3x2 = Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 };
+
 use crate::graphics::D2DEngine;
 use crate::metrics::Metric;
+use crate::placement::{canon_matrix, canon_to_window, Dock, Edge};
 use crate::spring::{FadeValue, SpringValue};
 
 #[derive(Clone)]
@@ -84,6 +95,7 @@ pub fn render_frame(
     h: f32,
     scale: f32,
     segmented: bool,
+    dock: Dock,
     hwnd: HWND,
 ) -> Result<()> {
     unsafe {
@@ -93,6 +105,15 @@ pub fn render_frame(
 
         let lm = LayoutMetrics::new(scale);
         let n = metrics.len().min(8);
+        // 规范空间恒为"右边缘竖栏"；四边靠仿射变换映射到物理窗口。
+        // 形状在变换下绘制，文字单独用恒等变换保持正立（见各 draw_* 内 SetTransform）。
+        let (bu, bv) = match dock {
+            Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (h, w),
+            _ => (w, h),
+        };
+        let m3x2 = canon_matrix(dock, bu, bv);
+        // 形状在规范→物理变换下绘制；文字/图标切回恒等变换保持正立。
+        rt.SetTransform(&m3x2);
         if n == 0 {
             rt.EndDraw(None, None)?;
             eng.present(hwnd)?;
@@ -108,10 +129,11 @@ pub fn render_frame(
         let cur_w = lm.sliver_w + (lm.pill_w - lm.sliver_w) * openness;
         let cur_h = collapsed_h + (expanded_h - collapsed_h) * openness;
 
-        let dock_top = (h - cur_h) / 2.0;
+        // 规范空间几何（bu=沿厚度轴宽, bv=沿长度轴高）
+        let dock_top = (bv - cur_h) / 2.0;
         let dock_bottom = dock_top + cur_h;
-        let dock_left = w - cur_w;
-        let dock_right = w;
+        let dock_left = bu - cur_w;
+        let dock_right = bu;
 
         // 2. 绘制 Pulse S 型贴边凹弧胶囊
         //    收起态告警染色（Pulse alertTint）：sliver 在最高额度 ≥ 阈值或耗尽
@@ -195,30 +217,33 @@ pub fn render_frame(
                     busy_spin,
                     sweep_val,
                     clock_val,
+                    dock,
+                    bu,
+                    bv,
+                    &m3x2,
                     &lm,
                 )?;
             }
         }
 
-        // 5. 展开 Pulse 经典水滴气泡详情卡片 (UsageBubbleShape)
+        // 5. 详情卡片：物理空间正立布局（文字恒水平，四边通用），
+        //    水滴尾巴指向悬停环（先映射环心到物理坐标）。
         if card_openness > 0.01 && hover_index.is_some() {
             let idx = hover_index.unwrap().min(n - 1);
             let m = &metrics[idx];
             let target_anchor_y = slot_centers[idx];
-            let active_pointer_y = if pointer_y > 0.0 { pointer_y } else { target_anchor_y };
-
-            draw_detail_card(
-                eng,
-                m,
-                dock_left,
-                active_pointer_y,
-                card_openness,
-                h,
-                segmented,
-                &lm,
-            )?;
+            let active_pointer = if pointer_y > 0.0 { pointer_y } else { target_anchor_y };
+            let (pcx, pcy) = canon_to_window(dock, dock_left + cur_w / 2.0, active_pointer, bu, bv);
+            let side: u8 = match dock {
+                Dock::Edge(Edge::Right) | Dock::Floating(true) => 0,
+                Dock::Edge(Edge::Left) => 1,
+                Dock::Edge(Edge::Top) | Dock::Floating(false) => 2,
+                Dock::Edge(Edge::Bottom) => 3,
+            };
+            draw_detail_card(eng, m, pcx, pcy, w, h, side, card_openness, segmented, &lm)?;
         }
 
+        rt.SetTransform(&IDENTITY);
         rt.EndDraw(None, None)?;
         eng.present(hwnd)?;
     }
@@ -319,10 +344,18 @@ unsafe fn draw_usage_ring(
     busy_spin: f32,
     sweep: f32,
     clock: f32,
+    dock: Dock,
+    bu: f32,
+    bv: f32,
+    m3x2: &Matrix3x2,
     lm: &LayoutMetrics,
 ) -> Result<()> {
     let rt = &eng.rt;
     let r = lm.ring_d / 2.0;
+    // 环内容恒正立：映射环心到物理坐标后切恒等变换绘制
+    // （圆环旋转不变，但进度弧 12 点起点与文字不能随边镜像/旋转）。
+    let (cx, cy) = canon_to_window(dock, cx, cy, bu, bv);
+    rt.SetTransform(&IDENTITY);
 
     // 1. 悬停微发光晕 (Halo)
     if is_hovered || halo_val > 0.01 {
@@ -413,7 +446,7 @@ unsafe fn draw_usage_ring(
         }
     }
 
-    // 6. 平台图标贴图
+    // 6. 平台图标贴图（随栏整体旋转，与 Pulse 单一变换一致）
     if let Some(bmp) = eng.logo_bitmaps.get(&m.provider) {
         let icon_sz = disc_r * 1.6;
         let dest_rect = D2D_RECT_F {
@@ -458,12 +491,14 @@ unsafe fn draw_usage_ring(
     };
     let u16_label: Vec<u16> = label_text.encode_utf16().collect();
     let text_w = lm.pill_w - 6.0 * lm.scale;
-    let text_top = cy + r + 6.0 * lm.scale;
+    let text_h = 16.0 * lm.scale;
+    let tcx = cx;
+    let tcy = cy + r + 6.0 * lm.scale + text_h / 2.0;
     let text_rect = D2D_RECT_F {
-        left: cx - text_w / 2.0,
-        top: text_top,
-        right: cx + text_w / 2.0,
-        bottom: text_top + 16.0 * lm.scale,
+        left: tcx - text_w / 2.0,
+        top: tcy - text_h / 2.0,
+        right: tcx + text_w / 2.0,
+        bottom: tcy + text_h / 2.0,
     };
     let text_brush = if m.spent || (m.used >= 0.75 && !m.balance && !m.empty) {
         if m.spent { &eng.brush_exhausted } else { &eng.brush_warning }
@@ -481,6 +516,7 @@ unsafe fn draw_usage_ring(
         D2D1_DRAW_TEXT_OPTIONS_NONE,
         DWRITE_MEASURING_MODE_NATURAL,
     );
+    rt.SetTransform(m3x2);
 
     Ok(())
 }
@@ -529,10 +565,12 @@ unsafe fn draw_arc(
 unsafe fn draw_detail_card(
     eng: &D2DEngine,
     m: &Metric,
-    dock_left: f32,
-    pointer_y: f32,
+    ring_cx: f32,
+    ring_cy: f32,
+    win_w: f32,
+    win_h: f32,
+    side: u8, // 0=Right 1=Left 2=Top 3=Bottom
     card_openness: f32,
-    screen_h: f32,
     segmented: bool,
     lm: &LayoutMetrics,
 ) -> Result<()> {
@@ -545,144 +583,181 @@ unsafe fn draw_detail_card(
     let burn = burn_forecast(m);
     let burn_extra = if burn.is_some() { 16.0 * scale } else { 0.0 };
     let card_h = lm.card_pad * 2.0 + header_h + 14.0 * scale + (rows_count as f32) * row_h - 14.0 * scale + burn_extra;
-
-    let slide_offset = (1.0 - card_openness) * 16.0 * scale;
-    let card_right = dock_left - lm.pointer_w - 8.0 * scale + slide_offset;
-    let card_left = card_right - lm.card_w;
-
-    let mut card_top = pointer_y - card_h / 2.0;
-    if card_top < 12.0 * scale {
-        card_top = 12.0 * scale;
-    }
-    if card_top + card_h > screen_h - 12.0 * scale {
-        card_top = screen_h - 12.0 * scale - card_h;
-    }
-    let card_bottom = card_top + card_h;
-
-    let r_card = lm.card_radius;
-    let py = pointer_y.clamp(card_top + r_card + 20.0 * scale, card_bottom - r_card - 20.0 * scale);
-    let half_tail = lm.pointer_h * 0.5;
+    let card_w = lm.card_w;
+    let gap = 8.0 * scale;
     let reach = lm.pointer_w;
+    let half_tail = lm.pointer_h * 0.5;
+    let r_card = lm.card_radius;
+    let slide = (1.0 - card_openness) * 16.0 * scale;
 
-    // 1. 构建一体化水滴气泡外形（UsageBubbleShape，无缝融合指针三角形与卡片主体）
-    let bubble_path = eng.d2d_factory.CreatePathGeometry()?;
-    let sink = bubble_path.Open()?;
+    // 卡片矩形（物理空间恒正立）+ 尾巴方向
+    // tail_dir: 0=+x(右) 1=-x(左) 2=+y(下) 3=-y(上)
+    let (mut card_l, mut card_t, tail_dir) = match side {
+        0 => (ring_cx - lm.pill_w / 2.0 - gap - card_w - slide, 0.0, 1),
+        1 => (ring_cx + lm.pill_w / 2.0 + gap + slide, 0.0, 0),
+        2 => (0.0, ring_cy + lm.pill_w / 2.0 + gap + slide, 3),
+        _ => (0.0, ring_cy - lm.pill_w / 2.0 - gap - card_h - slide, 2),
+    };
+    // 沿边轴居中 + clamp
+    match side {
+        0 | 1 => {
+            card_t = (ring_cy - card_h / 2.0).clamp(12.0 * scale, (win_h - card_h - 12.0 * scale).max(12.0 * scale));
+        }
+        _ => {
+            card_l = (ring_cx - card_w / 2.0).clamp(12.0 * scale, (win_w - card_w - 12.0 * scale).max(12.0 * scale));
+        }
+    }
+    let card_r = card_l + card_w;
+    let card_b = card_t + card_h;
+    let infl = reach + 2.0;
+    CARD_RECT.with(|c| c.set((card_l - infl, card_t - infl, card_r + infl, card_b + infl)));
 
-    sink.BeginFigure(D2D_POINT_2F { x: card_left + r_card, y: card_top }, D2D1_FIGURE_BEGIN_FILLED);
-    sink.AddLine(D2D_POINT_2F { x: card_right - r_card, y: card_top });
-    sink.AddArc(&D2D1_ARC_SEGMENT {
-        point: D2D_POINT_2F { x: card_right, y: card_top + r_card },
-        size: D2D_SIZE_F { width: r_card, height: r_card },
-        rotationAngle: 0.0,
-        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
-        arcSize: D2D1_ARC_SIZE_SMALL,
-    });
+    // 尾巴锚点（沿卡片边），clamp 到圆角之间
+    let (ax, ay) = match side {
+        0 | 1 => (
+            ring_cx,
+            ring_cy.clamp(card_t + r_card + 20.0 * scale, (card_b - r_card - 20.0 * scale).max(card_t + r_card + 20.0 * scale)),
+        ),
+        _ => (
+            ring_cx.clamp(card_l + r_card + 20.0 * scale, (card_r - r_card - 20.0 * scale).max(card_l + r_card + 20.0 * scale)),
+            ring_cy,
+        ),
+    };
 
-    sink.AddLine(D2D_POINT_2F { x: card_right, y: py - half_tail });
+    // 1. 卡片主体（圆角矩形）
+    rt.FillRoundedRectangle(
+        &D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F { left: card_l, top: card_t, right: card_r, bottom: card_b },
+            radiusX: r_card,
+            radiusY: r_card,
+        },
+        &eng.brush_card,
+    );
 
-    // 水滴指针上侧流体曲线 (Pulse fluid turn 参数)
-    sink.AddBezier(&D2D1_BEZIER_SEGMENT {
-        point1: D2D_POINT_2F { x: card_right, y: py - half_tail * 0.5 },
-        point2: D2D_POINT_2F { x: card_right + reach * 0.55, y: py - half_tail * 0.22 },
-        point3: D2D_POINT_2F { x: card_right + reach, y: py },
-    });
+    // 2. 水滴尾巴（同色填充，四方向）
+    let tail = eng.d2d_factory.CreatePathGeometry()?;
+    let s = tail.Open()?;
+    match tail_dir {
+        0 => {
+            // +x 右
+            s.BeginFigure(D2D_POINT_2F { x: card_r, y: ay - half_tail }, D2D1_FIGURE_BEGIN_FILLED);
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: card_r, y: ay - half_tail * 0.5 },
+                point2: D2D_POINT_2F { x: card_r + reach * 0.55, y: ay - half_tail * 0.22 },
+                point3: D2D_POINT_2F { x: card_r + reach, y: ay },
+            });
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: card_r + reach * 0.55, y: ay + half_tail * 0.22 },
+                point2: D2D_POINT_2F { x: card_r, y: ay + half_tail * 0.5 },
+                point3: D2D_POINT_2F { x: card_r, y: ay + half_tail },
+            });
+        }
+        1 => {
+            // -x 左
+            s.BeginFigure(D2D_POINT_2F { x: card_l, y: ay - half_tail }, D2D1_FIGURE_BEGIN_FILLED);
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: card_l, y: ay - half_tail * 0.5 },
+                point2: D2D_POINT_2F { x: card_l - reach * 0.55, y: ay - half_tail * 0.22 },
+                point3: D2D_POINT_2F { x: card_l - reach, y: ay },
+            });
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: card_l - reach * 0.55, y: ay + half_tail * 0.22 },
+                point2: D2D_POINT_2F { x: card_l, y: ay + half_tail * 0.5 },
+                point3: D2D_POINT_2F { x: card_l, y: ay + half_tail },
+            });
+        }
+        2 => {
+            // +y 下
+            s.BeginFigure(D2D_POINT_2F { x: ax - half_tail, y: card_b }, D2D1_FIGURE_BEGIN_FILLED);
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: ax - half_tail * 0.5, y: card_b },
+                point2: D2D_POINT_2F { x: ax - half_tail * 0.22, y: card_b + reach * 0.55 },
+                point3: D2D_POINT_2F { x: ax, y: card_b + reach },
+            });
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: ax + half_tail * 0.22, y: card_b + reach * 0.55 },
+                point2: D2D_POINT_2F { x: ax + half_tail * 0.5, y: card_b },
+                point3: D2D_POINT_2F { x: ax + half_tail, y: card_b },
+            });
+        }
+        _ => {
+            // -y 上
+            s.BeginFigure(D2D_POINT_2F { x: ax - half_tail, y: card_t }, D2D1_FIGURE_BEGIN_FILLED);
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: ax - half_tail * 0.5, y: card_t },
+                point2: D2D_POINT_2F { x: ax - half_tail * 0.22, y: card_t - reach * 0.55 },
+                point3: D2D_POINT_2F { x: ax, y: card_t - reach },
+            });
+            s.AddBezier(&D2D1_BEZIER_SEGMENT {
+                point1: D2D_POINT_2F { x: ax + half_tail * 0.22, y: card_t - reach * 0.55 },
+                point2: D2D_POINT_2F { x: ax + half_tail * 0.5, y: card_t },
+                point3: D2D_POINT_2F { x: ax + half_tail, y: card_t },
+            });
+        }
+    }
+    s.EndFigure(D2D1_FIGURE_END_CLOSED);
+    s.Close()?;
+    rt.FillGeometry(&tail, &eng.brush_card, None);
+    rt.DrawRoundedRectangle(
+        &D2D1_ROUNDED_RECT {
+            rect: D2D_RECT_F { left: card_l, top: card_t, right: card_r, bottom: card_b },
+            radiusX: r_card,
+            radiusY: r_card,
+        },
+        &eng.brush_hairline,
+        0.75,
+        None,
+    );
 
-    // 水滴指针下侧流体曲线
-    sink.AddBezier(&D2D1_BEZIER_SEGMENT {
-        point1: D2D_POINT_2F { x: card_right + reach * 0.55, y: py + half_tail * 0.22 },
-        point2: D2D_POINT_2F { x: card_right, y: py + half_tail * 0.5 },
-        point3: D2D_POINT_2F { x: card_right, y: py + half_tail },
-    });
-
-    sink.AddLine(D2D_POINT_2F { x: card_right, y: card_bottom - r_card });
-    sink.AddArc(&D2D1_ARC_SEGMENT {
-        point: D2D_POINT_2F { x: card_right - r_card, y: card_bottom },
-        size: D2D_SIZE_F { width: r_card, height: r_card },
-        rotationAngle: 0.0,
-        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
-        arcSize: D2D1_ARC_SIZE_SMALL,
-    });
-
-    sink.AddLine(D2D_POINT_2F { x: card_left + r_card, y: card_bottom });
-    sink.AddArc(&D2D1_ARC_SEGMENT {
-        point: D2D_POINT_2F { x: card_left, y: card_bottom - r_card },
-        size: D2D_SIZE_F { width: r_card, height: r_card },
-        rotationAngle: 0.0,
-        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
-        arcSize: D2D1_ARC_SIZE_SMALL,
-    });
-
-    sink.AddLine(D2D_POINT_2F { x: card_left, y: card_top + r_card });
-    sink.AddArc(&D2D1_ARC_SEGMENT {
-        point: D2D_POINT_2F { x: card_left + r_card, y: card_top },
-        size: D2D_SIZE_F { width: r_card, height: r_card },
-        rotationAngle: 0.0,
-        sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
-        arcSize: D2D1_ARC_SIZE_SMALL,
-    });
-
-    sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-    sink.Close()?;
-
-    rt.FillGeometry(&bubble_path, &eng.brush_card, None);
-    rt.DrawGeometry(&bubble_path, &eng.brush_hairline, 0.75, None);
-
-    // 2. 卡片头部：图标 + 标题
-    let mut cur_y = card_top + lm.card_pad;
+    // 3. 头部：图标 + 标题
+    let mut cur_y = card_t + lm.card_pad;
     let icon_sz = 16.0 * scale;
     if let Some(bmp) = eng.logo_bitmaps.get(&m.provider) {
         let dest = D2D_RECT_F {
-            left: card_left + lm.card_pad,
+            left: card_l + lm.card_pad,
             top: cur_y + 1.0 * scale,
-            right: card_left + lm.card_pad + icon_sz,
+            right: card_l + lm.card_pad + icon_sz,
             bottom: cur_y + 1.0 * scale + icon_sz,
         };
         rt.DrawBitmap(bmp, Some(&dest), 1.0, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
     }
-
     let title_u16: Vec<u16> = m.full.encode_utf16().collect();
     let title_rect = D2D_RECT_F {
-        left: card_left + lm.card_pad + icon_sz + 8.0 * scale,
+        left: card_l + lm.card_pad + icon_sz + 8.0 * scale,
         top: cur_y - 2.0 * scale,
-        right: card_right - lm.card_pad,
+        right: card_r - lm.card_pad,
         bottom: cur_y + 18.0 * scale,
     };
     rt.DrawText(&title_u16, &eng.font_title, &title_rect, &eng.brush_text_primary, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-
     cur_y += header_h + 14.0 * scale;
 
-    // 3. 渲染各用量行（Pulse 经典三行布局：名称+额度 / 进度条胶囊 / 百分比+重置时间）
-    let row_w = lm.card_w - lm.card_pad * 2.0;
+    // 4. 用量行
+    let row_w = card_w - lm.card_pad * 2.0;
     for (row_i, row) in m.rows.iter().enumerate().take(4) {
-        // 第一行：左侧名称，右侧额度明细
         let label_u16: Vec<u16> = row.label.encode_utf16().collect();
         let r1 = D2D_RECT_F {
-            left: card_left + lm.card_pad,
+            left: card_l + lm.card_pad,
             top: cur_y,
-            right: card_left + lm.card_pad + row_w * 0.55,
+            right: card_l + lm.card_pad + row_w * 0.55,
             bottom: cur_y + 16.0 * scale,
         };
         rt.DrawText(&label_u16, &eng.font_label, &r1, &eng.brush_text_primary, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-
         if !row.detail.is_empty() {
             let detail_u16: Vec<u16> = row.detail.encode_utf16().collect();
             let r_amount = D2D_RECT_F {
-                left: card_left + lm.card_pad + row_w * 0.45,
+                left: card_l + lm.card_pad + row_w * 0.45,
                 top: cur_y,
-                right: card_right - lm.card_pad,
+                right: card_r - lm.card_pad,
                 bottom: cur_y + 16.0 * scale,
             };
             rt.DrawText(&detail_u16, &eng.font_detail_right, &r_amount, &eng.brush_text_dim, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
         }
-
-        // 第二行：进度条 —— continuous 胶囊 6pt / segmented 刻度 12pt（Pulse UsageBar）
         let frac = (row.used_pct as f32 / 100.0).clamp(0.0, 1.0);
         if segmented {
             cur_y += 14.0 * scale + 4.0 * scale;
             let bar_h = 12.0 * scale;
             let tick_w = 2.5 * scale;
-            let gap = 2.0 * scale;
-            let step = tick_w + gap;
+            let step = tick_w + 2.0 * scale;
             let count = (((row_w + 2.0 * scale) / step).floor() as i32).max(1);
             let mut lit = (frac * count as f32).round() as i32;
             if frac > 0.0 {
@@ -693,37 +768,28 @@ unsafe fn draw_detail_card(
             }
             let bar_brush = eng.color_for_fraction(frac, false, frac >= 0.999);
             for t in 0..count {
-                let x0 = card_left + lm.card_pad + t as f32 * step;
-                let rect = D2D_RECT_F {
-                    left: x0,
-                    top: cur_y,
-                    right: x0 + tick_w,
-                    bottom: cur_y + bar_h,
-                };
+                let x0 = card_l + lm.card_pad + t as f32 * step;
+                let rect = D2D_RECT_F { left: x0, top: cur_y, right: x0 + tick_w, bottom: cur_y + bar_h };
                 let b = if t < lit { bar_brush } else { &eng.brush_track };
-                rt.FillRoundedRectangle(
-                    &D2D1_ROUNDED_RECT { rect, radiusX: tick_w / 2.0, radiusY: tick_w / 2.0 },
-                    b,
-                );
+                rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect, radiusX: tick_w / 2.0, radiusY: tick_w / 2.0 }, b);
             }
             cur_y += bar_h + 4.0 * scale;
         } else {
             cur_y += 14.0 * scale + 7.0 * scale;
             let bar_h = 6.0 * scale;
             let bar_track = D2D_RECT_F {
-                left: card_left + lm.card_pad,
+                left: card_l + lm.card_pad,
                 top: cur_y,
-                right: card_right - lm.card_pad,
+                right: card_r - lm.card_pad,
                 bottom: cur_y + bar_h,
             };
             rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: bar_track, radiusX: bar_h / 2.0, radiusY: bar_h / 2.0 }, &eng.brush_track);
-
             if frac > 0.005 {
                 let fill_w = (row_w * frac).max(bar_h);
                 let bar_fill = D2D_RECT_F {
-                    left: card_left + lm.card_pad,
+                    left: card_l + lm.card_pad,
                     top: cur_y,
-                    right: card_left + lm.card_pad + fill_w,
+                    right: card_l + lm.card_pad + fill_w,
                     bottom: cur_y + bar_h,
                 };
                 let bar_brush = eng.color_for_fraction(frac, false, frac >= 0.999);
@@ -731,40 +797,34 @@ unsafe fn draw_detail_card(
             }
             cur_y += bar_h + 7.0 * scale;
         }
-
-        // 第三行：左侧已用百分比，右侧重置倒计时
         let pct_str = format!("{:.0}% Used", row.used_pct);
         let pct_u16: Vec<u16> = pct_str.encode_utf16().collect();
         let r_pct = D2D_RECT_F {
-            left: card_left + lm.card_pad,
+            left: card_l + lm.card_pad,
             top: cur_y,
-            right: card_left + lm.card_pad + row_w * 0.5,
+            right: card_l + lm.card_pad + row_w * 0.5,
             bottom: cur_y + 16.0 * scale,
         };
         let pct_brush = if frac >= 0.75 { &eng.brush_warning } else { &eng.brush_text_primary };
         rt.DrawText(&pct_u16, &eng.font_medium, &r_pct, pct_brush, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
-
         if !row.reset.is_empty() {
             let reset_u16: Vec<u16> = row.reset.encode_utf16().collect();
             let r_reset = D2D_RECT_F {
-                left: card_left + lm.card_pad + row_w * 0.4,
+                left: card_l + lm.card_pad + row_w * 0.4,
                 top: cur_y,
-                right: card_right - lm.card_pad,
+                right: card_r - lm.card_pad,
                 bottom: cur_y + 16.0 * scale,
             };
             rt.DrawText(&reset_u16, &eng.font_detail_right, &r_reset, &eng.brush_text_dim, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
         }
-
         cur_y += 16.0 * scale;
-
-        // 第四行（仅头条行、数据齐全时）：BurnRate 预测（Pulse burnLine）
         if row_i == 0 {
             if let Some((text, warn)) = &burn {
                 let bu: Vec<u16> = text.encode_utf16().collect();
                 let r_burn = D2D_RECT_F {
-                    left: card_left + lm.card_pad,
+                    left: card_l + lm.card_pad,
                     top: cur_y,
-                    right: card_right - lm.card_pad,
+                    right: card_r - lm.card_pad,
                     bottom: cur_y + 14.0 * scale,
                 };
                 let b_brush = if *warn { &eng.brush_warning } else { &eng.brush_text_dim };

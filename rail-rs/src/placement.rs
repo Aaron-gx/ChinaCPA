@@ -266,3 +266,60 @@ pub fn position_from_ratios(h: f64, v: f64, room: RECT, rail_w: i32, rail_h: i32
     let y = room.top as f64 + v * ((room.bottom - room.top) as f64 - rail_h as f64);
     (x.round() as i32, y.round() as i32)
 }
+
+/// 规范空间（右边缘竖栏）尺寸 → 窗口物理尺寸。
+/// Top/Bottom 需交换宽高。
+pub fn window_size(dock: Dock, canon_w: i32, canon_h: i32) -> (i32, i32) {
+    match dock {
+        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (canon_h, canon_w),
+        _ => (canon_w, canon_h),
+    }
+}
+
+/// 窗口物理尺寸 → 规范空间尺寸（绘制用 U,V）。
+pub fn canonical_size(dock: Dock, win_w: i32, win_h: i32) -> (f32, f32) {
+    match dock {
+        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (win_h as f32, win_w as f32),
+        _ => (win_w as f32, win_h as f32),
+    }
+}
+
+/// 规范空间 (u,v) → 窗口物理 (x,y)。BU/BV = 规范空间宽高（含卡片空间）。
+/// 规范空间约定：u=横向（0=卡片侧，BU=屏幕边），v=沿栏纵向。
+pub fn canon_to_window(dock: Dock, u: f32, v: f32, bu: f32, bv: f32) -> (f32, f32) {
+    match dock {
+        Dock::Edge(Edge::Right) | Dock::Floating(true) => (u, v),
+        Dock::Edge(Edge::Left) => (bu - u, v),
+        Dock::Edge(Edge::Top) | Dock::Floating(false) => (v, bu - u),
+        Dock::Edge(Edge::Bottom) => (bv - v, u),
+    }
+}
+
+/// 窗口物理 (x,y) → 规范空间 (u,v)（命中检测逆变换）。
+pub fn window_to_canon(dock: Dock, x: f32, y: f32, bu: f32, bv: f32) -> (f32, f32) {
+    match dock {
+        Dock::Edge(Edge::Right) | Dock::Floating(true) => (x, y),
+        Dock::Edge(Edge::Left) => (bu - x, y),
+        Dock::Edge(Edge::Top) | Dock::Floating(false) => (bu - y, x),
+        Dock::Edge(Edge::Bottom) => (y, bv - x),
+    }
+}
+
+/// 规范空间 → 窗口物理的 D2D 仿射矩阵（形状绘制用；文字不走矩阵保持正立）。
+pub fn canon_matrix(dock: Dock, bu: f32, bv: f32) -> windows::Foundation::Numerics::Matrix3x2 {
+    use windows::Foundation::Numerics::Matrix3x2;
+    match dock {
+        Dock::Edge(Edge::Right) | Dock::Floating(true) => Matrix3x2 { M11: 1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: 0.0, M32: 0.0 },
+        Dock::Edge(Edge::Left) => Matrix3x2 { M11: -1.0, M12: 0.0, M21: 0.0, M22: 1.0, M31: bu, M32: 0.0 },
+        Dock::Edge(Edge::Top) | Dock::Floating(false) => Matrix3x2 { M11: 0.0, M12: 1.0, M21: -1.0, M22: 0.0, M31: 0.0, M32: bu },
+        Dock::Edge(Edge::Bottom) => Matrix3x2 { M11: 0.0, M12: -1.0, M21: 1.0, M22: 0.0, M31: bv, M32: 0.0 },
+    }
+}
+
+
+/// 规范矩形 (l,t,r,b) → 物理矩形（四边旋转/镜像后仍轴对齐，取对角归一）。
+pub fn map_rect(dock: Dock, l: f32, t: f32, r: f32, b: f32, bu: f32, bv: f32) -> (f32, f32, f32, f32) {
+    let (x1, y1) = canon_to_window(dock, l, t, bu, bv);
+    let (x2, y2) = canon_to_window(dock, r, b, bu, bv);
+    (x1.min(x2), y1.min(y2), x1.max(x2), y1.max(y2))
+}

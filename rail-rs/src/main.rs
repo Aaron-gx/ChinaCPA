@@ -25,7 +25,7 @@ mod spring;
 use client::spawn_network_worker;
 use graphics::D2DEngine;
 use metrics::{demo_metrics, Metric};
-use placement::{load_placement, monitor_geom, save_placement, Dock, Edge, Placement};
+use placement::{canonical_size, load_placement, monitor_geom, save_placement, window_to_canon, Dock, Edge, Placement};
 use render::{render_frame, RingAnimState, LayoutMetrics};
 use spring::SpringValue;
 
@@ -380,36 +380,35 @@ fn sync_window_size(hwnd: HWND) {
                 // 避免 hover 期间高度忽大忽小。
                 let want_h = want_h.max(lm.sliver_h * 0.5);
 
+                // 规范尺寸 → 物理尺寸（Top/Bottom 交换宽高）
+                let (pw, ph) = placement::window_size(state.dock, want_w.round().max(1.0) as i32, want_h.round().max(1.0) as i32);
+
                 let mut wr = RECT::default();
                 GetWindowRect(hwnd, &mut wr).ok();
                 let cur_w = (wr.right - wr.left) as f32;
                 let cur_h = (wr.bottom - wr.top) as f32;
 
-                // 1px 以内不动，避免每帧都 SetWindowPos 抖屏
-                if (want_w - cur_w).abs() < 1.0 && (want_h - cur_h).abs() < 1.0 {
+                // 1px 以内不动，避免每帧都 SetWindowPos 抖屏（物理对物理比较）
+                if (pw as f32 - cur_w).abs() < 1.0 && (ph as f32 - cur_h).abs() < 1.0 {
+                    state.width = pw as f32;
+                    state.height = ph as f32;
                     return;
                 }
 
-                place_window(hwnd, want_w.round() as i32, want_h.round() as i32, state.dock, &state.place.clone());
+                place_window(hwnd, pw, ph, state.dock, &state.place.clone());
 
-                // 先更新逻辑尺寸，区域与绘制都按新窗口尺寸计算
-                state.width = want_w;
-                state.height = want_h;
+                // 逻辑尺寸 = 物理尺寸（渲染内部再换算规范空间）
+                state.width = pw as f32;
+                state.height = ph as f32;
 
                 // D2D 交换链也必须跟着改尺寸。
-                //
-                // 窗口缩到细条而交换链还停在 340×560 时，DXGI 会把旧尺寸的
-                // 后台缓冲按新窗口裁切/拉伸，画出来就是一块灰 —— 那才是
-                // 用户看到的"灰色遮罩"，窗口尺寸只是它的一半原因。
-                let new_w = want_w.round().max(1.0) as u32;
-                let new_h = want_h.round().max(1.0) as u32;
+                let (pw2, ph2) = (pw, ph);
+                let new_w = pw2.max(1) as u32;
+                let new_h = ph2.max(1) as u32;
                 if let Err(e) = state.engine.resize(new_w, new_h) {
                     log_msg(&format!("engine resize failed: {:?}", e));
                 }
 
-                // 记录到 state，供 hit-test 与绘制使用
-                state.width = want_w;
-                state.height = want_h;
             }
         });
     }
@@ -580,6 +579,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let x = (lparam.0 & 0xFFFF) as i16 as f32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
             let mut need_anim = false;
+            let mut dock_changed = false;
 
             STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
@@ -590,20 +590,50 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         let dy = cur.y - state.drag_start_cursor.y;
                         if dx != 0 || dy != 0 {
                             state.did_drag = true;
+                            // Pulse：拖拽开始即收起详情卡（deselect）
+                            if state.card_openness.target > 0.01 {
+                                state.card_openness.set(0.0);
+                                state.hover_index = None;
+                            }
                         }
+                        let new_x = state.drag_start_window.left + dx;
+                        let new_y = state.drag_start_window.top + dy;
                         SetWindowPos(
                             hwnd,
                             None,
-                            state.drag_start_window.left + dx,
-                            state.drag_start_window.top + dy,
+                            new_x,
+                            new_y,
                             0,
                             0,
                             SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
                         ).ok();
+                        // Pulse dragDock：拖拽中实时判定吸附边
+                        let rail = RECT {
+                            left: new_x,
+                            top: new_y,
+                            right: new_x + (state.drag_start_window.right - state.drag_start_window.left),
+                            bottom: new_y + (state.drag_start_window.bottom - state.drag_start_window.top),
+                        };
+                        let g = monitor_geom(hwnd);
+                        let nd = placement::drag_dock(cur, rail, &g, state.dock, state.place.snaps);
+                        if nd != state.dock {
+                            state.dock = nd;
+                            state.place.set_dock(nd);
+                            // 换边 → 物理宽高要交换，标记强制 sync（闭包外执行防嵌套借用）
+                            state.width = -1.0;
+                            state.height = -1.0;
+                            dock_changed = true;
+                        }
                         return;
                     }
 
                     state.left_at = 0;
+                    // 物理客户端坐标 → 规范空间（右边缘竖栏）
+                    let (bu, bv) = match state.dock {
+                        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (state.height, state.width),
+                        _ => (state.width, state.height),
+                    };
+                    let (x, y) = window_to_canon(state.dock, x, y, bu, bv);
                     if state.openness.target < 0.99 {
                         if state.openness.cur < 0.3 {
                             // 刚展开：记录展开时刻（点环刷新 0.3s 防误触）
@@ -619,12 +649,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let n = state.metrics.len().min(8);
                     let total_content_h = (n as f32) * slot_h - lm.item_spacing;
                     let expanded_h = total_content_h + 46.0 * scale * 2.0;
-                    let dock_top = (state.height - expanded_h) / 2.0;
+                    let dock_top = (bv - expanded_h) / 2.0;
                     let start_y = dock_top + 46.0 * scale + lm.ring_d / 2.0;
-                    let dock_left = state.width - lm.pill_w;
+                    let dock_left = bu - lm.pill_w;
 
                     let mut hovered_slot = None;
-                    if x >= dock_left && x <= state.width {
+                    if x >= dock_left && x <= bu {
                         for i in 0..n {
                             let cy = start_y + (i as f32) * slot_h;
                             if (y - cy).abs() <= 26.0 * scale {
@@ -662,6 +692,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
             });
+
+            if dock_changed {
+                sync_window_size(hwnd);
+                need_anim = true;
+            }
 
             if need_anim {
                 ensure_anim_ticker(hwnd);
@@ -701,15 +736,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if let Some(state) = s.borrow().as_ref() {
                     let lm = LayoutMetrics::new(state.scale);
                     let px = pt.x as f32;
-
+                    let py = pt.y as f32;
+                    // 到停靠边的垂直距离（物理空间，四边通用）
+                    let edge_dist = match state.dock {
+                        Dock::Edge(Edge::Right) | Dock::Floating(true) => state.width - px,
+                        Dock::Edge(Edge::Left) => px,
+                        Dock::Edge(Edge::Top) | Dock::Floating(false) => py,
+                        Dock::Edge(Edge::Bottom) => state.height - py,
+                    };
                     if state.openness.cur < 0.3 {
                         // 细条命中区域（Pulse: 20pt 磁吸边缘）
-                        px >= state.width - 20.0 * state.scale && px <= state.width
+                        edge_dist <= 20.0 * state.scale
                     } else {
-                        let pill_hit = px >= state.width - lm.pill_w && px <= state.width;
+                        let pill_hit = edge_dist <= lm.pill_w;
                         let card_hit = state.card_openness.cur > 0.1
-                            && px >= state.width - lm.pill_w - lm.card_w - 28.0 * state.scale
-                            && px <= state.width - lm.pill_w;
+                            && render::CARD_RECT.with(|c| {
+                                let (l, t, rr, b) = c.get();
+                                px >= l && px <= rr && py >= t && py <= b
+                            });
                         pill_hit || card_hit
                     }
                 } else {
@@ -778,12 +822,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             // + 落点在环圆内（半径 ×1.08 容差）
                             let scale = state.scale;
                             let lm = LayoutMetrics::new(scale);
+                            let (bu, bv) = match state.dock {
+                                Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (state.height, state.width),
+                                _ => (state.width, state.height),
+                            };
+                            let (ux, uy) = window_to_canon(state.dock, ux, uy, bu, bv);
                             let slot_h = lm.ring_d + 6.0 * scale + 16.0 * scale + lm.item_spacing;
                             let n = state.metrics.len().min(8);
                             let expanded_h = (n as f32) * slot_h - lm.item_spacing + 46.0 * scale * 2.0;
-                            let dock_top = (state.height - expanded_h) / 2.0;
+                            let dock_top = (bv - expanded_h) / 2.0;
                             let start_y = dock_top + 46.0 * scale + lm.ring_d / 2.0;
-                            let cx = state.width - lm.pill_w / 2.0;
+                            let cx = bu - lm.pill_w / 2.0;
                             let hit_r = lm.ring_d / 2.0 * 1.08;
                             for i in 0..n {
                                 let cy = start_y + (i as f32) * slot_h;
@@ -901,6 +950,7 @@ fn draw_now() {
                 state.height,
                 state.scale,
                 state.place.bar_style == "segmented",
+                state.dock,
                 state.hwnd,
             ) {
                 log_msg(&format!("render_frame err: {:?}", e));
