@@ -257,7 +257,13 @@ pub fn render_frame(
             let m = &metrics[idx];
             let target_anchor_y = slot_centers[idx];
             let active_pointer = if pointer_y > 0.0 { pointer_y } else { target_anchor_y };
-            let (pcx, pcy) = canon_to_window(dock, dock_left + cur_w / 2.0, active_pointer, bu, bv);
+            let (mut pcx, mut pcy) = canon_to_window(dock, dock_left + cur_w / 2.0, active_pointer, bu, bv);
+            match dock {
+                Dock::Edge(Edge::Top) | Dock::Floating(false) => pcy -= 11.0 * scale,
+                Dock::Edge(Edge::Bottom) => pcy += 11.0 * scale,
+                _ => {}
+            }
+            let _ = &mut pcx;
             let side: u8 = match dock {
                 Dock::Edge(Edge::Right) | Dock::Floating(true) => 0,
                 Dock::Edge(Edge::Left) => 1,
@@ -378,7 +384,15 @@ unsafe fn draw_usage_ring(
     let r = lm.ring_d / 2.0;
     // 环内容恒正立：映射环心到物理坐标后切恒等变换绘制
     // （圆环旋转不变，但进度弧 12 点起点与文字不能随边镜像/旋转）。
-    let (cx, cy) = canon_to_window(dock, cx, cy, bu, bv);
+    let (mut cx, mut cy) = canon_to_window(dock, cx, cy, bu, bv);
+    // 横栏（顶/底边）：环+文字沿厚度轴排布（Pulse：36+6+16=58 < 64 胶囊厚），
+    // 环向屏幕边偏移，文字留在环与屏幕内侧之间，两者都在胶囊内不被裁。
+    let tshift = 11.0 * lm.scale;
+    match dock {
+        Dock::Edge(Edge::Top) | Dock::Floating(false) => cy -= tshift,
+        Dock::Edge(Edge::Bottom) => cy += tshift,
+        _ => {}
+    }
     rt.SetTransform(&IDENTITY);
 
     // 1. 悬停微发光晕 (Halo)
@@ -517,7 +531,10 @@ unsafe fn draw_usage_ring(
     let text_w = lm.pill_w - 6.0 * lm.scale;
     let text_h = 16.0 * lm.scale;
     let tcx = cx;
-    let tcy = cy + r + 6.0 * lm.scale + text_h / 2.0;
+    let tcy = match dock {
+        Dock::Edge(Edge::Bottom) => cy - r - 6.0 * lm.scale - text_h / 2.0,
+        _ => cy + r + 6.0 * lm.scale + text_h / 2.0,
+    };
     let text_rect = D2D_RECT_F {
         left: tcx - text_w / 2.0,
         top: tcy - text_h / 2.0,

@@ -964,7 +964,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             let expanded_h = (n as f32) * slot_h - lm.item_spacing + 46.0 * scale * 2.0;
                             let dock_top = (bv - expanded_h) / 2.0;
                             let start_y = dock_top + 46.0 * scale + lm.ring_d / 2.0;
-                            let cx = bu - lm.pill_w / 2.0;
+                            let mut cx = bu - lm.pill_w / 2.0;
+                            let _ = &mut cx;
                             let hit_r = lm.ring_d / 2.0 * 1.08;
                             for i in 0..n {
                                 let cy = start_y + (i as f32) * slot_h;
