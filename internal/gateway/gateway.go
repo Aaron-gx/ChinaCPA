@@ -108,16 +108,20 @@ type openAIStream struct {
 	body        io.ReadCloser
 	contentType string  // 上游实际响应类型（text/event-stream / application/json）
 	attempts    []string // 渠道尝试链路（含失败转移记录）
+	client      string  // 请求来源客户端（实时链路可视化用）
 	rel         *pool.Pool // 负载计数释放目标（nil = 不计负载）
 	releaseOnce sync.Once
 }
 
-// release 释放账号负载计数（幂等，覆盖所有消费出口）。
+// release 释放账号负载计数与实时链路计数（幂等，覆盖所有消费出口）。
 func (s *openAIStream) release() {
 	if s.rel == nil || s.acct == nil {
 		return
 	}
-	s.releaseOnce.Do(func() { s.rel.Release(s.acct) })
+	s.releaseOnce.Do(func() {
+		s.rel.Release(s.acct)
+		s.rel.LiveDown(s.client, s.pid)
+	})
 }
 
 // peekStreamError 探测「HTTP 200 但错误内嵌在流里」的情况：
@@ -204,7 +208,7 @@ func sessionKeyOf(body []byte) string {
 // 失败返回聚合错误信息与账号级尝试轨迹（不写响应，供上层跨渠道重试）。
 // trail 形如 "a4ad5f80 ✗429…; f029fc7a ✗429…"，写入请求日志的失败转移链路，
 // 让「渠道内切账号」在面板上可见。
-func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey string) (*openAIStream, *provider.Error, int, []byte, string) {
+func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey, client string) (*openAIStream, *provider.Error, int, []byte, string) {
 	pr, ok := g.pool.Provider(pid)
 	if !ok {
 		return nil, &provider.Error{Kind: provider.ErrClient, Msg: "未知平台 " + pid}, 0, nil, ""
@@ -282,7 +286,8 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 		}
 		// 标记账号占用：Pick 的实时负载信号依赖此计数，请求结束由 releaseOnce 释放
 		g.pool.Acquire(a)
-		return &openAIStream{acct: a, pid: pid, body: res.Body, contentType: res.ContentType, rel: g.pool}, nil, 0, nil, trail
+		g.pool.LiveUp(client, pid)
+		return &openAIStream{acct: a, pid: pid, body: res.Body, contentType: res.ContentType, client: client, rel: g.pool}, nil, 0, nil, trail
 	}
 	if lastErr == nil {
 		lastErr = &provider.Error{Kind: provider.ErrUpstream, Msg: fmt.Sprintf("平台 %s 无可用账号", pid)}
@@ -311,7 +316,7 @@ func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, r
 	var lastBody []byte
 	var attempts []string
 	for _, ch := range route.Channels {
-		st, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey)
+		st, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey, client)
 		if st != nil {
 			g.bumpChannel(route, ch, true)
 			st.attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, true, trail))

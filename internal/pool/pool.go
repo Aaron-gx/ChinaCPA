@@ -50,6 +50,9 @@ type Pool struct {
 	// inflight 账号实时负载：provider|uid -> 当前进行中的请求数（路由/面板用）
 	inflightMu sync.Mutex
 	inflight   map[string]int64
+	// live 进行中链路：client|provider -> 请求数（拓扑图实时并发可视化用）
+	liveMu sync.Mutex
+	live   map[string]int64
 	// refreshMu 单账号串行刷新（WorkBuddy 有防重放，并发刷新会被拒）
 	refreshMu  sync.Mutex
 	refreshers map[string]*sync.Mutex
@@ -87,6 +90,7 @@ func New(st *store.Store, provs []provider.Provider) (*Pool, error) {
 		sticky:       map[string]*stickyEntry{},
 		rr:           map[string]uint64{},
 		inflight:     map[string]int64{},
+		live:         map[string]int64{},
 		refreshers:   map[string]*sync.Mutex{},
 		modelAliases: map[string]string{},
 		models:       map[string]*modelCache{},
@@ -363,6 +367,71 @@ func (p *Pool) InflightAll() map[string]int64 {
 		out[k] = v
 	}
 	return out
+}
+
+// LiveLink 一条进行中的「客户端 → 厂商」链路（拓扑图实时并发可视化）。
+type LiveLink struct {
+	Client   string `json:"client"`
+	Provider string `json:"provider"`
+	Count    int64  `json:"count"`
+}
+
+// LiveUp / LiveDown 记录一条进行中的客户端→厂商链路（与 Acquire/Release 并行维护，
+// 仅用于面板拓扑展示；key = client|provider）。
+func (p *Pool) LiveUp(client, provider string) {
+	if client == "" {
+		client = "未知"
+	}
+	p.liveMu.Lock()
+	p.live[client+"|"+provider]++
+	p.liveMu.Unlock()
+}
+
+func (p *Pool) LiveDown(client, provider string) {
+	if client == "" {
+		client = "未知"
+	}
+	key := client + "|" + provider
+	p.liveMu.Lock()
+	if n := p.live[key]; n > 1 {
+		p.live[key] = n - 1
+	} else {
+		delete(p.live, key)
+	}
+	p.liveMu.Unlock()
+}
+
+// Live 当前所有进行中链路的快照（按 count 降序）。
+func (p *Pool) Live() []LiveLink {
+	p.liveMu.Lock()
+	defer p.liveMu.Unlock()
+	out := make([]LiveLink, 0, len(p.live))
+	for k, v := range p.live {
+		if v <= 0 {
+			continue
+		}
+		c, pv, ok := splitLiveKey(k)
+		if !ok {
+			continue
+		}
+		out = append(out, LiveLink{Client: c, Provider: pv, Count: v})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].Client+out[i].Provider < out[j].Client+out[j].Provider
+	})
+	return out
+}
+
+// splitLiveKey 拆 client|provider（provider 不含 '|'，从最后一个分隔符切）。
+func splitLiveKey(k string) (client, provider string, ok bool) {
+	i := strings.LastIndexByte(k, '|')
+	if i < 0 {
+		return "", "", false
+	}
+	return k[:i], k[i+1:], true
 }
 
 // EnabledAccounts 某 provider 全部启用中的账号（忽略冷却，但排除需重新登录的账号）。

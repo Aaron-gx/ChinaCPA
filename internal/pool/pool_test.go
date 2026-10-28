@@ -286,3 +286,41 @@ func TestAcquireRelease(t *testing.T) {
 		t.Fatalf("过度 release 应保持 0，实际 %d", n)
 	}
 }
+
+func TestLiveLinks(t *testing.T) {
+	p, _ := newTestPool(t)
+	if got := p.Live(); len(got) != 0 {
+		t.Fatalf("初始应空，实际 %+v", got)
+	}
+	p.LiveUp("zcode", "workbuddy")
+	p.LiveUp("zcode", "workbuddy")
+	p.LiveUp("curl", "trae")
+	links := p.Live()
+	if len(links) != 2 {
+		t.Fatalf("应 2 条链路，实际 %+v", links)
+	}
+	// 按 count 降序：zcode|workbuddy(2) 在前
+	if links[0].Client != "zcode" || links[0].Provider != "workbuddy" || links[0].Count != 2 {
+		t.Fatalf("首位应 zcode→workbuddy×2，实际 %+v", links[0])
+	}
+	if links[1].Client != "curl" || links[1].Count != 1 {
+		t.Fatalf("次位应 curl→trae×1，实际 %+v", links[1])
+	}
+	p.LiveDown("zcode", "workbuddy")
+	p.LiveDown("zcode", "workbuddy")
+	p.LiveDown("curl", "trae")
+	// 空 client 归入「未知」且能正确配对释放
+	p.LiveUp("", "qwen")
+	if got := p.Live(); len(got) != 1 || got[0].Client != "未知" {
+		t.Fatalf("空 client 应归入未知，实际 %+v", got)
+	}
+	p.LiveDown("", "qwen")
+	if got := p.Live(); len(got) != 0 {
+		t.Fatalf("全部释放后应空，实际 %+v", got)
+	}
+	// 过度 LiveDown 不应变负
+	p.LiveDown("zcode", "workbuddy")
+	if got := p.Live(); len(got) != 0 {
+		t.Fatalf("过度释放应保持空，实际 %+v", got)
+	}
+}

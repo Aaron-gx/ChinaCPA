@@ -56,6 +56,17 @@ type Stats struct {
 	CostCNY  float64 `json:"cost_cny"`
 	AvgMS    float64 `json:"avg_ms"`
 	AvgFirst float64 `json:"avg_first_ms"`
+	// 耗时分位数（仅统计成功请求，失败请求的超时/快速失败会扭曲体验指标）
+	P50MS  float64 `json:"p50_ms"`
+	P90MS  float64 `json:"p90_ms"`
+	P99MS  float64 `json:"p99_ms"`
+	MaxMS  int64   `json:"max_ms"`
+	P50First float64 `json:"p50_first_ms"`
+	P90First float64 `json:"p90_first_ms"`
+	// LatencyByModel 按模型的成功请求耗时统计（面板耗时分布表）
+	LatencyByModel []ModelLatency `json:"latency_by_model,omitempty"`
+	// GapByClient 客户端请求间隔（工具/思考时间的近似），按样本量降序
+	GapByClient []ClientGap `json:"gap_by_client,omitempty"`
 
 	ByModel  []Dist `json:"by_model"`
 	ByLine   []Dist `json:"by_line"`
@@ -63,6 +74,36 @@ type Stats struct {
 	ByClient []Dist `json:"by_client,omitempty"` // 按请求来源客户端聚合
 	// CostByModel 每模型的 token 用量（面板层用当前价格现算成本，见 CostModel）
 	CostByModel []ModelCost `json:"cost_by_model,omitempty"`
+
+	// 分位数样本（聚合期暂存，finalize 后释放，不参与序列化）
+	dursAll    []int64
+	firstsAll  []int64
+	dursByMdl  map[string][]int64
+	genByMdl   map[string][]int64 // 生成阶段耗时（总耗时-首字），仅流式成功
+	firstByMdl map[string][]int64 // 首字延迟
+	prevByCli  map[string][]int64 // 同客户端相邻请求间隔样本
+}
+
+// ModelLatency 单模型成功请求耗时统计。
+type ModelLatency struct {
+	Model string  `json:"model"`
+	Count int64   `json:"count"`
+	AvgMS float64 `json:"avg_ms"`
+	P50MS float64 `json:"p50_ms"`
+	P90MS float64 `json:"p90_ms"`
+	P99MS float64 `json:"p99_ms"`
+	// 阶段拆分（仅流式且有首字时间的请求）：FirstP50MS ≈ 思考+排队，GenP50/90MS = 流式生成
+	FirstP50MS float64 `json:"first_p50_ms"`
+	GenP50MS   float64 `json:"gen_p50_ms"`
+	GenP90MS   float64 `json:"gen_p90_ms"`
+}
+
+// ClientGap 同客户端相邻请求的间隔统计（≈ 工具执行 + 用户思考的本地时间）。
+type ClientGap struct {
+	Client  string  `json:"client"`
+	Samples int64   `json:"samples"`
+	P50MS   float64 `json:"p50_ms"`
+	P90MS   float64 `json:"p90_ms"`
 }
 
 // ModelCost 单模型 token 用量（供成本重算）。
@@ -262,6 +303,61 @@ func aggregate(s *Stats, e *Entry) {
 	if e.OK && e.FirstMS > 0 {
 		s.AvgFirst += float64(e.FirstMS)
 	}
+	// 分位数样本：仅成功请求的完整耗时与首字耗时
+	if e.OK && e.TotalMS > 0 {
+		s.dursAll = append(s.dursAll, e.TotalMS)
+		if e.TotalMS > s.MaxMS {
+			s.MaxMS = e.TotalMS
+		}
+		if s.dursByMdl == nil {
+			s.dursByMdl = map[string][]int64{}
+		}
+		mk := e.Model
+		if mk == "" {
+			mk = "未知"
+		}
+		s.dursByMdl[mk] = append(s.dursByMdl[mk], e.TotalMS)
+		// 阶段拆分：流式且有首字时间 → 首字（思考+排队）与生成（流式输出）两个样本
+		if e.Stream && e.FirstMS > 0 && e.TotalMS > e.FirstMS {
+			if s.genByMdl == nil {
+				s.genByMdl = map[string][]int64{}
+				s.firstByMdl = map[string][]int64{}
+			}
+			s.genByMdl[mk] = append(s.genByMdl[mk], e.TotalMS-e.FirstMS)
+			s.firstByMdl[mk] = append(s.firstByMdl[mk], e.FirstMS)
+		}
+	}
+	if e.OK && e.FirstMS > 0 {
+		s.firstsAll = append(s.firstsAll, e.FirstMS)
+	}
+	// 客户端请求间隔（≈ 工具执行 + 用户思考）：Query 按时间倒序遍历，
+	// prevByCli 存上一条（更新的）的 [完成ts, 耗时ms, 样本...]。
+	// ts 是请求完成时刻，故 工具时间 = 完成(N+1) - 完成(N) - 耗时(N+1)。
+	// 限幅 1s~30min：更小多为并发批量，更大是人离开电脑
+	{
+		ck := e.Client
+		if ck == "" {
+			ck = "未知"
+		}
+		if s.prevByCli == nil {
+			s.prevByCli = map[string][]int64{}
+		}
+		arr := s.prevByCli[ck]
+		if len(arr) == 0 {
+			arr = make([]int64, 2, 64) // [0]=上一条完成ts [1]=上一条耗时ms
+		}
+		if arr[0] > e.TS {
+			gap := (arr[0]-e.TS)*1000 - arr[1]
+			if gap >= 1000 && gap <= 30*60*1000 {
+				arr = append(arr, gap)
+			}
+		}
+		if len(arr) > 402 {
+			arr = arr[:402] // 每客户端样本封顶，控制内存
+		}
+		arr[0], arr[1] = e.TS, e.TotalMS
+		s.prevByCli[ck] = arr
+	}
 	inc := func(d *[]Dist, label string) {
 		for i := range *d {
 			if (*d)[i].Label == label {
@@ -289,7 +385,26 @@ func aggregate(s *Stats, e *Entry) {
 	inc(&s.ByClient, client)
 }
 
-// finalize 计算均值并按量排序分布。
+// percentile 对升序样本取分位（线性插值，样本空返回 0）。
+func percentile(sorted []int64, p float64) float64 {
+	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
+	if n == 1 {
+		return float64(sorted[0])
+	}
+	idx := p / 100 * float64(n-1)
+	lo := int(idx)
+	hi := lo + 1
+	if hi >= n {
+		return float64(sorted[n-1])
+	}
+	w := idx - float64(lo)
+	return float64(sorted[lo])*(1-w) + float64(sorted[hi])*w
+}
+
+// finalize 计算均值/分位数并按量排序分布。
 func finalize(s *Stats) {
 	if s.Total > 0 {
 		s.AvgMS /= float64(s.Total)
@@ -297,6 +412,65 @@ func finalize(s *Stats) {
 	if s.OK > 0 {
 		s.AvgFirst /= float64(s.OK)
 	}
+	// 耗时分位数
+	sort.Slice(s.dursAll, func(i, j int) bool { return s.dursAll[i] < s.dursAll[j] })
+	s.P50MS = percentile(s.dursAll, 50)
+	s.P90MS = percentile(s.dursAll, 90)
+	s.P99MS = percentile(s.dursAll, 99)
+	sort.Slice(s.firstsAll, func(i, j int) bool { return s.firstsAll[i] < s.firstsAll[j] })
+	s.P50First = percentile(s.firstsAll, 50)
+	s.P90First = percentile(s.firstsAll, 90)
+	// 按模型耗时：请求量降序，最多 12 个
+	type mlat struct {
+		m    string
+		durs []int64
+	}
+	var lats []mlat
+	for m, durs := range s.dursByMdl {
+		lats = append(lats, mlat{m, durs})
+	}
+	sort.Slice(lats, func(i, j int) bool { return len(lats[i].durs) > len(lats[j].durs) })
+	if len(lats) > 12 {
+		lats = lats[:12]
+	}
+	for _, x := range lats {
+		sort.Slice(x.durs, func(i, j int) bool { return x.durs[i] < x.durs[j] })
+		sum := int64(0)
+		for _, d := range x.durs {
+			sum += d
+		}
+		ml := ModelLatency{
+			Model: x.m, Count: int64(len(x.durs)),
+			AvgMS: float64(sum) / float64(len(x.durs)),
+			P50MS: percentile(x.durs, 50), P90MS: percentile(x.durs, 90), P99MS: percentile(x.durs, 99),
+		}
+		if g := s.genByMdl[x.m]; len(g) >= 5 { // 样本太少不出阶段值
+			sort.Slice(g, func(i, j int) bool { return g[i] < g[j] })
+			ml.GenP50MS = percentile(g, 50)
+			ml.GenP90MS = percentile(g, 90)
+		}
+		if f := s.firstByMdl[x.m]; len(f) >= 5 {
+			sort.Slice(f, func(i, j int) bool { return f[i] < f[j] })
+			ml.FirstP50MS = percentile(f, 50)
+		}
+		s.LatencyByModel = append(s.LatencyByModel, ml)
+	}
+	// 客户端请求间隔（工具/思考时间近似）
+	for ck, arr := range s.prevByCli {
+		gaps := arr[2:] // [0]=完成ts [1]=耗时ms，之后才是间隔样本
+		if len(gaps) < 5 {
+			continue
+		}
+		sort.Slice(gaps, func(i, j int) bool { return gaps[i] < gaps[j] })
+		s.GapByClient = append(s.GapByClient, ClientGap{
+			Client: ck, Samples: int64(len(gaps)),
+			P50MS: percentile(gaps, 50), P90MS: percentile(gaps, 90),
+		})
+	}
+	sort.Slice(s.GapByClient, func(i, j int) bool { return s.GapByClient[i].Samples > s.GapByClient[j].Samples })
+	// 释放样本内存
+	s.dursAll, s.firstsAll, s.dursByMdl = nil, nil, nil
+	s.genByMdl, s.firstByMdl, s.prevByCli = nil, nil, nil
 	sortDist := func(d []Dist) {
 		sort.Slice(d, func(i, j int) bool { return d[i].Value > d[j].Value })
 	}

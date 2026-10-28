@@ -421,6 +421,11 @@ section h2{font-size:12.5px;font-weight:600;letter-spacing:.08em;text-transform:
   display:flex;align-items:center;gap:9px;box-shadow:var(--shadow);transition:all .2s;cursor:default;margin-bottom:8px}
 .topo-node-client:last-child{margin-bottom:0}
 .topo-node-client.active{border-color:var(--blue);box-shadow:0 0 12px rgba(37,99,235,.25)}
+/* 实时进行中请求徽章（拓扑节点右上角） */
+.live-badge{position:absolute;top:-7px;right:-6px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;
+  background:var(--green);color:#fff;font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 0 0 2px var(--card),0 2px 8px rgba(5,150,105,.45);animation:pulse 1.6s ease-in-out infinite;font-variant-numeric:tabular-nums}
+.topo-node-client,.topo-node-target{position:relative}
 .topo-node-client .dot-live{width:7px;height:7px;border-radius:50%;background:var(--blue);flex:none;box-shadow:0 0 0 2px var(--blue-soft)}
 .topo-node-client .tn-name{font-size:12px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .topo-node-client .tn-sub{font-size:10.5px;color:var(--muted);font-family:Consolas,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -1112,6 +1117,22 @@ section h2{letter-spacing:0.04em !important}
         <h2 style="margin-top:22px">近 7 日 token 消耗</h2>
         <div class="bars" id="bars"></div>
       </section>
+      <section>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:6px">
+          <h2 style="margin:0">响应速度统计</h2>
+          <div class="tabs" style="margin-left:auto" id="latRanges">
+            <span class="tab" data-r="today" onclick="setLatRange('today')">今日</span>
+            <span class="tab active" data-r="7d" onclick="setLatRange('7d')">近 7 天</span>
+            <span class="tab" data-r="all" onclick="setLatRange('all')">全部</span>
+          </div>
+        </div>
+        <div class="mini" style="color:var(--muted);margin-bottom:12px">一次请求的耗时由三部分组成：<b style="color:var(--purple,#9381db)">等待首字</b>（模型排队与思考，直到吐出第一个字）→ <b style="color:var(--green)">流式输出</b>（逐字生成回复）；两次请求之间则是<b>客户端本地</b>执行工具命令的时间。「典型」= 一半请求比它快；「偶发慢」= 10 次里约 1 次超过它；「极端」= 100 次里约 1 次超过它。</div>
+        <div class="tblwrap" id="latencyTbl"></div>
+        <div style="margin-top:16px" id="gapTblWrap">
+          <div style="font-size:11px;color:var(--faint);letter-spacing:.06em;text-transform:uppercase;margin-bottom:6px">工具执行时间（客户端本地）<span class="mini" style="text-transform:none;letter-spacing:0">　相邻请求的间隔扣除模型耗时 ≈ zcode 等客户端执行命令、读写文件的本地时间</span></div>
+          <div class="tblwrap" id="gapTbl"></div>
+        </div>
+      </section>
     </div>
 
     <!-- 模型发布 -->
@@ -1261,6 +1282,11 @@ section h2{letter-spacing:0.04em !important}
 
 <script>
 let OVERVIEW=null, MODELS=null, PUB={models:[],usd_cny:0}, MODEL_TAB='workbuddy', POLL_TIMER=null, CUR_LOGIN=null;
+/* TOPO_REQ：拓扑图专用「今日」请求数据（refreshAll 轮询 + 动画自刷新维护），
+   与请求日志页的 REQ 分离——REQ 受页面筛选范围影响且只在日志页加载，跨天会滞留旧数据 */
+let TOPO_REQ=null;
+/* LIVE_LINKS：/api/live 实时进行中链路（client|provider|count），拓扑并发多链路可视化 */
+let LIVE_LINKS=[];
 let ED=null, ED_IDX=-1, TOAST_T=null, CUR_VIEW='dash';
 const PROV_NAMES={workbuddy:'WorkBuddy 国内','workbuddy-intl':'WorkBuddy 国际',qwen:'Qwen',trae:'Trae',qoder:'Qoder 国内','qoder-intl':'Qoder 国际',qwenwork:'千问办公',doubao:'豆包 Doubao'};
 const PROV_TAG={workbuddy:'p-wb','workbuddy-intl':'p-wb-intl',qwen:'p-qwen',trae:'p-trae',qoder:'p-qoder','qoder-intl':'p-qoder-intl',qwenwork:'p-qwenwork',doubao:'p-doubao'};
@@ -1300,6 +1326,7 @@ function switchView(v){
   if(history.hash!==('#'+v))history.replaceState(null,'','#'+v);
   if(v==='requests')loadRequests();
   if(v==='usage'&&typeof USAGE!=='undefined'&&USAGE)renderUsage(USAGE);
+  if(v==='usage')loadLatency();
   if(v==='dash')setTimeout(()=>{ if(typeof updateTopologyWires==='function') updateTopologyWires(); }, 60);
 }
 function initFromHash(){
@@ -1343,6 +1370,8 @@ async function refreshAll(manual){
     USAGE=us;
     // OVERVIEW 始终更新：发布模态框的账号负载提示要用最新数据，但被动轮询不重绘主面板
     OVERVIEW=ov;
+    // 拓扑图数据源：独立的「今日」请求查询，不依赖请求日志页的 REQ（否则跨天后仍显示昨天的计数）
+    api('/api/requests?range=today&limit=20').then(r=>{TOPO_REQ=r}).catch(()=>{});
     // 自动轮询（非手动）且数据没变时跳过重绘，避免页面闪烁/动画重播/滚动跳动
     if(manual||fp!==LAST_FP){
       LAST_FP=fp;
@@ -1352,7 +1381,7 @@ async function refreshAll(manual){
     }
     loadModels(false);
     if(CUR_VIEW==='requests')loadRequests();
-    if(CUR_VIEW==='usage'&&USAGE)renderUsage(USAGE);
+    if(CUR_VIEW==='usage'){if(USAGE)renderUsage(USAGE);loadLatency()}
     refreshAcctHints();
     if(manual)toast('已刷新');
   }catch(e){if(e.message!=='未登录')console.warn(e)}
@@ -1626,10 +1655,10 @@ function renderTopology(o){
   const acCount = $('#topoAcctCount');
   if(acCount) acCount.textContent = accs.length || 0;
 
-  // 0. 左侧客户端节点：从真实请求来源聚合（by_client），动态渲染
+  // 0. 左侧客户端节点：从真实请求来源聚合（今日 by_client），动态渲染
   const clientCol = $('#topoClients');
   if(clientCol){
-    const byClient = (REQ && REQ.stats && REQ.stats.by_client) || [];
+    const byClient = (TOPO_REQ && TOPO_REQ.stats && TOPO_REQ.stats.by_client) || [];
     const real = byClient.filter(x=>x.label && x.label !== '未知');
     if(real.length){
       clientCol.innerHTML = real.slice(0,5).map((c, i)=>{
@@ -1748,7 +1777,7 @@ function updateTopologyWires(){
   svg.innerHTML = paths;
 }
 
-// 调度流光粒子实时发射 —— 用最近真实请求驱动，不再轮巡假数据
+// 调度流光粒子实时发射 —— 双轨：进行中链路（/api/live，支持 N 条并发）+ 最近完成事件流水
 function startTopologyTraffic(o){
   if(TOPO_TIMER) clearInterval(TOPO_TIMER);
 
@@ -1757,97 +1786,123 @@ function startTopologyTraffic(o){
   const targets = () => document.querySelectorAll('.topo-node-target');
   if(!clients().length || !targets().length) return;
 
-  let lastReal = null;   // 最近一次真实请求（带 client/provider/model/耗时）
-  let emptyPulses = 0;   // 无真实请求时的兜底计数
+  let lastReal = null;   // 最近一次已完成请求（流水文案用）
+  let liveSeq = 0;       // 粒子批次号：每拍重挂 animateMotion 保证持续流动
 
-  // 取最近一条真实请求作为链路事件
+  // 取最近一条真实请求作为链路事件（今日范围，TOPO_REQ 由轮询持续刷新）
   function fetchLatestReal(){
-    if(!REQ || !REQ.entries || !REQ.entries.length) return null;
-    return REQ.entries[0]; // entries 已是新→旧
+    if(!TOPO_REQ || !TOPO_REQ.entries || !TOPO_REQ.entries.length) return null;
+    return TOPO_REQ.entries[0]; // entries 已是新→旧
+  }
+
+  // 把 LIVE_LINKS 聚合成 client→count 与 provider→count，同步节点徽章
+  function syncLiveBadges(){
+    const byClient = {}, byProv = {};
+    (LIVE_LINKS||[]).forEach(l=>{
+      byClient[l.client]=(byClient[l.client]||0)+l.count;
+      byProv[l.provider]=(byProv[l.provider]||0)+l.count;
+    });
+    clients().forEach(c=>{
+      const n=(c.querySelector('.live-badge')||c.querySelector('.tn-info')).parentElement;
+      const old=c.querySelector('.live-badge'); if(old)old.remove();
+      const v=byClient[c.dataset.client||''];
+      if(v){const b=document.createElement('span');b.className='live-badge';b.textContent=v;c.appendChild(b)}
+      c.classList.toggle('live',!!v); void n;
+    });
+    targets().forEach(t=>{
+      const old=t.querySelector('.live-badge'); if(old)old.remove();
+      const v=byProv[t.dataset.prov||''];
+      if(v){const b=document.createElement('span');b.className='live-badge';b.textContent=v;t.appendChild(b)}
+      t.classList.toggle('live',!!v);
+    });
   }
 
   function pulseCycle(){
-    // 从 overview/请求日志找真实链路：优先用最近请求的 client + provider
-    const e = lastReal || fetchLatestReal();
     const cList = clients(), tList = targets();
     if(!cList.length || !tList.length) return;
 
-    let cIdx = -1, tIdx = -1;
-    let tick = '';
+    // ── 轨 1：进行中的真实并发链路（可 N 条同时亮）──
+    const links = LIVE_LINKS||[];
+    const pGroup = $('#topoParticles');
+    let particles = '';
+    const activeC = new Set(), activeT = new Set();
+    links.forEach(l=>{
+      let ci=-1,ti=-1;
+      cList.forEach((c,i)=>{ if((c.dataset.client||'')===l.client) ci=i; });
+      tList.forEach((t,i)=>{ if((t.dataset.prov||'')===l.provider) ti=i; });
+      if(ci<0||ti<0) return; // 节点尚未渲染该客户端/厂商（如未知来源），跳过连线
+      activeC.add(ci); activeT.add(ti);
+      const wC=document.querySelector(`.wire-c-${ci}`), wT=document.querySelector(`.wire-t-${ti}`);
+      if(!wC||!wT) return;
+      const begin=(liveSeq%4)*0.2; // 错开各链路相位，避免整齐同步的机械感
+      particles += `
+        <circle r="4" fill="var(--accent)" filter="drop-shadow(0 0 6px var(--accent))">
+          <animateMotion path="${wC.getAttribute('d')}" dur="0.8s" begin="${begin}s" repeatCount="indefinite" /></circle>
+        <circle r="4" fill="var(--green)" filter="drop-shadow(0 0 6px var(--green))">
+          <animateMotion path="${wT.getAttribute('d')}" dur="0.8s" begin="${(begin+0.8).toFixed(2)}s" repeatCount="indefinite" /></circle>`;
+    });
+    liveSeq++;
+    if(pGroup) pGroup.innerHTML = particles;
+    cList.forEach((c,i)=> c.classList.toggle('active', activeC.has(i)));
+    tList.forEach((t,i)=> t.classList.toggle('active', activeT.has(i)));
+    document.querySelectorAll('.wire-client').forEach((w,i)=> w.classList.toggle('active', activeC.has(i)));
+    document.querySelectorAll('.wire-target').forEach((w,i)=> w.classList.toggle('active', activeT.has(i)));
+    syncLiveBadges();
 
-    if(e && e.client && e.provider){
-      // 真实请求：client 匹配左侧节点，provider 匹配右侧渠道
-      cList.forEach((c,i)=>{ if((c.dataset.client||'') === e.client) cIdx = i; });
-      tList.forEach((t,i)=>{ if((t.dataset.prov||'') === e.provider) tIdx = i; });
-    }
-
-    if(cIdx >= 0 && tIdx >= 0){
-      // 点亮真实链路
-      lastReal = e;
-      cList.forEach((c,i)=> c.classList.toggle('active', i===cIdx));
-      tList.forEach((t,i)=> t.classList.toggle('active', i===tIdx));
-      const wC = document.querySelectorAll('.wire-client');
-      const wT = document.querySelectorAll('.wire-target');
-      wC.forEach((w,i)=> w.classList.toggle('active', i===cIdx));
-      wT.forEach((w,i)=> w.classList.toggle('active', i===tIdx));
-
-      // 粒子动画沿真实连线流动
-      const pGroup = $('#topoParticles');
-      if(pGroup){
-        const wireC = document.querySelector(`.wire-c-${cIdx}`);
-        const wireT = document.querySelector(`.wire-t-${tIdx}`);
-        if(wireC && wireT){
-          pGroup.innerHTML = `
-            <circle r="4" fill="var(--accent)" filter="drop-shadow(0 0 6px var(--accent))">
-              <animateMotion path="${wireC.getAttribute('d')}" dur="0.8s" repeatCount="1" fill="freeze" />
-            </circle>
-            <circle r="4" fill="var(--green)" filter="drop-shadow(0 0 6px var(--green))">
-              <animateMotion path="${wireT.getAttribute('d')}" begin="0.8s" dur="0.8s" repeatCount="1" fill="freeze" />
-            </circle>`;
-        }
-      }
-
-      // 真实决策文案
-      const clientName = (cList[cIdx].querySelector('.tn-name')||{}).textContent || e.client;
-      const targetName = (tList[tIdx].querySelector('.t-name')||{}).textContent || e.provider;
-      const badge = $('#topoModelBadge');
-      if(badge && e.model){ badge.textContent = e.model + ' · 动态路由拓扑'; }
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
-      const lat = e.total_ms? (e.total_ms/1000).toFixed(1)+'s' : (e.first_ms? (e.first_ms/1000).toFixed(1)+'s' : '—');
-      tick = `[真实链路 ${timeStr}] 客户端: <b>${esc(clientName)}</b> ➔ 网关 ➔ 上游: <b>${esc(targetName)}</b> ｜ 模型: <code>${esc(e.model||'')}</code> ｜ 耗时: ${lat} ｜ ${e.ok?'成功':'失败'}`;
+    // ── 轨 2：最近完成事件流水（ticker 文字）──
+    const latest = fetchLatestReal();
+    if(latest){
+      if(!lastReal || latest.ts !== lastReal.ts || latest.id !== lastReal.id) lastReal = latest;
     } else {
-      // 无匹配真实请求：显示等待，不轮巡假数据
-      emptyPulses++;
-      const now = new Date();
-      const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
-      tick = `[等待真实请求 ${timeStr}] 当前无匹配链路事件，有新调用将实时点亮对应客户端→上游路径`;
+      lastReal = null;
     }
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;
+    let tick;
+    if(links.length){
+      const desc = links.slice(0,4).map(l=>{
+        const cn = l.client==='未知'?'未知来源':l.client;
+        return `<b>${esc(cn)}</b>➔<b>${esc(PROV_NAMES[l.provider]||l.provider)}</b>${l.count>1?` ×${l.count}`:''}`;
+      }).join('　');
+      tick = `[进行中 ${timeStr}] ${links.length} 条链路活跃：${desc}${links.length>4?' …':''}`;
+    } else if(lastReal && lastReal.client && lastReal.provider){
+      const lat = lastReal.total_ms? (lastReal.total_ms/1000).toFixed(1)+'s' : '—';
+      tick = `[空闲 ${timeStr}] 最近完成：<b>${esc(lastReal.client)}</b> ➔ <b>${esc(PROV_NAMES[lastReal.provider]||lastReal.provider)}</b> ｜ 模型: <code>${esc(lastReal.model||'')}</code> ｜ 耗时 ${lat} ｜ ${lastReal.ok?'成功':'失败'}`;
+    } else {
+      tick = `[空闲 ${timeStr}] 当前无进行中请求，有新调用将实时点亮全部并发链路`;
+    }
+    const badge = $('#topoModelBadge');
+    if(badge && lastReal && lastReal.model){ badge.textContent = lastReal.model + ' · 动态路由拓扑'; }
     if(ticker) ticker.innerHTML = tick;
   }
 
-  // 每 2.8 秒刷新一次真实请求日志并驱动动画
-  pulseCycle();
-  TOPO_TIMER = setInterval(()=>{
-    // 轮询刷新最近请求（保持动画数据最新）
-    if(!REQ){
-      // 尝试加载一次请求日志（静默失败）
-      const model = '', status = '';
-      fetch(`/api/requests?range=all&limit=20&model=&status=&offset=0`)
-        .then(r=>r.json()).then(d=>{ REQ = d; syncClientNodes(); pulseCycle(); }).catch(()=>{ pulseCycle(); });
-    } else {
+  // 每 2.8 秒：拉实时链路（/api/live）+ 今日最近请求（流水与客户端节点用）
+  function topoTick(){
+    Promise.all([
+      api('/api/live').catch(()=>null),
+      api('/api/requests?range=today&limit=20').catch(()=>null),
+    ]).then(([lv,req])=>{
+      LIVE_LINKS = (lv && lv.links) || [];
+      if(req) TOPO_REQ = req;
+      syncClientNodes();
       pulseCycle();
-    }
-  }, 2800);
+    });
+  }
+  topoTick();
+  TOPO_TIMER = setInterval(topoTick, 2800);
 
   // 用最新 by_client 更新左侧客户端节点（保持真实来源展示）
   function syncClientNodes(){
     const col = $('#topoClients');
     if(!col) return;
-    const byClient = (REQ && REQ.stats && REQ.stats.by_client) || [];
-    const real = byClient.filter(x=>x.label && x.label !== '未知');
+    const byClient = (TOPO_REQ && TOPO_REQ.stats && TOPO_REQ.stats.by_client) || [];
+    // 进行中的客户端即使今日日志还没有（罕见）也补进节点列表
+    const liveClients = [...new Set((LIVE_LINKS||[]).map(l=>l.client).filter(c=>c&&c!=='未知'))];
+    const labels = byClient.map(x=>x.label).filter(l=>l&&l!=='未知');
+    liveClients.forEach(c=>{ if(!labels.includes(c)) labels.unshift(c); });
+    const real = labels.map(l=>({label:l, value:(byClient.find(x=>x.label===l)||{value:0}).value}));
     if(!real.length) return;
-    col.innerHTML = real.slice(0,5).map((c, i)=>{
+    col.innerHTML = real.slice(0,6).map((c, i)=>{
       const icons = {zcode:'Z', 'claude-code':'C', codex:'X', curl:'c', python:'py', go:'go', openai:'O', node:'n', browser:'🌐', postman:'P'};
       const ico = icons[c.label] || (c.label||'?').slice(0,2);
       return `<div class="topo-node-client" data-client="${esc(c.label)}" data-idx="${i}">
@@ -2103,7 +2158,8 @@ function renderRequests(){
     {l:'请求数',n:s.total||0,c:'',s:`成功 ${fmt(s.ok)} · 失败 ${fmt(s.fail)}`},
     {l:'Token 用量',n:s.total_tokens||0,c:'blue',s:`输入 ${fmt(s.prompt_tokens)} / 输出 ${fmt(s.completion_tokens)}${s.cache_tokens>0?` / 缓存 ${fmt(s.cache_tokens)}`:''}`},
     {l:'折合成本',v:fmtCNY(s.cost_cny||0),c:'accent',s:'依据模型定价规则核算'},
-    {l:'平均耗时',v:((s.avg_ms||0)/1000).toFixed(1)+' s',c:'purple',s:`平均首字 ${(s.avg_first_ms||0)/1000>0?((s.avg_first_ms||0)/1000).toFixed(2)+' s':'—'}`},
+    {l:'耗时分布',v:(s.p50_ms!=null&&s.p50_ms>0)?((s.p50_ms/1000).toFixed(1)+' s'):'—',c:'purple',
+      s:`中位耗时 · P90 ${((s.p90_ms||0)/1000).toFixed(1)} / P99 ${((s.p99_ms||0)/1000).toFixed(1)} s · 均值 ${((s.avg_ms||0)/1000).toFixed(1)} s`},
   ]);
   // 环形分布图（服务端按筛选范围聚合）
   renderDonut('donutModels',(s.by_model||[]).map(x=>({label:x.label,value:x.value})));
@@ -2241,6 +2297,54 @@ function renderUsage(us){
   const b1=$('#bars'), b2=$('#dashHistBars');
   if(b1)b1.innerHTML=barsHtml;
   if(b2)b2.innerHTML=barsHtml;
+}
+
+/* ── 响应速度统计（用量页）：独立时间范围，通俗表头 ─────── */
+let LAT_RANGE='7d';
+function setLatRange(r){
+  LAT_RANGE=r;
+  document.querySelectorAll('#latRanges .tab').forEach(t=>t.classList.toggle('active',t.dataset.r===r));
+  loadLatency();
+}
+async function loadLatency(){
+  const lat=$('#latencyTbl');
+  if(!lat)return;
+  const sec=v=>v>0?(v>=1000?(v/1000).toFixed(1)+' 秒':Math.round(v)+' 毫秒'):'—';
+  try{
+    const d=await api('/api/requests?range='+LAT_RANGE+'&limit=1');
+    const s=d.stats||{};
+    const lm=s.latency_by_model||[];
+    if(!lm.length){lat.innerHTML='<div class="empty">所选范围内暂无成功请求，无法统计响应速度</div>';$('#gapTblWrap').style.display='none';return}
+    const maxP90=Math.max(...lm.map(x=>x.p90_ms||0),1);
+    lat.innerHTML=`<table class="mini-tbl"><thead><tr>
+      <th>模型</th><th>成功次数</th>
+      <th title="一半请求比这个快（P50，最能代表日常体验）">典型耗时</th>
+      <th title="10 次里约 1 次超过它（P90）">偶发较慢</th>
+      <th title="100 次里约 1 次超过它（P99）">极端情况</th>
+      <th title="从发出请求到模型吐出第一个字的等待（排队+思考）">等待首字</th>
+      <th title="首字出现后逐字生成到结束的时长（典型）">流式输出</th>
+      <th title="流式输出阶段的偶发慢值（P90）">输出·偶发慢</th>
+      <th style="min-width:110px" title="按「偶发较慢」横向对比，条越长越慢">快慢对比</th>
+    </tr></thead><tbody>`+
+      lm.map(x=>`<tr><td><code>${esc(x.model)}</code></td><td>${fmt(x.count)}</td>
+        <td>${sec(x.p50_ms)}</td><td><b>${sec(x.p90_ms)}</b></td><td>${sec(x.p99_ms)}</td>
+        <td style="color:var(--purple,#9381db)">${sec(x.first_p50_ms)}</td>
+        <td style="color:var(--green)">${sec(x.gen_p50_ms)}</td>
+        <td class="mini">${sec(x.gen_p90_ms)}</td>
+        <td><span style="display:inline-block;height:7px;border-radius:4px;width:${Math.max(2,Math.round((x.p90_ms||0)/maxP90*100))}%;background:var(--accent);opacity:.75;vertical-align:middle"></span></td></tr>`).join('')+
+      `</tbody></table>`;
+    const gt=$('#gapTbl');
+    const gaps=s.gap_by_client||[];
+    if(gt){
+      if(!gaps.length){$('#gapTblWrap').style.display='none'}
+      else{
+        $('#gapTblWrap').style.display='';
+        gt.innerHTML=`<table class="mini-tbl"><thead><tr><th>客户端</th><th>样本</th><th title="一半请求间隔比这个短">典型工具时间</th><th title="10 次里约 1 次超过它">偶发较慢</th></tr></thead><tbody>`+
+          gaps.map(x=>`<tr><td><span class="tag plain">${esc(x.client)}</span></td><td>${fmt(x.samples)}</td><td>${sec(x.p50_ms)}</td><td><b>${sec(x.p90_ms)}</b></td></tr>`).join('')+
+          `</tbody></table>`;
+      }
+    }
+  }catch(e){lat.innerHTML='<div class="empty">加载失败</div>'}
 }
 
 /* ── 模型发布 ─────────────────────────── */

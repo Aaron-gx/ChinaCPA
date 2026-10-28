@@ -104,6 +104,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 	mux.HandleFunc("/api/refresh_all_quotas", p.authed(p.handleRefreshAllQuotas))
 	mux.HandleFunc("/api/publish", p.authed(p.handlePublish))
 	mux.HandleFunc("/api/requests", p.authed(p.handleRequests))
+	mux.HandleFunc("/api/live", p.authed(p.handleLive))
 	mux.HandleFunc("/api/stream/events", p.authed(p.handleStreamEvents))
 }
 
@@ -960,6 +961,12 @@ func (p *Panel) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	p.usage.SetPublishedPricing(pub, p.pub.USDCNY())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(p.pub.Get().Models)})
+}
+
+// handleLive 实时进行中链路（客户端→厂商），拓扑图并发可视化用。
+// GET /api/live → {"links":[{"client":"zcode","provider":"workbuddy","count":2}]}
+func (p *Panel) handleLive(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"links": p.pool.Live()})
 }
 
 // handleRequests 请求日志：时间范围 + 模型/状态筛选 + 分页。
