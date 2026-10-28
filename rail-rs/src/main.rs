@@ -900,6 +900,7 @@ fn draw_now() {
                 state.width,
                 state.height,
                 state.scale,
+                state.place.bar_style == "segmented",
                 state.hwnd,
             ) {
                 log_msg(&format!("render_frame err: {:?}", e));
@@ -918,9 +919,18 @@ fn show_context_menu(hwnd: HWND) {
         let cmd_open = 1;
         let cmd_copy = 2;
         let cmd_quit = 3;
+        let cmd_up = 4;
+        let cmd_down = 5;
+        let cmd_reset_order = 6;
+        let cmd_bar = 7;
 
         AppendMenuW(menu, MF_STRING, cmd_open, w!("打开管理面板")).ok();
         AppendMenuW(menu, MF_STRING, cmd_copy, w!("复制接口地址 (http://127.0.0.1:8313/v1)")).ok();
+        AppendMenuW(menu, MF_SEPARATOR, 0, None).ok();
+        AppendMenuW(menu, MF_STRING, cmd_up, w!("上移当前环")).ok();
+        AppendMenuW(menu, MF_STRING, cmd_down, w!("下移当前环")).ok();
+        AppendMenuW(menu, MF_STRING, cmd_reset_order, w!("重置顺序")).ok();
+        AppendMenuW(menu, MF_STRING, cmd_bar, w!("切换进度条样式（连续/刻度）")).ok();
         AppendMenuW(menu, MF_SEPARATOR, 0, None).ok();
         AppendMenuW(menu, MF_STRING, cmd_quit, w!("退出浮动栏")).ok();
 
@@ -954,6 +964,57 @@ fn show_context_menu(hwnd: HWND) {
             }
             3 => {
                 DestroyWindow(hwnd).ok();
+            }
+            4 | 5 => {
+                // 上移/下移当前悬停环（Pulse PlacementPane 箭头重排）
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow_mut().as_mut() {
+                        let Some(hi) = state.hover_index else { return };
+                        if hi == 0 && selected.0 as usize == 4 { return; }
+                        if hi + 1 >= state.metrics.len() && selected.0 as usize == 5 { return; }
+                        let j = if selected.0 as usize == 4 { hi - 1 } else { hi + 1 };
+                        state.metrics.swap(hi, j);
+                        state.anims.swap(hi, j);
+                        state.hover_index = Some(j);
+                        state.place.order = state.metrics.iter().map(|x| x.provider.clone()).collect();
+                        save_placement(&state.place.clone());
+                    }
+                });
+                draw_now();
+            }
+            6 => {
+                // 重置顺序：回到 metrics.rs 的默认 provider 序
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow_mut().as_mut() {
+                        state.place.order.clear();
+                        let order = ["qwen", "workbuddy", "trae", "qoder", "qwenwork", "doubao"];
+                        let mut pairs: Vec<(usize, Metric, RingAnimState)> = state
+                            .metrics
+                            .iter()
+                            .zip(state.anims.iter())
+                            .map(|(mm, aa)| (order.iter().position(|p| *p == mm.provider).unwrap_or(usize::MAX), mm.clone(), aa.clone()))
+                            .collect();
+                        pairs.sort_by_key(|(k, _, _)| *k);
+                        state.metrics = pairs.iter().map(|(_, mm, _)| mm.clone()).collect();
+                        state.anims = pairs.iter().map(|(_, _, aa)| aa.clone()).collect();
+                        save_placement(&state.place.clone());
+                    }
+                });
+                draw_now();
+            }
+            7 => {
+                // 切换进度条样式（continuous <-> segmented），持久化
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow_mut().as_mut() {
+                        state.place.bar_style = if state.place.bar_style == "segmented" {
+                            "continuous".to_string()
+                        } else {
+                            "segmented".to_string()
+                        };
+                        save_placement(&state.place.clone());
+                    }
+                });
+                draw_now();
             }
             _ => {}
         }

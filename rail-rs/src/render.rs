@@ -10,6 +10,7 @@ use crate::graphics::D2DEngine;
 use crate::metrics::Metric;
 use crate::spring::{FadeValue, SpringValue};
 
+#[derive(Clone)]
 pub struct RingAnimState {
     pub arc: SpringValue,
     pub halo: FadeValue,
@@ -82,6 +83,7 @@ pub fn render_frame(
     w: f32,
     h: f32,
     scale: f32,
+    segmented: bool,
     hwnd: HWND,
 ) -> Result<()> {
     unsafe {
@@ -212,6 +214,7 @@ pub fn render_frame(
                 active_pointer_y,
                 card_openness,
                 h,
+                segmented,
                 &lm,
             )?;
         }
@@ -530,6 +533,7 @@ unsafe fn draw_detail_card(
     pointer_y: f32,
     card_openness: f32,
     screen_h: f32,
+    segmented: bool,
     lm: &LayoutMetrics,
 ) -> Result<()> {
     let rt = &eng.rt;
@@ -538,7 +542,9 @@ unsafe fn draw_detail_card(
     let rows_count = m.rows.len().clamp(1, 4);
     let header_h = 20.0 * scale;
     let row_h = 56.0 * scale;
-    let card_h = lm.card_pad * 2.0 + header_h + 14.0 * scale + (rows_count as f32) * row_h - 14.0 * scale;
+    let burn = burn_forecast(m);
+    let burn_extra = if burn.is_some() { 16.0 * scale } else { 0.0 };
+    let card_h = lm.card_pad * 2.0 + header_h + 14.0 * scale + (rows_count as f32) * row_h - 14.0 * scale + burn_extra;
 
     let slide_offset = (1.0 - card_openness) * 16.0 * scale;
     let card_right = dock_left - lm.pointer_w - 8.0 * scale + slide_offset;
@@ -647,7 +653,7 @@ unsafe fn draw_detail_card(
 
     // 3. 渲染各用量行（Pulse 经典三行布局：名称+额度 / 进度条胶囊 / 百分比+重置时间）
     let row_w = lm.card_w - lm.card_pad * 2.0;
-    for row in m.rows.iter().take(4) {
+    for (row_i, row) in m.rows.iter().enumerate().take(4) {
         // 第一行：左侧名称，右侧额度明细
         let label_u16: Vec<u16> = row.label.encode_utf16().collect();
         let r1 = D2D_RECT_F {
@@ -669,32 +675,64 @@ unsafe fn draw_detail_card(
             rt.DrawText(&detail_u16, &eng.font_detail_right, &r_amount, &eng.brush_text_dim, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
         }
 
-        // 第二行：Pulse 胶囊进度条 (高度 6pt)
-        cur_y += 14.0 * scale + 7.0 * scale;
-        let bar_h = 6.0 * scale;
-        let bar_track = D2D_RECT_F {
-            left: card_left + lm.card_pad,
-            top: cur_y,
-            right: card_right - lm.card_pad,
-            bottom: cur_y + bar_h,
-        };
-        rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: bar_track, radiusX: bar_h / 2.0, radiusY: bar_h / 2.0 }, &eng.brush_track);
-
+        // 第二行：进度条 —— continuous 胶囊 6pt / segmented 刻度 12pt（Pulse UsageBar）
         let frac = (row.used_pct as f32 / 100.0).clamp(0.0, 1.0);
-        if frac > 0.005 {
-            let fill_w = (row_w * frac).max(bar_h);
-            let bar_fill = D2D_RECT_F {
+        if segmented {
+            cur_y += 14.0 * scale + 4.0 * scale;
+            let bar_h = 12.0 * scale;
+            let tick_w = 2.5 * scale;
+            let gap = 2.0 * scale;
+            let step = tick_w + gap;
+            let count = (((row_w + 2.0 * scale) / step).floor() as i32).max(1);
+            let mut lit = (frac * count as f32).round() as i32;
+            if frac > 0.0 {
+                lit = lit.max(1);
+            }
+            if frac < 1.0 {
+                lit = lit.min(count - 1);
+            }
+            let bar_brush = eng.color_for_fraction(frac, false, frac >= 0.999);
+            for t in 0..count {
+                let x0 = card_left + lm.card_pad + t as f32 * step;
+                let rect = D2D_RECT_F {
+                    left: x0,
+                    top: cur_y,
+                    right: x0 + tick_w,
+                    bottom: cur_y + bar_h,
+                };
+                let b = if t < lit { bar_brush } else { &eng.brush_track };
+                rt.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT { rect, radiusX: tick_w / 2.0, radiusY: tick_w / 2.0 },
+                    b,
+                );
+            }
+            cur_y += bar_h + 4.0 * scale;
+        } else {
+            cur_y += 14.0 * scale + 7.0 * scale;
+            let bar_h = 6.0 * scale;
+            let bar_track = D2D_RECT_F {
                 left: card_left + lm.card_pad,
                 top: cur_y,
-                right: card_left + lm.card_pad + fill_w,
+                right: card_right - lm.card_pad,
                 bottom: cur_y + bar_h,
             };
-            let bar_brush = eng.color_for_fraction(frac, false, frac >= 0.999);
-            rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: bar_fill, radiusX: bar_h / 2.0, radiusY: bar_h / 2.0 }, bar_brush);
+            rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: bar_track, radiusX: bar_h / 2.0, radiusY: bar_h / 2.0 }, &eng.brush_track);
+
+            if frac > 0.005 {
+                let fill_w = (row_w * frac).max(bar_h);
+                let bar_fill = D2D_RECT_F {
+                    left: card_left + lm.card_pad,
+                    top: cur_y,
+                    right: card_left + lm.card_pad + fill_w,
+                    bottom: cur_y + bar_h,
+                };
+                let bar_brush = eng.color_for_fraction(frac, false, frac >= 0.999);
+                rt.FillRoundedRectangle(&D2D1_ROUNDED_RECT { rect: bar_fill, radiusX: bar_h / 2.0, radiusY: bar_h / 2.0 }, bar_brush);
+            }
+            cur_y += bar_h + 7.0 * scale;
         }
 
         // 第三行：左侧已用百分比，右侧重置倒计时
-        cur_y += bar_h + 7.0 * scale;
         let pct_str = format!("{:.0}% Used", row.used_pct);
         let pct_u16: Vec<u16> = pct_str.encode_utf16().collect();
         let r_pct = D2D_RECT_F {
@@ -717,8 +755,84 @@ unsafe fn draw_detail_card(
             rt.DrawText(&reset_u16, &eng.font_detail_right, &r_reset, &eng.brush_text_dim, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
         }
 
-        cur_y += 14.0 * scale + 14.0 * scale;
+        cur_y += 16.0 * scale;
+
+        // 第四行（仅头条行、数据齐全时）：BurnRate 预测（Pulse burnLine）
+        if row_i == 0 {
+            if let Some((text, warn)) = &burn {
+                let bu: Vec<u16> = text.encode_utf16().collect();
+                let r_burn = D2D_RECT_F {
+                    left: card_left + lm.card_pad,
+                    top: cur_y,
+                    right: card_right - lm.card_pad,
+                    bottom: cur_y + 14.0 * scale,
+                };
+                let b_brush = if *warn { &eng.brush_warning } else { &eng.brush_text_dim };
+                rt.DrawText(&bu, &eng.font_detail, &r_burn, b_brush, D2D1_DRAW_TEXT_OPTIONS_NONE, DWRITE_MEASURING_MODE_NATURAL);
+                cur_y += 14.0 * scale;
+            }
+        }
+        cur_y += 14.0 * scale;
     }
 
     Ok(())
+}
+
+/// Pulse BurnRate：由 used + 窗口 elapsed 推算耗尽时刻。数据不全绝不猜 → None。
+fn burn_forecast(m: &Metric) -> Option<(String, bool)> {
+    if m.window_seconds <= 0 || m.resets_at_unix <= 0 || m.spent || m.balance {
+        return None;
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs() as i64;
+    let until_reset = m.resets_at_unix - now;
+    if until_reset <= 0 {
+        return None;
+    }
+    let elapsed = (1.0 - until_reset as f64 / m.window_seconds as f64).clamp(0.0, 1.0);
+    if elapsed < 0.03 {
+        return None; // 开窗期突发会放大成天文速率，Pulse 同规则
+    }
+    let used = m.used;
+    if used >= 1.0 {
+        return Some(("预计已耗尽".to_string(), true));
+    }
+    let elapsed_seconds = until_reset as f64 / (1.0 - elapsed) * elapsed;
+    let per_hour = used / elapsed_seconds * 3600.0;
+    if per_hour <= 0.0 {
+        return None;
+    }
+    let until_empty = (1.0 - used) / per_hour * 3600.0;
+    let exhausts = until_empty < until_reset as f64;
+    if exhausts && until_empty <= 7200.0 {
+        Some((format!("预计 {} 内耗尽", approx_duration(until_empty)), true))
+    } else if exhausts {
+        Some(("撑不到下次重置".to_string(), true))
+    } else {
+        Some(("预计够用至重置".to_string(), false))
+    }
+}
+
+/// Pulse approximate()：15 分钟 / 半小时一档的口语化时长。
+fn approx_duration(secs: f64) -> String {
+    let minutes = (secs / 60.0).round();
+    if minutes < 15.0 {
+        "不到 15 分钟".to_string()
+    } else if minutes < 68.0 {
+        let quarters = ((minutes / 15.0).round() as i32).max(1);
+        if quarters == 4 {
+            "约 1 小时".to_string()
+        } else {
+            format!("约 {} 分钟", quarters * 15)
+        }
+    } else {
+        let hours = (minutes / 30.0).round() / 2.0;
+        if (hours - hours.floor()).abs() < 0.01 {
+            format!("约 {} 小时", hours as i32)
+        } else {
+            format!("约 {:.1} 小时", hours)
+        }
+    }
 }
