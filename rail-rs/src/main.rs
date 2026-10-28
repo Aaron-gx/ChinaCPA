@@ -423,7 +423,14 @@ fn sync_window_size(hwnd: HWND) {
                     return;
                 }
 
-                place_window(hwnd, pw, ph, state.dock, &state.place.clone());
+                if state.dragging {
+                    // 拖拽中换边：只换尺寸不跳位置（保持左上角，下一帧 MOUSEMOVE 继续跟手）
+                    let mut wr2 = RECT::default();
+                    GetWindowRect(hwnd, &mut wr2).ok();
+                    SetWindowPos(hwnd, HWND_TOPMOST, wr2.left, wr2.top, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER).ok();
+                } else {
+                    place_window(hwnd, pw, ph, state.dock, &state.place.clone());
+                }
 
                 // 逻辑尺寸 = 物理尺寸（渲染内部再换算规范空间）
                 state.width = pw as f32;
@@ -564,9 +571,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         if let Some(state) = s.borrow().as_ref() {
                             let scale = state.scale;
                             let lm = LayoutMetrics::new(scale);
-                            let lx = pt.x - wr.left;
-                            let ly = pt.y - wr.top;
-                            let slack = 8.0;
+                            let lx = (pt.x - wr.left) as f32;
+                            let ly = (pt.y - wr.top) as f32;
+                            let slack = 8.0f32;
+                            // 指针必须在窗口矩形内（含 slack 容差）才算"在内容上"
+                            if lx < -slack || ly < -slack
+                                || lx > (wr.right - wr.left) as f32 + slack
+                                || ly > (wr.bottom - wr.top) as f32 + slack
+                            {
+                                return false;
+                            }
                             if state.openness.cur < 0.3 {
                                 // sliver 命中：20pt 磁吸宽 + slack
                                 let hit = match state.dock {
@@ -986,6 +1000,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     }
                 }
             });
+            sync_window_size(hwnd);
             if let (Some((provider, uid)), Some(idx)) = (refresh_req, sweep_idx) {
                 let (base, pass) = STATE.with(|s| {
                     let st = s.borrow();
