@@ -576,7 +576,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEMOVE => {
             let x = (lparam.0 & 0xFFFF) as i16 as f32;
             let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
-
             let mut need_anim = false;
 
             STATE.with(|s| {
@@ -733,6 +732,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let ux = (lparam.0 & 0xFFFF) as i16 as f32;
+            let uy = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
+            let mut refresh_req: Option<(String, String)> = None;
+            let mut sweep_idx: Option<usize> = None;
             STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
                     if state.dragging {
@@ -748,31 +751,75 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                                 Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
                                     let span = (room.bottom - room.top - (wr.bottom - wr.top)).max(0);
                                     if span > 0 {
-                                        state.place.v = ((wr.top - room.top) as f64 / span as f64)
-                                            .clamp(0.0, 1.0);
+                                        state.place.v = ((wr.top - room.top) as f64 / span as f64).clamp(0.0, 1.0);
                                     }
                                 }
                                 Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => {
                                     let span = (room.right - room.left - (wr.right - wr.left)).max(0);
                                     if span > 0 {
-                                        state.place.h = ((wr.left - room.left) as f64 / span as f64)
-                                            .clamp(0.0, 1.0);
+                                        state.place.h = ((wr.left - room.left) as f64 / span as f64).clamp(0.0, 1.0);
                                     }
                                 }
                                 Dock::Floating(_) => {}
                             }
                             save_placement(&state.place.clone());
-                            // 归位：按新比例重新贴边（拖拽可能把窗口拖离边缘）
                             let dock = state.dock;
                             let place = state.place.clone();
                             let w = wr.right - wr.left;
                             let h = wr.bottom - wr.top;
                             place_window(hwnd, w, h, dock, &place);
+                        } else if state.openness.cur > 0.9
+                            && now_ms().saturating_sub(state.rail_opened_at) >= 300
+                        {
+                            // 点环刷新（Pulse ringClick）：短按 + 展开保护期 0.3s
+                            // + 落点在环圆内（半径 ×1.08 容差）
+                            let scale = state.scale;
+                            let lm = LayoutMetrics::new(scale);
+                            let slot_h = lm.ring_d + 6.0 * scale + 16.0 * scale + lm.item_spacing;
+                            let n = state.metrics.len().min(8);
+                            let expanded_h = (n as f32) * slot_h - lm.item_spacing + 46.0 * scale * 2.0;
+                            let dock_top = (state.height - expanded_h) / 2.0;
+                            let start_y = dock_top + 46.0 * scale + lm.ring_d / 2.0;
+                            let cx = state.width - lm.pill_w / 2.0;
+                            let hit_r = lm.ring_d / 2.0 * 1.08;
+                            for i in 0..n {
+                                let cy = start_y + (i as f32) * slot_h;
+                                let dx = ux - cx;
+                                let dy = uy - cy;
+                                if dx * dx + dy * dy <= hit_r * hit_r {
+                                    if let Some(m) = state.metrics.get(i) {
+                                        if let Some(uid) = m.uids.first() {
+                                            refresh_req = Some((m.provider.clone(), uid.clone()));
+                                            sweep_idx = Some(i);
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
                         }
                         state.did_drag = false;
                     }
                 }
             });
+            if let (Some((provider, uid)), Some(idx)) = (refresh_req, sweep_idx) {
+                let (base, pass) = STATE.with(|s| {
+                    let st = s.borrow();
+                    match st.as_ref() {
+                        Some(x) => (x.base_url.clone(), x.password.clone()),
+                        None => (String::new(), String::new()),
+                    }
+                });
+                log_msg(&format!("ring-click refresh provider={} uid={}", provider, uid));
+                client::spawn_refresh(base, pass, provider, uid);
+                STATE.with(|s| {
+                    if let Some(state) = s.borrow_mut().as_mut() {
+                        if let Some(a) = state.anims.get_mut(idx) {
+                            a.sweep = 0.001; // 启动刷新扫光
+                        }
+                    }
+                });
+                ensure_anim_ticker(hwnd);
+            }
             LRESULT(0)
         }
         WM_LBUTTONDBLCLK => {
