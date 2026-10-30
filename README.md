@@ -1,5 +1,7 @@
 # ChinaCPA 🇨🇳 国产大模型反代网关
 
+> 本仓库为 [XingQiPan/ChinaCPA](https://github.com/XingQiPan/ChinaCPA) 的**二创版本**（个人 fork 持续开发），详见文末「参考」。
+>
 > 一站式纳管多家国产 AI 平台账号，自动签到攒积分、自动刷新额度、自动统计计费，
 > 一个 OpenAI 兼容接口随便调 —— **无需下载任何官方客户端**。
 >
@@ -315,6 +317,8 @@ internal/
 - Trae 登录回调要求面板与浏览器同机（127.0.0.1 回调）或局域网可达；服务器部署时可用「粘贴凭证」方式纳管
 
 ## 🙏 参考
+
+本仓库为 [XingQiPan/ChinaCPA](https://github.com/XingQiPan/ChinaCPA) 的**二创（衍生）版本**，在原项目基础上继续开发与改造（面板视觉升级、风控闸门退避重试、服务密钥热更换、用量范围查询、请求审计聚合等）。原仓库及全部上游出处致谢如下：
 
 接口口径来自以下开源项目的实测成果（均已 fork 到 [XingQiPan](https://github.com/XingQiPan?tab=repositories)）：
 
