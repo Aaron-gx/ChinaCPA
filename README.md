@@ -320,7 +320,7 @@ internal/
 
 本仓库为 [XingQiPan/ChinaCPA](https://github.com/XingQiPan/ChinaCPA) 的**二创（衍生）版本**，在原项目基础上继续开发与改造（面板视觉升级、风控闸门退避重试、服务密钥热更换、用量范围查询、请求审计聚合等）。原仓库及全部上游出处致谢如下：
 
-接口口径来自以下开源项目的实测成果（均已 fork 到 [XingQiPan](https://github.com/XingQiPan?tab=repositories)）：
+接口口径来自以下开源项目的实测成果：
 
 - [linguo2625469/workbuddy2api-panel](https://github.com/linguo2625469/workbuddy2api-panel)（WorkBuddy 全套）
 - [connectedGraph/trae2api-web](https://github.com/connectedGraph/trae2api-web)（Trae SOLO 通道）
