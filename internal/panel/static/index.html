@@ -2538,10 +2538,12 @@ function renderUsage(us){
     const cin=ct>0
       ?`<div style="color:var(--green)">缓存 ↓ ${fmt(ct)}<span class="mini">（${rate}%）</span></div>`
       :'<div class="mini" style="color:var(--faint)">未命中</div>';
+    /* 渠道为空的行 = 整条渠道链都失败的请求（无成功交付渠道），显式标注避免误读为数据缺失 */
+    const allFail=!u.provider&&u.fail;
     return `<tr style="--r:${ri}">
       <td><code>${esc(u.model)}</code></td>
-      <td><span class="tag ${PROV_TAG[u.provider]||'plain'}">${PROV_NAMES[u.provider]||esc(u.provider)||'—'}</span></td>
-      <td><span class="mini" title="${esc(u.account||'')}">${esc(acctNameOf(u.provider,u.account))}</span></td>
+      <td>${allFail?'<span class="tag expired">全渠道失败</span>':`<span class="tag ${PROV_TAG[u.provider]||'plain'}">${PROV_NAMES[u.provider]||esc(u.provider)||'—'}</span>`}</td>
+      <td>${allFail?'<span class="mini" style="color:var(--faint)">转移链均失败</span>':`<span class="mini" title="${esc(u.account||'')}">${esc(acctNameOf(u.provider,u.account))}</span>`}</td>
       <td>${fmt(u.requests)}${u.fail?`<span class="mini" style="color:var(--red)">（失败 ${fmt(u.fail)}）</span>`:''}</td>
       <td>${fmt(u.prompt_tokens)}</td><td>${cin}</td><td>${fmt(u.completion_tokens)}</td><td><b>${fmt(u.total_tokens)}</b></td>
       <td style="color:var(--accent)">${cost}</td></tr>`;
