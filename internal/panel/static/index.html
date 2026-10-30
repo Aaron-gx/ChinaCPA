@@ -2390,8 +2390,9 @@ function renderCheckin(o){
 let REQ=null, REQ_RANGE='today', REQ_OFFSET=0;
 const REQ_LIMIT=50;
 const REQ_RANGE_NAMES={today:'今日',yesterday:'昨天','7d':'近 7 天','30d':'近 30 天',all:'全部'};
-function setReqRange(r){
+function setReqRange(r,status){
   if(typeof r==='string'&&REQ_RANGE_NAMES[r]!==undefined)REQ_RANGE=r;
+  if(status!==undefined&&$('#reqStatusFilter'))$('#reqStatusFilter').value=status;
   REQ_OFFSET=0;
   document.querySelectorAll('#reqRanges .tab').forEach(t=>t.classList.toggle('active',t.dataset.r===REQ_RANGE));
   loadRequests();
@@ -2530,24 +2531,28 @@ function renderUsage(us){
   const rn=RANGE_NAMES[us.range||'today']||'今日';
   const titleEl=$('#usageTblTitle');if(titleEl)titleEl.textContent=`${rn}用量 · 费用估算`;
   const tb=$('#usageTable tbody');
-  if(!us.rows||!us.rows.length){tb.innerHTML=`<tr><td colspan="9" class="empty">${rn}暂无调用</td></tr>`}
-  else tb.innerHTML=us.rows.map((u,ri)=>{
+  /* 全渠道失败行（无成功交付渠道、无 token）不进明细表，合并为表尾一行提示；
+     完整失败原因可在「请求日志」页按 状态=失败 筛选查看 */
+  const isAllFail=u=>!u.provider&&u.fail&&u.requests>0&&!(u.total_tokens>0);
+  const hidden=(us.rows||[]).filter(isAllFail);
+  const hiddenReq=hidden.reduce((s,u)=>s+u.requests,0);
+  const rows=(us.rows||[]).filter(u=>!isAllFail(u));
+  if(!rows.length&&!hidden.length){tb.innerHTML=`<tr><td colspan="9" class="empty">${rn}暂无调用</td></tr>`}
+  else tb.innerHTML=rows.map((u,ri)=>{
     const cost=hasPrice(u.model)?fmtCNY(u.cost_cny):(u.cost_cny>0?fmtCNY(u.cost_cny):'<span class="muted">未计价</span>');
     const pt=u.prompt_tokens||0, ct=u.cache_tokens||0;
     const rate=pt>0?Math.round(ct/pt*100):0;
     const cin=ct>0
       ?`<div style="color:var(--green)">缓存 ↓ ${fmt(ct)}<span class="mini">（${rate}%）</span></div>`
       :'<div class="mini" style="color:var(--faint)">未命中</div>';
-    /* 渠道为空的行 = 整条渠道链都失败的请求（无成功交付渠道），显式标注避免误读为数据缺失 */
-    const allFail=!u.provider&&u.fail;
     return `<tr style="--r:${ri}">
       <td><code>${esc(u.model)}</code></td>
-      <td>${allFail?'<span class="tag expired">全渠道失败</span>':`<span class="tag ${PROV_TAG[u.provider]||'plain'}">${PROV_NAMES[u.provider]||esc(u.provider)||'—'}</span>`}</td>
-      <td>${allFail?'<span class="mini" style="color:var(--faint)">转移链均失败</span>':`<span class="mini" title="${esc(u.account||'')}">${esc(acctNameOf(u.provider,u.account))}</span>`}</td>
+      <td><span class="tag ${PROV_TAG[u.provider]||'plain'}">${PROV_NAMES[u.provider]||esc(u.provider)||'—'}</span></td>
+      <td><span class="mini" title="${esc(u.account||'')}">${esc(acctNameOf(u.provider,u.account))}</span></td>
       <td>${fmt(u.requests)}${u.fail?`<span class="mini" style="color:var(--red)">（失败 ${fmt(u.fail)}）</span>`:''}</td>
       <td>${fmt(u.prompt_tokens)}</td><td>${cin}</td><td>${fmt(u.completion_tokens)}</td><td><b>${fmt(u.total_tokens)}</b></td>
       <td style="color:var(--accent)">${cost}</td></tr>`;
-  }).join('');
+  }).join('')+(hiddenReq?`<tr class="aq-hidden"><td colspan="9"><span class="mini" style="color:var(--faint)">另有 ${fmt(hiddenReq)} 次全渠道失败请求（所有渠道与账号均失败、无 token 消耗），已从明细隐藏 · <a href="javascript:void(0)" style="color:var(--accent)" onclick="switchView('requests');setReqRange('${us.range==='all'?'all':us.range||'today'}','fail')">在请求日志中查看原因 →</a></span></td></tr>`:'');
   const tpt=us.totals?.prompt_tokens||0, tct=us.totals?.cache_tokens||0;
   const crate=tpt>0?Math.round(tct/tpt*100):0;
   $('#usageSub').textContent=`${rn}累计调用 ${fmt(us.totals?.requests)} 次 ｜ 吞吐量 ${fmt(us.totals?.total_tokens)} Tokens ｜ 提示词缓存命中率 ${crate}%（${fmt(tct)}/${fmt(tpt)}） ｜ 折合成本 ${fmtCNY(us.totals?.cost_cny)}`;
