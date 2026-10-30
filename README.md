@@ -279,22 +279,32 @@ data/
 ## 🧩 架构
 
 ```
-cmd/chinacpa            入口
+cmd/chinacpa            网关入口；cmd/rail  Go 版浮动栏（旧）
+rail-rs/                Rust 版桌面浮动栏（现役，cargo build --release）
 internal/
 ├── model/              公共类型（账号/额度/模型/登录会话）
-├── config/             配置加载
+├── config/             配置加载与面板热保存
 ├── store/              凭证/状态/签到历史落盘（原子写）
-├── provider/           平台抽象 + 各实现
+├── provider/           平台抽象 + 各实现（错误分类 / 风控闸门识别）
 │   ├── workbuddy/      腾讯：OAuth、积分、签到、任务中心、模型、对话
-│   ├── qwen/           通义：网页会话通道、2000次/天计数、模型、对话
+│   ├── qwen/           通义：网页会话通道、日限计数、模型、对话
 │   ├── trae/           字节：授权回调、ExchangeToken、签到、额度、SOLO SSE→OpenAI
-│   └── doubao/         豆包网页协议：Cookie 导入、对话、Seedream 图片、Seedance 视频（提交+轮询+无水印选优）
-├── pool/               多账号池：轮询、冷却、模型路由（发布模型多渠道 / 前缀 / 裸名）
+│   ├── qoder/          阿里 Qoder：PAT 导入、额度、对话
+│   ├── qwenwork/       千问办公：钉钉扫码、积分池、对话
+│   └── doubao/         豆包网页协议：Cookie 导入、对话、Seedream 图片、Seedance 视频
+├── pool/               多账号池：轮询、冷却、模型路由、风控闸门退避重试
 ├── pubmodel/           发布模型配置（对外模型 → 多渠道 + 单价）
 ├── scheduler/          定时：签到、任务、额度刷新、保活
 ├── usage/              用量 JSONL + 聚合 + 计价估算（发布单价优先）
-├── gateway/            OpenAI 兼容网关（SSE 透传、流内 usage 提取）
-└── panel/              管理 API + 内嵌仪表板（embed 单文件 HTML）
+├── reqlog/             bbolt 请求审计日志（按范围聚合：模型×渠道×实例）
+├── gateway/            OpenAI / Responses / Claude 三协议网关（SSE 透传、usage 提取、密钥热更换）
+├── translator/         协议翻译层（Claude ↔ OpenAI、Responses ↔ OpenAI）
+├── thinking/           Claude 思考链配置处理（translator 配套）
+├── signature/          Claude thinking signature 校验（translator 配套）
+├── registry/           模型注册表垫片（thinking/signature 依赖的最小类型）
+├── client/             上游 HTTP 客户端封装
+├── panel/              管理 API + 内嵌仪表板（embed 单文件 HTML）
+└── util/               杂项工具
 ```
 
 ## ⚠️ 注意

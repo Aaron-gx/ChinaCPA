@@ -1,6 +1,6 @@
 data/
 chinacpa.exe
-server.log
+*.log
 config.json
 dist/
 models.json
@@ -10,9 +10,8 @@ models.json
 # 本地归档：历史 exe、数据目录备份、调试截图、设计素材
 backup/
 
-# 浮动栏产物与日志；源码在 cmd/rail
+# 浮动栏产物与配置（运行时改写）；Go 版源码在 cmd/rail，Rust 版在 rail-rs
 rail.exe
-rail.log
 rail.json
 
 # rail-rs（Rust 浮动栏）构建产物
