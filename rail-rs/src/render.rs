@@ -255,8 +255,17 @@ pub fn render_frame(
         let collapsed_h = lm.sliver_h;
 
         let thickness = lm.cross_thickness(dock);
-        let cur_w = lm.sliver_w + (thickness - lm.sliver_w) * openness;
-        let cur_h = collapsed_h + (expanded_h - collapsed_h) * openness;
+        // 自由态不自动收起（用户把它摆在桌面上就是要一直看得见），
+        // 所以它的厚度/长度始终是完整胶囊，不随 openness 插值。
+        // 必须与 main.rs 的 sync_window_size / capsule_band 一致。
+        let (cur_w, cur_h) = if dock.is_docked() {
+            (
+                lm.sliver_w + (thickness - lm.sliver_w) * openness,
+                collapsed_h + (expanded_h - collapsed_h) * openness,
+            )
+        } else {
+            (thickness, expanded_h)
+        };
 
         // 规范空间几何（bu=沿厚度轴宽, bv=沿长度轴高）
         // 液颈拉伸：pulled>0 时 rail 整体从贴边侧内移 drawn 距离，

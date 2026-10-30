@@ -238,25 +238,65 @@ pub fn drag_dock(
     let py = pointer.y as f32;
     let work = screen.work;
 
-    let d_top = (py - work.top as f32).min((rail.top - work.top) as f32);
-    let d_left = (px - work.left as f32).min((rail.left - work.left) as f32);
-    let d_bottom = (work.bottom as f32 - py).min((work.bottom - rail.bottom) as f32);
-    let d_right = (work.right as f32 - px).min((work.right - rail.right) as f32);
+    // 每条边的判据分两种情况：
+    //  * 当前就停在这条边 → 只看**指针**。栏本身贴着边，用栏边缘会恒判贴边、
+    //    永远拖不下来（这是「贴边就卡住」的成因）。
+    //  * 否则 → 取指针与栏边缘中**更近**的一个。长横条拖向侧边时，栏的右缘
+    //    先够到屏幕边、指针还差两百多点，用 max 就永远吸不上（这是
+    //    「不会靠右」的成因）。
+    let near_top = if current == Dock::Edge(Edge::Top) {
+        py - work.top as f32
+    } else {
+        (py - work.top as f32).min((rail.top - work.top) as f32)
+    };
+    let near_left = if current == Dock::Edge(Edge::Left) {
+        px - work.left as f32
+    } else {
+        (px - work.left as f32).min((rail.left - work.left) as f32)
+    };
+    let near_bottom = if current == Dock::Edge(Edge::Bottom) {
+        work.bottom as f32 - py
+    } else {
+        (work.bottom as f32 - py).min((work.bottom - rail.bottom) as f32)
+    };
+    let near_right = if current == Dock::Edge(Edge::Right) {
+        work.right as f32 - px
+    } else {
+        (work.right as f32 - px).min((work.right - rail.right) as f32)
+    };
 
     // 已停靠底部时保持：贴着屏幕自己的底边（不是工作区）就算还在底部。
     let stays_on_bottom =
         current == Dock::Edge(Edge::Bottom) && (screen.full.bottom - rail.bottom) as f32 <= DOCK_DISTANCE;
 
-    if d_top <= DOCK_DISTANCE {
-        Dock::Edge(Edge::Top)
-    } else if stays_on_bottom || d_bottom <= DOCK_DISTANCE {
-        Dock::Edge(Edge::Bottom)
-    } else if d_left <= DOCK_DISTANCE {
-        Dock::Edge(Edge::Left)
-    } else if d_right <= DOCK_DISTANCE {
-        Dock::Edge(Edge::Right)
+    // 候选边按**距离**选最近的那条，而不是固定顺序。
+    // 固定「顶优先」时，拖到右上角（指针 y≈0、x≈屏幕右边）永远判成顶栏，
+    // 用户的意图明明是靠右。
+    //
+    // 当前已停靠的边给一个滞回余量：否则在两个阈值都满足的角上会来回翻，
+    // 每翻一次宽高就互换一次，看起来就是在抖动。
+    let mut best: Option<(f32, Dock)> = None;
+    let mut consider = |dist: f32, edge: Edge, cur_bias: f32| {
+        if dist <= DOCK_DISTANCE {
+            let d = dist - cur_bias;
+            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, Dock::Edge(edge)));
+            }
+        }
+    };
+    let bias = |e: Edge| if current == Dock::Edge(e) { DOCK_DISTANCE * 0.5 } else { 0.0 };
+    consider(near_top, Edge::Top, bias(Edge::Top));
+    consider(near_left, Edge::Left, bias(Edge::Left));
+    consider(near_right, Edge::Right, bias(Edge::Right));
+    if stays_on_bottom {
+        consider(near_bottom, Edge::Bottom, DOCK_DISTANCE * 0.5);
     } else {
-        Dock::Floating(vertical)
+        consider(near_bottom, Edge::Bottom, bias(Edge::Bottom));
+    }
+
+    match best {
+        Some((_, dock)) => dock,
+        None => Dock::Floating(vertical),
     }
 }
 
@@ -289,6 +329,35 @@ pub fn position_from_ratios(h: f64, v: f64, room: RECT, rail_w: i32, rail_h: i32
     let x = room.left as f64 + h * ((room.right - room.left) as f64 - rail_w as f64);
     let y = room.top as f64 + v * ((room.bottom - room.top) as f64 - rail_h as f64);
     (x.round() as i32, y.round() as i32)
+}
+
+/// 按**胶囊中心**反推比例。
+///
+/// 自由态存的是栏的位置，不是窗口的位置：窗口含卡片空间，收起/展开时
+/// 宽高会变（细条 6pt、展开 342pt），若按窗口左上角记录，同一个比例在
+/// 不同尺寸下指向不同的栏位置 —— 悬停展开时栏会被挤出屏幕再夹回来，
+/// 视觉上就是「指针一碰栏，整条突然往上跑」。
+/// 用胶囊中心做锚点，尺寸怎么变，栏都停在同一处。
+pub fn ratios_for_centre(
+    centre_x: f32,
+    centre_y: f32,
+    room: RECT,
+    rail_w: f32,
+    rail_h: f32,
+) -> (f64, f64) {
+    let room_w = (room.right - room.left) as f32;
+    let room_h = (room.bottom - room.top) as f32;
+    let h = if room_w > rail_w {
+        ((centre_x - room.left as f32) - rail_w / 2.0) / (room_w - rail_w)
+    } else {
+        0.5
+    };
+    let v = if room_h > rail_h {
+        ((centre_y - room.top as f32) - rail_h / 2.0) / (room_h - rail_h)
+    } else {
+        0.5
+    };
+    (h.clamp(0.0, 1.0) as f64, v.clamp(0.0, 1.0) as f64)
 }
 
 /// 规范空间（右边缘竖栏）尺寸 → 窗口物理尺寸。

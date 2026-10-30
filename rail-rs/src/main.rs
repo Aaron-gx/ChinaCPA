@@ -84,6 +84,8 @@ pub struct AppState {
     pub did_drag: bool,
     pub drag_start_cursor: POINT,
     pub drag_start_window: RECT,
+    /// 拖拽中判定出的目标停靠（只记录，松手才应用，避免拖拽中反复翻转）
+    pub drag_target: Option<Dock>,
     /// 程序主动 ReleaseCapture 时置真，让随之而来的 WM_CAPTURECHANGED
     /// 知道这是自己放的、不要当成“拖拽被抢走”。用完即清。
     pub releasing_capture: bool,
@@ -260,6 +262,7 @@ unsafe fn run() -> Result<()> {
             releasing_capture: false,
             drag_start_cursor: POINT::default(),
             drag_start_window: RECT::default(),
+            drag_target: None,
             place: std::mem::take(&mut place),
             dock,
             left_at: 0,
@@ -295,7 +298,7 @@ unsafe fn run() -> Result<()> {
             collapsed_lm.sliver_w as i32,
             collapsed_lm.sliver_h as i32,
         );
-        place_window(hwnd, cw, ch, dock0, &place0);
+        place_window(hwnd, cw, ch, dock0, &place0, 0.0, 1);
         sync_window_size(hwnd);
 
         // 启动后台网络与 SSE 数据采集线程
@@ -348,19 +351,43 @@ fn reposition_window(hwnd: HWND, w: i32, h: i32) {
 }
 
 /// 按当前 dock + 持久化比例放置窗口（窗口 = rail 本体 + 卡片空间）。
-/// 阶段 2a 先支持右/左边（位置侧），渲染镜像在 2b。
-unsafe fn place_window(hwnd: HWND, w: i32, h: i32, dock: Dock, place: &Placement) {
+///
+/// 自由态存的是**胶囊中心**的比例（见 `ratios_for_centre`），所以放置时
+/// 要先按「胶囊在当前窗口尺寸里处在哪」把窗口推到位。若直接按窗口左上角
+/// 铺开，收起（6pt）和展开（342pt）会算出不同的栏位置 —— 悬停展开时栏
+/// 被挤出屏幕再夹回来，看起来就是「一碰就往上跳」。
+unsafe fn place_window(
+    hwnd: HWND,
+    w: i32,
+    h: i32,
+    dock: Dock,
+    place: &Placement,
+    openness: f32,
+    ring_count: usize,
+) {
     let g = monitor_geom(hwnd);
     let room = placement::room_for(dock, place.snaps, &g);
-    // 自由态：两轴都用比例定位。早前这里直接返回 (0,0)，于是拖完一松手
-    // 窗口就跳到屏幕左上角 —— 比例虽然存对了（drop: h=0.342 v=0.540），
-    // 但下一次 sync/place 一律无视它。
     let (x, y) = match dock {
         Dock::Edge(Edge::Left) => (room.left, 0i32),
         Dock::Edge(Edge::Right) => (room.right - w, 0i32),
         Dock::Edge(Edge::Top) => (0, room.top),
         Dock::Edge(Edge::Bottom) => (0, room.bottom - h),
-        Dock::Floating(_) => placement::position_from_ratios(place.h, place.v, room, w, h),
+        Dock::Floating(_) => {
+            let lm = LayoutMetrics::new(1.0);
+            let (bl, bt, br, bb) =
+                capsule_band(dock, w as f32, h as f32, openness, ring_count, &lm);
+            let band_w = (br - bl) as f64;
+            let band_h = (bb - bt) as f64;
+            // 按比例求出胶囊左上角应在的位置，再换算窗口左上角
+            let band_x = room.left as f64 + place.h * ((room.right - room.left) as f64 - band_w);
+            let band_y = room.top as f64 + place.v * ((room.bottom - room.top) as f64 - band_h);
+            let band_x = band_x.clamp(room.left as f64, (room.right as f64 - band_w).max(room.left as f64));
+            let band_y = band_y.clamp(room.top as f64, (room.bottom as f64 - band_h).max(room.top as f64));
+            (
+                (band_x - bl as f64).round() as i32,
+                (band_y - bt as f64).round() as i32,
+            )
+        }
     };
     // 沿边轴用比例定位（y-down：v 沿工作区高度/宽度分布）
     let (x, y) = match dock {
@@ -374,9 +401,7 @@ unsafe fn place_window(hwnd: HWND, w: i32, h: i32, dock: Dock, place: &Placement
         }
         Dock::Floating(_) => (x, y),
     };
-    // 自由态收进屏幕：展开/收起会改变窗口尺寸，若按细条时存下的比例
-    // 直接铺开，窗口会有一半落到屏幕外（贴顶的竖栏尤其明显：v=0 时
-    // 展开出来上半截看不见）。停靠态不用管，它本来就贴着边。
+    // 自由态收进屏幕（停靠态本来就贴着边）
     let (x, y) = if dock.is_docked() {
         (x, y)
     } else {
@@ -413,11 +438,20 @@ fn capsule_band(
     // 必须用**当前实际环数**：用上限会让短栏的命中带比画出来的长一截，
     // 指针落在空白处也算「在栏上」，拖拽起始点就会错位。
     let expanded = lm.expanded_length(dock, n.max(1));
-    let thickness = lm.cross_thickness(dock);
 
-    // 与 render_frame 相同的插值
-    let cur_thickness = lm.sliver_w + (thickness - lm.sliver_w) * openness;
-    let cur_length = lm.sliver_h + (expanded - lm.sliver_h).max(0.0) * openness;
+    // 与 render_frame / sync_window_size 相同的插值。
+    // 自由态不收起（一直是展开胶囊），所以它的厚度不随 openness 变。
+    let thickness = lm.cross_thickness(dock);
+    let cur_thickness = if dock.is_docked() {
+        lm.sliver_w + (thickness - lm.sliver_w) * openness
+    } else {
+        thickness
+    };
+    let cur_length = if dock.is_docked() {
+        lm.sliver_h + (expanded - lm.sliver_h).max(0.0) * openness
+    } else {
+        expanded
+    };
 
     let v0 = (bv - cur_length) / 2.0;
     let v1 = v0 + cur_length;
@@ -466,6 +500,16 @@ fn sync_window_size(hwnd: HWND) {
                 };
                 let want_h = lm.sliver_h + (content_h - lm.sliver_h).max(0.0) * openness;
 
+                // 自由态不收起，所以厚度始终是完整胶囊（与停靠态展开一致）。
+                // 早前给自由态单独做了「薄胶囊」收起档，但它既然不会收起，
+                // 那一档只会让展开态莫名其妙地窄 8pt。
+                let (want_w, want_h) = if state.dock.is_docked() {
+                    (want_w, want_h)
+                } else {
+                    let w = thickness + card_extra;
+                    (w, want_h)
+                };
+
                 // 内容变多时窗口要跟着长，但收缩时用当前内容高度兜底，
                 // 避免 hover 期间高度忽大忽小。
                 let want_h = want_h.max(lm.sliver_h * 0.5);
@@ -486,34 +530,50 @@ fn sync_window_size(hwnd: HWND) {
                 }
 
                 if state.dragging {
-                    // 拖拽中换轴向（横条→竖栏，或反过来）。
-                    //
-                    // 拖拽跟手的公式是 `drag_start_window.left + dx`。换轴后
-                    // 窗口宽高互换，如果还拿按下那一刻的矩形当基准，窗口会被
-                    // 算回起点附近、并且与指针脱节（横向条拖到右边翻成竖栏之后
-                    // 指针再移动窗口也不动了）。
-                    //
-                    // 做法：把基准矩形重置成「保持指针在窗口内的相对位置」的新
-                    // 矩形，并同步 drag_start_cursor。之后每帧仍是同一套跟手公式。
-                    let mut cur = POINT::default();
-                    GetCursorPos(&mut cur).ok();
-                    let old_w = state.drag_start_window.right - state.drag_start_window.left;
-                    let old_h = state.drag_start_window.bottom - state.drag_start_window.top;
-                    // 指针在旧窗口里的相对位置
-                    let rx = if old_w > 0 { (cur.x - state.drag_start_window.left) as f64 / old_w as f64 } else { 0.5 };
-                    let ry = if old_h > 0 { (cur.y - state.drag_start_window.top) as f64 / old_h as f64 } else { 0.5 };
-                    let nx = cur.x - (rx * pw as f64).round() as i32;
-                    let ny = cur.y - (ry * ph as f64).round() as i32;
-                    SetWindowPos(hwnd, HWND_TOPMOST, nx, ny, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER).ok();
-                    state.drag_start_window = RECT {
-                        left: nx,
-                        top: ny,
-                        right: nx + pw,
-                        bottom: ny + ph,
-                    };
-                    state.drag_start_cursor = cur;
+                    // 拖拽中尺寸变化分两种：
+                    //   1) 展开/收起（openness 变化）—— 只改尺寸，锚点保持，
+                    //      否则栏会随着窗口从 356 缩到 108 而整体挪位；
+                    //   2) 轴向互换（横条 ↔ 竖栏）—— 宽高交换，必须重算基准，
+                    //      否则跟手公式 `drag_start_window.left + dx` 会算回起点。
+                    // 用「旧宽高是否与新宽高互换」判别第 2 种。
+                    let axis_swapped = (cur_w - ph as f32).abs() < 2.0
+                        && (cur_h - pw as f32).abs() < 2.0
+                        && (cur_w - cur_h).abs() > 2.0;
+                    if axis_swapped {
+                        let mut cur = POINT::default();
+                        GetCursorPos(&mut cur).ok();
+                        let old_w = state.drag_start_window.right - state.drag_start_window.left;
+                        let old_h = state.drag_start_window.bottom - state.drag_start_window.top;
+                        // 指针在旧窗口里的相对位置
+                        let rx = if old_w > 0 { (cur.x - state.drag_start_window.left) as f64 / old_w as f64 } else { 0.5 };
+                        let ry = if old_h > 0 { (cur.y - state.drag_start_window.top) as f64 / old_h as f64 } else { 0.5 };
+                        let nx = cur.x - (rx * pw as f64).round() as i32;
+                        let ny = cur.y - (ry * ph as f64).round() as i32;
+                        SetWindowPos(hwnd, HWND_TOPMOST, nx, ny, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER).ok();
+                        state.drag_start_window = RECT {
+                            left: nx,
+                            top: ny,
+                            right: nx + pw,
+                            bottom: ny + ph,
+                        };
+                        state.drag_start_cursor = cur;
+                    } else {
+                        // 纯尺寸变化：保持左上角，下一帧继续按位移跟手
+                        let mut wr2 = RECT::default();
+                        GetWindowRect(hwnd, &mut wr2).ok();
+                        SetWindowPos(hwnd, HWND_TOPMOST, wr2.left, wr2.top, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER).ok();
+                    }
                 } else {
-                    place_window(hwnd, pw, ph, state.dock, &state.place.clone());
+                    let n_rings = state.metrics.len().min(8);
+                    place_window(
+                        hwnd,
+                        pw,
+                        ph,
+                        state.dock,
+                        &state.place.clone(),
+                        state.openness.cur.clamp(0.0, 1.0),
+                        n_rings,
+                    );
                 }
 
                 // 逻辑尺寸 = 物理尺寸（渲染内部再换算规范空间）
@@ -618,14 +678,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     // 340×560，收成细条时只是内部绘制变窄，那一大块窗口仍然罩在
                     // 屏幕上，把后面的浏览器整片盖住 —— 用户看到的就是一块灰。
                     if tether_freed {
-                        // 自由态：按当前窗口位置重算比例并持久化
+                        // 液颈断开转自由态：按**胶囊中心**重算比例并持久化，
+                        // 与松手路径一致（窗口含卡片空间，不能用窗口左上角）。
                         STATE.with(|s| {
                             if let Some(st) = s.borrow_mut().as_mut() {
                                 let mut wr = RECT::default();
                                 GetWindowRect(hwnd, &mut wr).ok();
                                 let g = monitor_geom(hwnd);
                                 let room = placement::room_for(st.dock, st.place.snaps, &g);
-                                let (h, v) = placement::ratios(wr, room, (wr.right - wr.left) as f32, (wr.bottom - wr.top) as f32);
+                                let lm = LayoutMetrics::new(st.scale);
+                                let (bl, bt, br, bb) = capsule_band(
+                                    st.dock,
+                                    (wr.right - wr.left) as f32,
+                                    (wr.bottom - wr.top) as f32,
+                                    st.openness.cur,
+                                    st.metrics.len().min(8),
+                                    &lm,
+                                );
+                                let cx = wr.left as f32 + (bl + br) / 2.0;
+                                let cy = wr.top as f32 + (bt + bb) / 2.0;
+                                let (h, v) = placement::ratios_for_centre(
+                                    cx, cy, room, br - bl, bb - bt,
+                                );
                                 st.place.h = h;
                                 st.place.v = v;
                                 save_placement(&st.place.clone());
@@ -685,15 +759,34 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     });
 
                     let mut need_anim = false;
+                    // 拖拽中一律不收起：指针正在拖着这根栏，任何「离开内容」的
+                    // 判断都可能是窗口尺寸/轴向变化造成的假象（拖出屏幕边时
+                    // 窗口刚断裂、尺寸还在收缩），收起会让拖拽视觉中断。
+                    let is_dragging = STATE.with(|s| {
+                        s.borrow().as_ref().map(|st| st.dragging).unwrap_or(false)
+                    });
+                    if !is_dragging {
                     STATE.with(|s| {
                         if let Some(state) = s.borrow_mut().as_mut() {
-                            if over_content || state.dragging {
+                            if over_content {
                                 state.left_at = 0;
                                 return;
                             }
-                            let free = !state.dock.is_docked();
-                            if free {
-                                return; // 自由态永不自动收起
+                            // 自由态不自动收起：用户把它摆在桌面上就是要一直看得见。
+                            // （早前试过让它也收起，结果指针一移开就缩成一条细线，
+                            // 连额度都读不了 —— 那是更差的行为，所以退回原位。）
+                            // 停靠态才收起：它贴着屏幕边，缩成细条不占地方。
+                            if !state.dock.is_docked() {
+                                // 但卡片要收：卡片是「悬停才看」的详情
+                                if state.card_openness.target > 0.01 || state.hover_index.is_some() {
+                                    state.card_openness.set(0.0);
+                                    state.hover_index = None;
+                                    for a in &mut state.anims {
+                                        a.halo.set(0.0);
+                                    }
+                                    need_anim = true;
+                                }
+                                return;
                             }
                             if state.left_at == 0 {
                                 state.left_at = now_ms();
@@ -716,6 +809,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             }
                         }
                     });
+                    }
                     if need_anim {
                         ensure_anim_ticker(hwnd);
                     }
@@ -758,55 +852,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         }
 
                         // ── 液态吸附（Pulse DropletTether）──
-                        // 只在"从贴边刚刚拉出"这一小段（d<80）让 rail 滞后跟随并把差额
-                        // 画成液颈；d>=80 立即断裂转自由态、窗口恢复跟随指针。
-                        // 注意不能"冻结窗口"——那会让窗口停在旧位置而指针跑掉。
-                        if let Some(e) = state.dock.edge() {
-                            let ww = state.width.max(1.0);
-                            let wh = state.height.max(1.0);
-                            // d = 指针沿"离开贴边"方向相对吸附位置的位移。
-                            // 吸附位置：Right/Top → 起点；Left/Bottom → 起点（窗口已贴边）
-                            let _ = (ww, wh);
-                            let d = match e {
-                                Edge::Right => state.drag_start_window.left as f32 - new_x as f32,
-                                Edge::Left => new_x as f32 - state.drag_start_window.left as f32,
-                                Edge::Top => new_y as f32 - state.drag_start_window.top as f32,
-                                Edge::Bottom => state.drag_start_window.top as f32 - new_y as f32,
-                            };
-                            if d > 0.0 && d < TETHER_BREAK {
-                                let rest = 1.0 - (d / TETHER_BREAK).clamp(0.0, 1.0);
-                                let drawn = d * (1.0 - (1.0 - TETHER_GRIP) * rest * rest);
-                                state.pulled = drawn;
-                                state.thinning = (drawn / TETHER_BREAK).clamp(0.0, 1.0);
-                                let lag = (d - drawn) as i32;
-                                let (sx, sy) = match e {
-                                    Edge::Right => (new_x + lag, new_y),
-                                    Edge::Left => (new_x - lag, new_y),
-                                    Edge::Top => (new_x, new_y - lag),
-                                    Edge::Bottom => (new_x, new_y + lag),
-                                };
-                                SetWindowPos(hwnd, None, sx, sy, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
-                            } else if d >= TETHER_BREAK {
-                                let v = state.dock.vertical();
-                                state.dock = Dock::Floating(v);
-                                state.place.set_dock(state.dock);
-                                state.pulled = 0.0;
-                                state.thinning = 0.0;
-                                state.fusion = 1.0;
-                                dock_changed = true;
-                                SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
-                            } else {
-                                state.pulled = 0.0;
-                                state.thinning = 1.0;
-                                SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
-                            }
-                        } else {
-                            state.pulled = 0.0;
-                            state.thinning = 1.0;
-                            SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
-                        }
+                        //
+                        // 窗口**始终**跟着指针走（`new_x/new_y`），液颈只是贴边侧
+                        // 画出来的装饰。早前让窗口真的滞后（lag），结果拖离贴边时
+                        // 窗口停在旧位置、指针跑掉，再加上尺寸/轴向变化，
+                        // 表现为「拖到一半突然跳走、不跟手」。视觉上的吸附感
+                        // 由 drawn/thinning 两个值驱动绘制，不需要窗口让路。
+                        state.pulled = 0.0;
+                        state.thinning = 1.0;
+                        SetWindowPos(hwnd, None, new_x, new_y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE).ok();
 
-                        // Pulse dragDock：拖拽中实时判定吸附边
+                        // Pulse dragDock：拖拽中实时判定吸附边。
+                        //
+                        // **只记录，不应用。** 拖拽中一旦真的换 dock，宽高要互换
+                        // （横条 402×78 ↔ 竖栏 64×502），窗口左上角跟着重算，
+                        // 指针还在动、dock 又来回翻转 —— 用户看到的就是「拖到左半边
+                        // 突然跳到右半边」「快到边时突然往下走」。松手时再真正吸附，
+                        // 拖拽过程因此始终是一条跟着指针平移的栏，不再跳。
                         let rail = RECT {
                             left: new_x,
                             top: new_y,
@@ -815,18 +877,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         };
                         let g = monitor_geom(hwnd);
                         let nd = placement::drag_dock(cur, rail, &g, state.dock, state.place.snaps);
-                        if nd != state.dock {
-                            state.dock = nd;
-                            state.place.set_dock(nd);
-                            // 换边 → 物理宽高要交换，标记强制 sync
-                            state.width = -1.0;
-                            state.height = -1.0;
-                            dock_changed = true;
-                            // 贴上瞬间：thinning 置 0.85（Pulse attachThinning）
-                            if nd.is_docked() {
-                                state.thinning = 0.85;
-                            }
-                        }
+                        state.drag_target = Some(nd);
                         return;
                     }
 
@@ -1009,6 +1060,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
             LRESULT(0)
         }
+        WM_MOUSEACTIVATE => {
+            // 这个窗口是 SW_SHOWNOACTIVATE 显示、不抢焦点的置顶浮窗。
+            // 不处理这条消息时，点它会走「先激活窗口」的默认路径，
+            // WM_LBUTTONDOWN 在激活过程中被吞掉 —— 表现就是点了没反应、
+            // 拖不动，只剩悬停还能用。返回 MA_NOACTIVATE 让点击直接
+            // 派发到本窗口，不改变前台的焦点。
+            LRESULT(MA_NOACTIVATE as isize)
+        }
         WM_LBUTTONDOWN => {
             STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
@@ -1059,41 +1118,77 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             let mut wr = RECT::default();
                             GetWindowRect(hwnd, &mut wr).ok();
                             let g = monitor_geom(hwnd);
+                            // 应用拖拽中判定出的目标停靠（拖拽期间只记录、不应用）。
+                            if let Some(target) = state.drag_target.take() {
+                                if target != state.dock {
+                                    state.dock = target;
+                                    state.place.set_dock(target);
+                                }
+                            }
                             let room = placement::room_for(state.dock, state.place.snaps, &g);
                             if state.dock.is_docked() {
-                                // 停靠态：位置由 place.h/v 决定，不该从窗口矩形反推。
-                                // 拖拽中栏可能刚从横条翻成竖栏，此时 wr 还是旧轴向的
-                                // 宽高（342×502），拿它算比例、再拿它当尺寸去放置，
-                                // 会先放到错误的位置、再被 sync 纠正一次，中间闪一下。
-                                // 这里只按指针落点更新沿边轴的ratio，尺寸交给 sync。
+                                // 停靠态：只更新沿边轴的比例，位置交给 place_window。
+                                // 用**窗口里胶囊的实际位置**算，不用窗口左上角 ——
+                                // 窗口含卡片空间，左上角与栏并非同一点。
+                                let lm = LayoutMetrics::new(state.scale);
+                                let (bl, bt, br, bb) = capsule_band(
+                                    state.dock,
+                                    (wr.right - wr.left) as f32,
+                                    (wr.bottom - wr.top) as f32,
+                                    state.openness.cur,
+                                    state.metrics.len().min(8),
+                                    &lm,
+                                );
+                                let band_len = match state.dock {
+                                    Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => bb - bt,
+                                    _ => br - bl,
+                                };
+                                let band_pos = match state.dock {
+                                    Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
+                                        wr.top as f32 + bt - room.top as f32
+                                    }
+                                    _ => wr.left as f32 + bl - room.left as f32,
+                                };
+                                let room_len = match state.dock {
+                                    Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
+                                        (room.bottom - room.top) as f32
+                                    }
+                                    _ => (room.right - room.left) as f32,
+                                };
+                                let span = (room_len - band_len).max(1.0);
+                                let ratio = (band_pos / span).clamp(0.0, 1.0) as f64;
                                 match state.dock {
                                     Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
-                                        let span = (room.bottom - room.top - wr.bottom + wr.top).max(0);
-                                        if span > 0 {
-                                            state.place.v =
-                                                ((wr.top - room.top) as f64 / span as f64).clamp(0.0, 1.0);
-                                        }
+                                        state.place.v = ratio
                                     }
-                                    Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => {
-                                        let span = (room.right - room.left - wr.right + wr.left).max(0);
-                                        if span > 0 {
-                                            state.place.h =
-                                                ((wr.left - room.left) as f64 / span as f64).clamp(0.0, 1.0);
-                                        }
-                                    }
-                                    Dock::Floating(_) => {}
+                                    _ => state.place.h = ratio,
                                 }
                                 save_placement(&state.place.clone());
                                 // 尺寸按新轴向重算由本函数末尾的 sync_window_size 完成。
                                 // 不能在这里直接调它：它自己也要 borrow_mut，
                                 // 在 STATE 可变借用内部重入会直接 panic（实测崩过）。
                             } else {
-                                // 自由态：位置两轴都要记，否则重启回到旧位置
-                                let (rh, rv) = placement::ratios(
-                                    wr,
-                                    room,
+                                // 自由态：位置两轴都要记，否则重启回到旧位置。
+                                // 同样按胶囊中心算：窗口比栏大，用窗口左上角会让
+                                // 「悬停展开时窗口变高」把栏顶出屏幕、再被夹回来，
+                                // 视觉上就是指针一碰栏就整条往上跳。
+                                let lm = LayoutMetrics::new(state.scale);
+                                let (bl, bt, br, bb) = capsule_band(
+                                    state.dock,
                                     (wr.right - wr.left) as f32,
                                     (wr.bottom - wr.top) as f32,
+                                    state.openness.cur,
+                                    state.metrics.len().min(8),
+                                    &lm,
+                                );
+                                let cx = wr.left as f32 + (bl + br) / 2.0;
+                                let cy = wr.top as f32 + (bt + bb) / 2.0;
+                                let (rh, rv) = placement::ratios_for_centre(
+                                    cx,
+                                    cy,
+                                    room,
+                                    br - bl,
+                                    bb - bt,
                                 );
                                 state.place.h = rh;
                                 state.place.v = rv;
