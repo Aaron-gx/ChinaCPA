@@ -34,13 +34,13 @@ import (
 )
 
 // registerMedia 挂载媒体端点（由 Register 调用）。
-func (g *Gateway) registerMedia(mux *http.ServeMux, authKey string) {
-	mux.HandleFunc("/v1/images/generations", g.auth(g.handleImages, authKey))
-	mux.HandleFunc("/api/v3/images/generations", g.auth(g.handleImages, authKey))
-	mux.HandleFunc("/api/v3/contents/generations/tasks", g.auth(g.handleVideoCreate, authKey))
-	mux.HandleFunc("/api/v3/contents/generations/tasks/", g.auth(g.handleVideoGet, authKey))
-	mux.HandleFunc("/v1/videos", g.auth(g.handleVideoCreate, authKey))
-	mux.HandleFunc("/v1/videos/", g.auth(g.handleVideoGet, authKey))
+func (g *Gateway) registerMedia(mux *http.ServeMux) {
+	mux.HandleFunc("/v1/images/generations", g.auth(g.handleImages))
+	mux.HandleFunc("/api/v3/images/generations", g.auth(g.handleImages))
+	mux.HandleFunc("/api/v3/contents/generations/tasks", g.auth(g.handleVideoCreate))
+	mux.HandleFunc("/api/v3/contents/generations/tasks/", g.auth(g.handleVideoGet))
+	mux.HandleFunc("/v1/videos", g.auth(g.handleVideoCreate))
+	mux.HandleFunc("/v1/videos/", g.auth(g.handleVideoGet))
 }
 
 // ── 图片生成 ─────────────────────────────────────────────

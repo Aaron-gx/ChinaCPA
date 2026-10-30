@@ -10,6 +10,8 @@ import (
 
 // Config 全局配置。
 type Config struct {
+	// Path 配置文件路径（Load 记录、Save 回写用；"-" 表示不落盘到 JSON 本身）
+	Path   string `json:"-"`
 	Listen string `json:"listen"`
 	// APIKey 网关 /v1/* 的 Bearer 密钥
 	APIKey string `json:"api_key"`
@@ -117,7 +119,35 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	cfg.normalize()
+	cfg.Path = path
 	return cfg, nil
+}
+
+// Save 将当前配置原子写回启动时的配置文件（tmp + rename，防半写）。
+// 仅覆盖面板可安全热改的字段集合，其余字段以文件现状为准（避免并发漂移）。
+func (c *Config) Save() error {
+	if c.Path == "" {
+		return fmt.Errorf("config path 未记录（非 Load 加载的配置不可保存）")
+	}
+	raw, err := os.ReadFile(c.Path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read config: %w", err)
+	}
+	// 以文件现状为基底合并，只更新面板管理的字段
+	disk := Default()
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, disk)
+	}
+	disk.APIKey = c.APIKey
+	out, err := json.MarshalIndent(disk, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := c.Path + ".tmp"
+	if err := os.WriteFile(tmp, out, 0o644); err != nil {
+		return fmt.Errorf("write tmp: %w", err)
+	}
+	return os.Rename(tmp, c.Path)
 }
 
 // normalize 修正非法取值。

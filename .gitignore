@@ -7,9 +7,13 @@ models.json
 *.exe~
 *.zip
 
+# 本地归档：历史 exe、数据目录备份、调试截图、设计素材
+backup/
+
 # 浮动栏产物与日志；源码在 cmd/rail
 rail.exe
 rail.log
+rail.json
 
 # rail-rs（Rust 浮动栏）构建产物
 rail-rs/target/

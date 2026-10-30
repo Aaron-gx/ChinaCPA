@@ -41,6 +41,7 @@ type Panel struct {
 	sched *scheduler.Scheduler
 	pub   *pubmodel.Manager
 	rlog  *reqlog.DB
+	gw    *gateway.Gateway // 网关引用（服务密钥热更换用）
 
 	mu     sync.Mutex
 	tokens map[string]*loginTicket // 登录票据（轮询用）
@@ -69,13 +70,13 @@ func (p *Panel) purgeTicketsLocked() {
 // New 构造。
 func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sched *scheduler.Scheduler, pub *pubmodel.Manager, rl *reqlog.DB) *Panel {
 	return &Panel{
-		cfg:    cfg,
-		pool:   p,
-		st:     st,
-		usage:  u,
-		sched:  sched,
-		pub:    pub,
-		rlog:   rl,
+		cfg:       cfg,
+		pool:      p,
+		st:        st,
+		usage:     u,
+		sched:     sched,
+		pub:       pub,
+		rlog:      rl,
 		tokens:    map[string]*loginTicket{},
 		eventSubs: map[chan struct{}]struct{}{},
 	}
@@ -83,6 +84,7 @@ func New(cfg *config.Config, p *pool.Pool, st *store.Store, u *usage.Tracker, sc
 
 // Register 挂载全部路由（含网关）。
 func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
+	p.gw = gw
 	gw.Register(mux, p.cfg.APIKey)
 
 	mux.HandleFunc("/", p.handleIndex)
@@ -103,6 +105,7 @@ func (p *Panel) Register(mux *http.ServeMux, gw *gateway.Gateway) {
 	mux.HandleFunc("/api/checkin_all", p.authed(p.handleCheckinAll))
 	mux.HandleFunc("/api/refresh_all_quotas", p.authed(p.handleRefreshAllQuotas))
 	mux.HandleFunc("/api/publish", p.authed(p.handlePublish))
+	mux.HandleFunc("/api/settings", p.authed(p.handleSettings))
 	mux.HandleFunc("/api/requests", p.authed(p.handleRequests))
 	mux.HandleFunc("/api/live", p.authed(p.handleLive))
 	mux.HandleFunc("/api/stream/events", p.authed(p.handleStreamEvents))
@@ -241,11 +244,11 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 		CooldownUntil  int64                `json:"cooldown_until"`
 		CooldownModels []string             `json:"cooldown_models,omitempty"` // 冷却中的模型（""=账号级）
 		Quota          *model.QuotaInfo     `json:"quota,omitempty"`
-		ResetsAtUnix   int64                `json:"resets_at_unix,omitempty"`  // 额度窗口重置时刻（rail 时钟弧/预测用，0=未知）
-		WindowSeconds  int64                `json:"window_seconds,omitempty"`  // 窗口总长秒数（0=未知，绝不猜）
+		ResetsAtUnix   int64                `json:"resets_at_unix,omitempty"` // 额度窗口重置时刻（rail 时钟弧/预测用，0=未知）
+		WindowSeconds  int64                `json:"window_seconds,omitempty"` // 窗口总长秒数（0=未知，绝不猜）
 		CheckinToday   *model.CheckinResult `json:"checkin_today,omitempty"`
 		Inflight       int64                `json:"inflight"` // 当前进行中的请求数（实时负载）
-		Status         string               `json:"status"` // ok / relogin / cooldown / disabled / expired
+		Status         string               `json:"status"`   // ok / relogin / cooldown / disabled / expired
 	}
 	accounts := p.pool.Accounts()
 	var views []acctView
@@ -914,11 +917,74 @@ func (p *Panel) handleUsage(w http.ResponseWriter, r *http.Request) {
 			days = 7
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	// range=today|7d|30d|all：明细表数据源。
+	// 今日走内存聚合（含单价信息）；历史范围走持久化请求日志现算
+	// （内存当日聚合重启即失，日志库保留 request_log_days 天）。
+	rng := r.URL.Query().Get("range")
+	if rng == "" {
+		rng = "today"
+	}
+	resp := map[string]any{
 		"history": p.usage.HistoryDays(days),
-		"today":   p.usage.TodayWithCost(),
-		"totals":  usage.Sum(p.usage.TodayWithCost()),
-	})
+		"range":   rng,
+	}
+	if rng == "today" || p.rlog == nil {
+		today := p.usage.TodayWithCost()
+		resp["rows"] = today
+		resp["totals"] = usage.Sum(today)
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	now := time.Now()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	var from int64
+	switch rng {
+	case "7d":
+		from = todayStart.AddDate(0, 0, -6).Unix()
+	case "30d":
+		from = todayStart.AddDate(0, 0, -29).Unix()
+	default: // all
+	}
+	// 明细行不需要分页，Limit 取 1 即可（Stats 聚合遍历全部命中条目）
+	_, stats, err := p.rlog.Query(reqlog.QueryOpts{From: from, To: now.Unix(), Limit: 1})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	type usageOut struct {
+		Model    string  `json:"model"`
+		Provider string  `json:"provider"`
+		Account  string  `json:"account"`
+		Requests int64   `json:"requests"`
+		Prompt   int64   `json:"prompt_tokens"`
+		Complete int64   `json:"completion_tokens"`
+		Total    int64   `json:"total_tokens"`
+		Cache    int64   `json:"cache_tokens"`
+		Fail     int64   `json:"fail"`
+		CostCNY  float64 `json:"cost_cny"`
+	}
+	rows := make([]usageOut, 0, len(stats.UsageRows))
+	var tot usageOut
+	for _, ur := range stats.UsageRows {
+		c := p.usage.CostFull(ur.Model, ur.Prompt, ur.Complete, ur.Cache, 0, "")
+		o := usageOut{Model: ur.Model, Provider: ur.Provider, Account: ur.Account,
+			Requests: ur.Requests, Prompt: ur.Prompt, Complete: ur.Complete,
+			Total: ur.Total, Cache: ur.Cache, Fail: ur.Fail, CostCNY: c}
+		rows = append(rows, o)
+		tot.Requests += ur.Requests
+		tot.Prompt += ur.Prompt
+		tot.Complete += ur.Complete
+		tot.Total += ur.Total
+		tot.Cache += ur.Cache
+		tot.Fail += ur.Fail
+		tot.CostCNY += c
+	}
+	resp["rows"] = rows
+	resp["totals"] = map[string]any{
+		"requests": tot.Requests, "prompt_tokens": tot.Prompt, "completion_tokens": tot.Complete,
+		"total_tokens": tot.Total, "cache_tokens": tot.Cache, "cost_cny": tot.CostCNY, "fail": tot.Fail,
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // contextWithTimeout 上游拉取兜底超时。
@@ -961,6 +1027,42 @@ func (p *Panel) handlePublish(w http.ResponseWriter, r *http.Request) {
 	}
 	p.usage.SetPublishedPricing(pub, p.pub.USDCNY())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(p.pub.Get().Models)})
+}
+
+// handleSettings 面板可改的运行期设置：目前为服务密钥。
+// GET  → {"api_key":"..."}
+// POST {"api_key":"new-key"}  校验后热生效（网关原子替换）+ 回写 config.json。
+// 留空 = 关闭鉴权（任意密钥可调用），与 config 中 api_key 置空语义一致。
+func (p *Panel) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{"api_key": p.gw.APIKey()})
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "GET/POST only"})
+		return
+	}
+	var body struct {
+		APIKey *string `json:"api_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.APIKey == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "请求体需为 {\"api_key\":\"...\"}"})
+		return
+	}
+	k := strings.TrimSpace(*body.APIKey)
+	if len(k) > 0 && (len(k) < 8 || strings.ContainsAny(k, " \t\n\"")) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "密钥需为 8 位以上且不含空格/引号（留空 = 关闭鉴权）"})
+		return
+	}
+	p.cfg.APIKey = k
+	p.gw.SetAPIKey(k)
+	if err := p.cfg.Save(); err != nil {
+		log.Printf("[settings] 密钥已热生效但写回 config.json 失败: %v", err)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "warning": "已生效但未持久化（写回配置文件失败）"})
+		return
+	}
+	log.Printf("[settings] 服务密钥已通过面板更换并持久化")
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // handleLive 实时进行中链路（客户端→厂商），拓扑图并发可视化用。

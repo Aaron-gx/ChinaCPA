@@ -57,10 +57,10 @@ type Stats struct {
 	AvgMS    float64 `json:"avg_ms"`
 	AvgFirst float64 `json:"avg_first_ms"`
 	// 耗时分位数（仅统计成功请求，失败请求的超时/快速失败会扭曲体验指标）
-	P50MS  float64 `json:"p50_ms"`
-	P90MS  float64 `json:"p90_ms"`
-	P99MS  float64 `json:"p99_ms"`
-	MaxMS  int64   `json:"max_ms"`
+	P50MS    float64 `json:"p50_ms"`
+	P90MS    float64 `json:"p90_ms"`
+	P99MS    float64 `json:"p99_ms"`
+	MaxMS    int64   `json:"max_ms"`
 	P50First float64 `json:"p50_first_ms"`
 	P90First float64 `json:"p90_first_ms"`
 	// LatencyByModel 按模型的成功请求耗时统计（面板耗时分布表）
@@ -74,6 +74,9 @@ type Stats struct {
 	ByClient []Dist `json:"by_client,omitempty"` // 按请求来源客户端聚合
 	// CostByModel 每模型的 token 用量（面板层用当前价格现算成本，见 CostModel）
 	CostByModel []ModelCost `json:"cost_by_model,omitempty"`
+	// UsageRows 按「模型×渠道×实例」三维聚合的用量明细（面板用量表跨日期查询用；
+	// 当日内存聚合重启即失，历史范围从持久化日志现算）。
+	UsageRows []UsageRow `json:"usage_rows,omitempty"`
 
 	// 分位数样本（聚合期暂存，finalize 后释放，不参与序列化）
 	dursAll    []int64
@@ -82,6 +85,20 @@ type Stats struct {
 	genByMdl   map[string][]int64 // 生成阶段耗时（总耗时-首字），仅流式成功
 	firstByMdl map[string][]int64 // 首字延迟
 	prevByCli  map[string][]int64 // 同客户端相邻请求间隔样本
+	usageAgg   map[string]*UsageRow
+}
+
+// UsageRow 模型×渠道×实例 的用量聚合行。
+type UsageRow struct {
+	Model    string `json:"model"`
+	Provider string `json:"provider"`
+	Account  string `json:"account"`
+	Requests int64  `json:"requests"`
+	Prompt   int64  `json:"prompt_tokens"`
+	Complete int64  `json:"completion_tokens"`
+	Total    int64  `json:"total_tokens"`
+	Cache    int64  `json:"cache_tokens"`
+	Fail     int64  `json:"fail"`
 }
 
 // ModelLatency 单模型成功请求耗时统计。
@@ -297,6 +314,24 @@ func aggregate(s *Stats, e *Entry) {
 	s.Cache += e.CacheTokens
 	// 成本不在写入时固化：改价后历史统计需用当前价格重算（见 agg.costByModel 面板层现算）
 	incCostModel(&s.CostByModel, e.Model, e.PromptTokens, e.CompletionTokens, e.CacheTokens)
+	// 模型×渠道×实例 三维聚合（与内存当日聚合同构，供历史范围明细表）
+	uk := e.Model + "\x00" + e.Provider + "\x00" + e.Account
+	if s.usageAgg == nil {
+		s.usageAgg = map[string]*UsageRow{}
+	}
+	ur := s.usageAgg[uk]
+	if ur == nil {
+		ur = &UsageRow{Model: e.Model, Provider: e.Provider, Account: e.Account}
+		s.usageAgg[uk] = ur
+	}
+	ur.Requests++
+	ur.Prompt += e.PromptTokens
+	ur.Complete += e.CompletionTokens
+	ur.Total += e.TotalTokens
+	ur.Cache += e.CacheTokens
+	if !e.OK {
+		ur.Fail++
+	}
 	if e.TotalMS > 0 {
 		s.AvgMS += float64(e.TotalMS)
 	}
@@ -468,9 +503,17 @@ func finalize(s *Stats) {
 		})
 	}
 	sort.Slice(s.GapByClient, func(i, j int) bool { return s.GapByClient[i].Samples > s.GapByClient[j].Samples })
+	// 用量明细行：按请求数降序，最多 60 行（面板表容量）
+	for _, ur := range s.usageAgg {
+		s.UsageRows = append(s.UsageRows, *ur)
+	}
+	sort.Slice(s.UsageRows, func(i, j int) bool { return s.UsageRows[i].Requests > s.UsageRows[j].Requests })
+	if len(s.UsageRows) > 60 {
+		s.UsageRows = s.UsageRows[:60]
+	}
 	// 释放样本内存
 	s.dursAll, s.firstsAll, s.dursByMdl = nil, nil, nil
-	s.genByMdl, s.firstByMdl, s.prevByCli = nil, nil, nil
+	s.genByMdl, s.firstByMdl, s.prevByCli, s.usageAgg = nil, nil, nil, nil
 	sortDist := func(d []Dist) {
 		sort.Slice(d, func(i, j int) bool { return d[i].Value > d[j].Value })
 	}

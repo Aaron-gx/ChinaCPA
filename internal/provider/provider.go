@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"chinacpa/internal/model"
 )
@@ -29,6 +30,12 @@ type Error struct {
 	Status int
 	Code   string
 	Msg    string
+	// Retryable 表示「同一请求退避后重发有较大概率通过」，典型是上游风控闸门
+	// （智谱经第三方 IDE 通道转发时返回 11128 Illegal API invocation from an
+	// unapproved channel）。这类拦截与请求内容绑定，立即重发会命中同一判定
+	// （requestId 相同），故由网关整条渠道链失败后延迟重发一次。
+	// 与 Kind 的冷却策略相互独立：可重试不代表要罚号。
+	Retryable bool
 }
 
 func (e *Error) Error() string {
@@ -49,6 +56,38 @@ func AsError(err error) *Error {
 
 // ErrNotSupported 平台不支持该能力（如 Qwen 无签到）。
 var ErrNotSupported = errors.New("此平台不支持该功能")
+
+// IsRetryable 判断错误是否属于「退避后重发可能通过」的类型。
+func IsRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pe *Error
+	return errors.As(err, &pe) && pe.Retryable
+}
+
+// 上游风控闸门：智谱（GLM）经第三方 IDE 通道转发时的 11128
+// "Illegal API invocation from an unapproved channel"。与凭证无关，
+// 判定与请求体绑定（同一请求立刻重发会拿到相同 requestId 与相同结论），
+// 因此归类为可重试且不罚号。
+const (
+	riskGateCode = "11128"
+	riskGateMsg  = "上游风控拦截（Illegal API invocation from an unapproved channel）：已自动退避重试，若持续失败请切换渠道"
+)
+
+// IsRiskGate 判断上游报文是否命中风控闸门。code 为业务码（无则传 0）。
+func IsRiskGate(code int, body string) bool {
+	if code == 11128 {
+		return true
+	}
+	return strings.Contains(body, riskGateCode) ||
+		strings.Contains(strings.ToLower(body), "illegal api invocation")
+}
+
+// RiskGateError 构造风控闸门错误。
+func RiskGateError(status int) *Error {
+	return &Error{Kind: ErrClient, Status: status, Code: riskGateCode, Msg: riskGateMsg, Retryable: true}
+}
 
 // ChatResult 一次对话转发的输出。
 // OpenAI 兼容流：rc 为已转换成 OpenAI SSE 的字节流（或非流式 JSON 原文），

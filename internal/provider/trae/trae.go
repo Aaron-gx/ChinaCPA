@@ -705,9 +705,40 @@ func (p *Provider) getUserInfo(ctx context.Context, a *model.Account) (uid, nick
 
 // ── 额度查询 ─────────────────────────────────────────────
 
-// Quota 聚合两路余额：权益包（付费号有 credits_limit）+ 签到免费积分池
-// （免费号权益包 quota 只有功能开关、无数值，真实余额在 checkin_credits/status
-// 的 credits + extra_credits）。
+// entPack 权益包（user_entitlement_pack_list 的单项）。
+type entPack struct {
+	EntitlementBaseInfo struct {
+		Quota struct {
+			CreditsLimit int64 `json:"credits_limit"`
+		} `json:"quota"`
+	} `json:"entitlement_base_info"`
+	Usage struct {
+		CreditsAmount float64 `json:"credits_amount"`
+	} `json:"usage"`
+}
+
+// sumPacks 汇总权益包额度；credits_limit<=0 的包（仅功能开关、无数值）跳过。
+func sumPacks(list []entPack) (remain, limit, used int64, packs int) {
+	for _, pk := range list {
+		l := pk.EntitlementBaseInfo.Quota.CreditsLimit
+		if l <= 0 {
+			continue
+		}
+		u := int64(pk.Usage.CreditsAmount)
+		limit += l
+		used += u
+		remain += l - u
+		packs++
+	}
+	return
+}
+
+// Quota 额度：以权益包（user_entitlement_pack_list）为唯一权威口径。
+// 权益包已包含签到奖励池（实测：签到 100 + 每月登录赠送 500 + 新用户福利 2000
+// = 3 个包合计 2600，与网页「总可用积分」一致），因此不可再叠加 checkin_credits
+// 的免费池，否则双算。
+// 仅当没有任何数值型权益包（老版免费号 quota 只有功能开关、无数值）时，
+// 才回落签到池余额；仍为空再用对话流 notify_usage 上报值兜底。
 func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epEntUsage, bytes.NewReader([]byte("{}")))
 	if err != nil {
@@ -719,43 +750,42 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 		return nil, err
 	}
 	var resp struct {
-		UserEntitlementPackList []struct {
-			EntitlementBaseInfo struct {
-				Quota struct {
-					CreditsLimit int64 `json:"credits_limit"`
-				} `json:"quota"`
-			} `json:"entitlement_base_info"`
-			Usage struct {
-				CreditsAmount float64 `json:"credits_amount"`
-			} `json:"usage"`
-		} `json:"user_entitlement_pack_list"`
+		// usage_summary 为服务端权威汇总（与网页「总可用积分」一致），优先使用。
+		// 上游金额是小数（如 2501.23），用 json.Number 兼容整数/浮点。
+		UsageSummary struct {
+			TotalAmount    json.Number `json:"total_amount"`
+			ConsumedAmount json.Number `json:"consumed_amount"`
+		} `json:"usage_summary"`
+		UserEntitlementPackList []entPack `json:"user_entitlement_pack_list"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return nil, fmt.Errorf("额度解析失败: %w", err)
 	}
-	var remain, limit, used int64
-	packs := 0
-	for _, pk := range resp.UserEntitlementPackList {
-		l := pk.EntitlementBaseInfo.Quota.CreditsLimit
-		if l <= 0 {
-			continue
-		}
-		u := int64(pk.Usage.CreditsAmount)
-		limit += l
-		used += u
-		remain += l - u
-		packs++
+	// 优先用 usage_summary；缺失/非正时才回落到手工累加各包
+	remain, limit, used, packs := sumPacks(resp.UserEntitlementPackList)
+	source := "entitlement_packs"
+	if total, terr := resp.UsageSummary.TotalAmount.Float64(); terr == nil && total > 0 {
+		consumed, _ := resp.UsageSummary.ConsumedAmount.Float64()
+		limit = int64(total)
+		used = int64(consumed)
+		remain = limit - used
+		source = "usage_summary"
 	}
-	// 免费积分池：签到状态接口（100 基础 + extra），失败时降级用对话流上报
-	free, checkedIn := p.freeCredits(ctx, a)
-	if free == 0 {
-		if ide, _, ok := p.LastIdeCredits(a.UID); ok && ide > 0 {
-			free = int64(ide)
+	// 权益包已含签到奖励池：有额度时以包为准，不再叠加免费池（避免双算）
+	free, checkedIn := int64(0), (*bool)(nil)
+	if limit == 0 {
+		// 无任何额度（老版免费号，权益包仅功能开关）：回落签到池
+		free, checkedIn = p.freeCredits(ctx, a)
+		if free == 0 {
+			if ide, _, ok := p.LastIdeCredits(a.UID); ok && ide > 0 {
+				free = int64(ide)
+			}
 		}
+		remain += free
+		limit += free
+		source = "checkin_pool"
 	}
-	remain += free
-	limit += free
-	detail := map[string]any{"packs": packs, "free_credits": free}
+	detail := map[string]any{"packs": packs, "free_credits": free, "source": source}
 	if checkedIn != nil {
 		detail["checked_in"] = *checkedIn
 	}
@@ -1082,6 +1112,10 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 
 // classify 错误分类（HTTP 状态 + body 业务码）。
 func classify(status int, raw []byte) *provider.Error {
+	// trae 也转发智谱模型，同样会撞上 11128 风控闸门：先判，避免落入 ErrClient。
+	if provider.IsRiskGate(0, string(raw)) {
+		return provider.RiskGateError(status)
+	}
 	msg := truncate(string(raw), 200)
 	kind := provider.ErrClient
 	switch {

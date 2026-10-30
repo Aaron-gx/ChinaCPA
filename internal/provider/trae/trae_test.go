@@ -147,3 +147,32 @@ func TestBuildLoginURL(t *testing.T) {
 		}
 	}
 }
+
+// TestSumPacks 权益包汇总：credits_limit<=0 的包（仅功能开关）必须跳过，
+// 否则会把无数值的包算进 limit 分母。
+func TestSumPacks(t *testing.T) {
+	mk := func(limit int64, used float64) entPack {
+		var p entPack
+		p.EntitlementBaseInfo.Quota.CreditsLimit = limit
+		p.Usage.CreditsAmount = used
+		return p
+	}
+	list := []entPack{
+		mk(100, 0),    // 签到奖励 100/100
+		mk(500, 500),  // 每月登录赠送 0/500（已用完）
+		mk(2000, 2000),// 新用户福利 0/2000（已用完）
+		mk(0, 0),      // 纯功能开关包：无数值，跳过
+	}
+	remain, limit, used, packs := sumPacks(list)
+	if packs != 3 {
+		t.Errorf("应只计 3 个数值包，得 %d", packs)
+	}
+	if limit != 2600 || used != 2500 || remain != 100 {
+		t.Errorf("汇总错误: limit=%d used=%d remain=%d，期望 2600/2500/100", limit, used, remain)
+	}
+	// 全为开关包时 packs=0，调用方才会回落签到池
+	_, _, _, p0 := sumPacks([]entPack{mk(0, 0)})
+	if p0 != 0 {
+		t.Errorf("无数值包时 packs 应为 0，得 %d", p0)
+	}
+}

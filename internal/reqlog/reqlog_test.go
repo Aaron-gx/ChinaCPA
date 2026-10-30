@@ -11,11 +11,11 @@ func TestPercentile(t *testing.T) {
 		p    float64
 		want float64
 	}{
-		{50, 30},          // 中位数
-		{0, 10},           // 最小
-		{100, 50},         // 最大
-		{90, 46},          // 4*0.9=3.6 → 40*(0.4)+50*(0.6)=46
-		{25, 20},          // 4*0.25=1 → 20
+		{50, 30},  // 中位数
+		{0, 10},   // 最小
+		{100, 50}, // 最大
+		{90, 46},  // 4*0.9=3.6 → 40*(0.4)+50*(0.6)=46
+		{25, 20},  // 4*0.25=1 → 20
 	}
 	for _, c := range cases {
 		got := percentile(sample, c.p)
@@ -108,5 +108,30 @@ func TestAggregatePhaseSplit(t *testing.T) {
 	}
 	if ml.GenP50MS != 30000 {
 		t.Errorf("生成 P50=%v 期望 30000", ml.GenP50MS)
+	}
+}
+
+// TestAggregateUsageRows 模型×渠道×实例 三维聚合：同键合并、失败计数、按请求数降序。
+func TestAggregateUsageRows(t *testing.T) {
+	s := &Stats{}
+	aggregate(s, &Entry{Model: "m1", Provider: "wb", Account: "u1", OK: true, PromptTokens: 100, CompletionTokens: 10, TotalTokens: 110, CacheTokens: 80})
+	aggregate(s, &Entry{Model: "m1", Provider: "wb", Account: "u1", OK: false, PromptTokens: 50})
+	aggregate(s, &Entry{Model: "m1", Provider: "wb", Account: "u2", OK: true, PromptTokens: 30, TotalTokens: 33})
+	aggregate(s, &Entry{Model: "m2", Provider: "trae", Account: "u1", OK: true, PromptTokens: 200, TotalTokens: 210})
+	finalize(s)
+	if len(s.UsageRows) != 3 {
+		t.Fatalf("期望 3 行（m1/wb/u1、m1/wb/u2、m2/trae/u1），实际 %d: %+v", len(s.UsageRows), s.UsageRows)
+	}
+	// 请求数降序：m1/wb/u1 有 2 条排第一
+	first := s.UsageRows[0]
+	if first.Model != "m1" || first.Account != "u1" || first.Requests != 2 || first.Fail != 1 {
+		t.Errorf("首行异常: %+v", first)
+	}
+	if first.Prompt != 150 || first.Cache != 80 || first.Total != 110 {
+		t.Errorf("token 合并异常: %+v", first)
+	}
+	// finalize 后暂存释放
+	if s.usageAgg != nil {
+		t.Error("finalize 后 usageAgg 未释放")
 	}
 }

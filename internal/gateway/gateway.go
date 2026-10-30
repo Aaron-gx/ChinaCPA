@@ -31,10 +31,22 @@ type Gateway struct {
 	qwenProv   qwenCounter
 	rlog       *reqlog.DB
 	videoTasks *videoTaskStore // 视频生成任务表（内存态）
+	// apiKey 网关 /v1/* Bearer 密钥（原子存储，支持面板热更换即时生效）
+	apiKey atomic.Value // string
 
 	// OnUsageRecorded 成功记录用量后的回调（用于触发 SSE 实时推流）
 	OnUsageRecorded func()
+
+	// sleep 退避等待（测试可替换，生产为 time.Sleep）。
+	sleep func(time.Duration)
 }
+
+// 风控闸门退避重试策略：整条渠道链都失败且失败原因含风控闸门时，
+// 延迟后把整条链再跑一遍。同一请求立刻重发会命中相同判定（上游返回同一
+// requestId），故必须退避；只重试一次，避免把风控打成封号信号。
+const (
+	riskGateRetryDelay = 3 * time.Second
+)
 
 // qwenCounter Qwen 本地请求计数的最小接口（解耦）。
 type qwenCounter interface {
@@ -43,7 +55,7 @@ type qwenCounter interface {
 
 // New 构造。
 func New(p *pool.Pool, u *usage.Tracker) *Gateway {
-	return &Gateway{pool: p, usage: u, videoTasks: &videoTaskStore{tasks: map[string]*videoTask{}}}
+	return &Gateway{pool: p, usage: u, videoTasks: &videoTaskStore{tasks: map[string]*videoTask{}}, sleep: time.Sleep}
 }
 
 // SetQwenCounter 注入 Qwen 计数器。
@@ -73,24 +85,38 @@ func (g *Gateway) logReq(proto, pubModel, pid, uid, client string, stream bool, 
 	g.rlog.Add(e)
 }
 
-// Register 挂载到 mux（调用方保证 /v1 前缀）。
+// Register 挂载到 mux（调用方保证 /v1 前缀）。authKey 为初始密钥，
+// 之后可通过 SetAPIKey 热更换（鉴权实时读取原子值，无需重启）。
 func (g *Gateway) Register(mux *http.ServeMux, authKey string) {
-	mux.HandleFunc("/v1/models", g.auth(g.handleModels, authKey))
-	mux.HandleFunc("/v1/chat/completions", g.auth(g.handleChat, authKey))
-	mux.HandleFunc("/v1/responses", g.auth(g.handleResponses, authKey))
-	mux.HandleFunc("/v1/messages", g.auth(g.handleClaudeMessages, authKey))
-	g.registerMedia(mux, authKey) // 图片 / 视频（含火山方舟 /api/v3 路径）
+	g.apiKey.Store(authKey)
+	mux.HandleFunc("/v1/models", g.auth(g.handleModels))
+	mux.HandleFunc("/v1/chat/completions", g.auth(g.handleChat))
+	mux.HandleFunc("/v1/responses", g.auth(g.handleResponses))
+	mux.HandleFunc("/v1/messages", g.auth(g.handleClaudeMessages))
+	g.registerMedia(mux) // 图片 / 视频（含火山方舟 /api/v3 路径）
 }
 
-func (g *Gateway) auth(next http.HandlerFunc, key string) http.HandlerFunc {
+// SetAPIKey 热更换网关密钥（调用方负责持久化到 config.json）。
+func (g *Gateway) SetAPIKey(k string) { g.apiKey.Store(k) }
+
+// APIKey 当前网关密钥。
+func (g *Gateway) APIKey() string {
+	if v := g.apiKey.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+func (g *Gateway) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		key := g.APIKey()
 		if key != "" {
 			got := r.Header.Get("Authorization")
 			got = strings.TrimPrefix(got, "Bearer ")
 			if got != key {
 				// 兼容 x-api-key（Anthropic 客户端习惯）
 				if r.Header.Get("x-api-key") != key {
-					writeErr(w, http.StatusUnauthorized, "invalid_api_key", "API 密钥错误（配置文件 api_key）")
+					writeErr(w, http.StatusUnauthorized, "invalid_api_key", "API 密钥错误（可在面板「服务密钥」处修改）")
 					return
 				}
 			}
@@ -311,30 +337,28 @@ func uidShort(uid string) string {
 // proto: chat / responses / messages（请求日志用）。失败时已写错误响应，返回 nil。
 func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, route *pool.Route, body []byte, proto, sessionKey, client string) *openAIStream {
 	t0 := time.Now()
+	var attempts []string
+	var st *openAIStream
 	var lastErr *provider.Error
 	var lastStatus int
 	var lastBody []byte
-	var attempts []string
-	for _, ch := range route.Channels {
-		st, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey, client)
-		if st != nil {
-			g.bumpChannel(route, ch, true)
-			st.attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, true, trail))
-			return st
-		}
-		g.bumpChannel(route, ch, false)
-		note := ""
-		if err != nil {
-			note = err.Error()
-		}
-		if trail != "" {
-			if note != "" {
-				note += "｜"
+	var gateHit bool
+	st, lastErr, lastStatus, lastBody, gateHit, attempts = g.tryRouteChannels(ctx, route, body, sessionKey, client, attempts)
+	if st == nil && gateHit && ctx.Err() == nil {
+		attempts = append(attempts, fmt.Sprintf("风控闸门：退避 %s 后重试整链", riskGateRetryDelay))
+		g.backoff(riskGateRetryDelay)
+		if ctx.Err() == nil {
+			var retryErr *provider.Error
+			var retryStatus int
+			var retryBody []byte
+			st, retryErr, retryStatus, retryBody, _, attempts = g.tryRouteChannels(ctx, route, body, sessionKey, client, attempts)
+			if st == nil {
+				lastErr, lastStatus, lastBody = retryErr, retryStatus, retryBody
 			}
-			note += trail
 		}
-		attempts = append(attempts, reqlog.Attempt(ch.PID, ch.Model, false, note))
-		lastErr, lastStatus, lastBody = err, status, respBody
+	}
+	if st != nil {
+		return st
 	}
 	msg := "上游调用失败"
 	if lastErr != nil && lastErr.Error() != "" {
@@ -349,6 +373,51 @@ func (g *Gateway) callRoutedStream(ctx context.Context, w http.ResponseWriter, r
 	writeErr(w, status, "upstream_error", msg)
 	g.logReq(proto, route.Public, "", "", client, false, nil, false, msg, attempts, 0, time.Since(t0).Milliseconds(), "", "")
 	return nil
+}
+
+// tryRouteChannels 跑一遍整条渠道链：按顺序尝试，任一渠道成功即返回。
+// gateHit 表示链上至少有一个渠道撞上风控闸门（可退避重试）。
+// attempts 逐次追加，跨多次调用累积以便面板看到完整链路。
+func (g *Gateway) tryRouteChannels(ctx context.Context, route *pool.Route, body []byte, sessionKey, client string, attempts []string) (st *openAIStream, lastErr *provider.Error, lastStatus int, lastBody []byte, gateHit bool, out []string) {
+	out = attempts
+	for _, ch := range route.Channels {
+		if ctx.Err() != nil {
+			break
+		}
+		s, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey, client)
+		if s != nil {
+			g.bumpChannel(route, ch, true)
+			out = append(out, reqlog.Attempt(ch.PID, ch.Model, true, trail))
+			s.attempts = out
+			return s, nil, 0, nil, gateHit, out
+		}
+		g.bumpChannel(route, ch, false)
+		note := ""
+		if err != nil {
+			note = err.Error()
+			if provider.IsRetryable(err) {
+				gateHit = true
+			}
+		}
+		if trail != "" {
+			if note != "" {
+				note += "｜"
+			}
+			note += trail
+		}
+		out = append(out, reqlog.Attempt(ch.PID, ch.Model, false, note))
+		lastErr, lastStatus, lastBody = err, status, respBody
+	}
+	return nil, lastErr, lastStatus, lastBody, gateHit, out
+}
+
+// backoff 退避等待（sleep 可注入，便于测试）。
+func (g *Gateway) backoff(d time.Duration) {
+	if g.sleep != nil {
+		g.sleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 // bumpChannel 发布模型渠道调用计数。

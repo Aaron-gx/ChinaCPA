@@ -296,6 +296,11 @@ func (p *Provider) doJSON(req *http.Request) (json.RawMessage, error) {
 }
 
 func classifyHTTP(status int, raw []byte) *provider.Error {
+	// 上游风控闸门（智谱经第三方 IDE 通道转发时的 11128）常以 400 返回，
+	// 归类前先看报文，避免被当成普通客户端错误直接抛给用户。
+	if provider.IsRiskGate(0, string(raw)) {
+		return provider.RiskGateError(status)
+	}
 	msg := truncate(string(raw), 200)
 	kind := provider.ErrClient
 	switch {
@@ -313,13 +318,19 @@ func classifyHTTP(status int, raw []byte) *provider.Error {
 }
 
 func classifyBiz(code int, msg string) *provider.Error {
+	// 11128 = 风控闸门（非凭证问题）：不罚号，交给网关退避重试/渠道转移。
+	// 必须排在 11140 / illegal 判定之前：11128 的报文本身含 "Illegal API
+	// invocation"，落到下面那条会被误判成 ErrAuth 并把账号标记需重新登录。
+	if provider.IsRiskGate(code, msg) {
+		return provider.RiskGateError(0)
+	}
 	kind := provider.ErrClient
 	switch {
 	case code == 12153 || strings.Contains(msg, "login") || strings.Contains(msg, "登录"):
 		kind = provider.ErrAuth
 	case code == 10001: // 今天已签到等幂等业务提示
 		kind = provider.ErrNone
-	case code == 11140 || strings.Contains(msg, "illegal"):
+	case code == 11140 || strings.Contains(strings.ToLower(msg), "illegal"):
 		kind = provider.ErrAuth
 	}
 	return &provider.Error{Kind: kind, Code: strconv.Itoa(code), Msg: truncate(msg, 200)}
@@ -683,8 +694,16 @@ func (p *Provider) Checkin(ctx context.Context, a *model.Account) (*model.Checki
 	_, err = p.doJSON(req)
 	if err != nil {
 		pe := provider.AsError(err)
-		if strings.Contains(pe.Msg, "已签到") || pe.Code == "10001" {
+		// 10001 语义随活动状态变化：CN 已签 → 信封 code=10001（classifyBiz，Code 有值）；
+		// 国际版活动未开启/已过期 → HTTP 4xx + {"code":10001,...} body（classifyHTTP，
+		// Code 为空、Msg 为原始 JSON）。两者都不是账号故障。
+		if pe.Code == "10001" || strings.Contains(pe.Msg, "已签到") {
 			return &model.CheckinResult{OK: true, Already: true, Message: "今天已签到"}, nil
+		}
+		if strings.Contains(pe.Msg, "签到活动未开启") || strings.Contains(pe.Msg, "已过期") ||
+			strings.Contains(pe.Msg, `"code":10001`) {
+			return &model.CheckinResult{OK: false, Info: true,
+				Message: "该账号暂无进行中的签到活动（非故障）"}, nil
 		}
 		if pe.Kind == provider.ErrNone {
 			return &model.CheckinResult{OK: true, Message: "签到成功"}, nil
