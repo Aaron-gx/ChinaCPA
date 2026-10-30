@@ -619,7 +619,9 @@ func (p *Provider) Checkin(ctx context.Context, a *model.Account) (*model.Checki
 		}
 	}
 	if bOK {
-		return &model.CheckinResult{OK: false,
+		// 上游无独立签到接口，发放由登录事件触发；本端无 web 登录通道时只能等待。
+		// OK=false 但 Info=true：这是状态说明而非签到失败，调度层照常重试。
+		return &model.CheckinResult{OK: false, Info: true,
 			Message: "今日每日积分未到账（由登录触发发放，可网页登录一次后重试）"}, nil
 	}
 	return &model.CheckinResult{OK: false, Message: "钱包查询失败，稍后自动重试"}, nil

@@ -25,7 +25,7 @@ mod spring;
 use client::spawn_network_worker;
 use graphics::D2DEngine;
 use metrics::{demo_metrics, Metric};
-use placement::{canonical_size, load_placement, monitor_geom, save_placement, window_to_canon, Dock, Edge, Placement};
+use placement::{load_placement, monitor_geom, save_placement, window_to_canon, Dock, Edge, Placement};
 use render::{render_frame, RingAnimState, LayoutMetrics};
 use spring::SpringValue;
 
@@ -84,6 +84,9 @@ pub struct AppState {
     pub did_drag: bool,
     pub drag_start_cursor: POINT,
     pub drag_start_window: RECT,
+    /// 程序主动 ReleaseCapture 时置真，让随之而来的 WM_CAPTURECHANGED
+    /// 知道这是自己放的、不要当成“拖拽被抢走”。用完即清。
+    pub releasing_capture: bool,
     /// 停靠布局与持久化状态
     pub place: Placement,
     pub dock: Dock,
@@ -254,6 +257,7 @@ unsafe fn run() -> Result<()> {
             anim_active: false,
             dragging: false,
             did_drag: false,
+            releasing_capture: false,
             drag_start_cursor: POINT::default(),
             drag_start_window: RECT::default(),
             place: std::mem::take(&mut place),
@@ -282,7 +286,16 @@ unsafe fn run() -> Result<()> {
                 st.as_ref().map(|x| x.place.clone()).unwrap_or_default(),
             )
         });
-        place_window(hwnd, initial_w, initial_h, dock0, &place0);
+        // 收起态尺寸按轴向摆：竖栏 6 宽 × 96 长，横条 96 宽 × 6 高。
+        // 早前一律用 initial_w×initial_h（6×96），自由横条重启后会变成
+        // 一根 96 宽 6 高的竖形细条，与它展开后的横向绘制对不上。
+        let collapsed_lm = render::LayoutMetrics::new(1.0);
+        let (cw, ch) = placement::window_size(
+            dock0,
+            collapsed_lm.sliver_w as i32,
+            collapsed_lm.sliver_h as i32,
+        );
+        place_window(hwnd, cw, ch, dock0, &place0);
         sync_window_size(hwnd);
 
         // 启动后台网络与 SSE 数据采集线程
@@ -339,12 +352,15 @@ fn reposition_window(hwnd: HWND, w: i32, h: i32) {
 unsafe fn place_window(hwnd: HWND, w: i32, h: i32, dock: Dock, place: &Placement) {
     let g = monitor_geom(hwnd);
     let room = placement::room_for(dock, place.snaps, &g);
+    // 自由态：两轴都用比例定位。早前这里直接返回 (0,0)，于是拖完一松手
+    // 窗口就跳到屏幕左上角 —— 比例虽然存对了（drop: h=0.342 v=0.540），
+    // 但下一次 sync/place 一律无视它。
     let (x, y) = match dock {
         Dock::Edge(Edge::Left) => (room.left, 0i32),
         Dock::Edge(Edge::Right) => (room.right - w, 0i32),
         Dock::Edge(Edge::Top) => (0, room.top),
         Dock::Edge(Edge::Bottom) => (0, room.bottom - h),
-        Dock::Floating(_) => (0, 0),
+        Dock::Floating(_) => placement::position_from_ratios(place.h, place.v, room, w, h),
     };
     // 沿边轴用比例定位（y-down：v 沿工作区高度/宽度分布）
     let (x, y) = match dock {
@@ -358,6 +374,17 @@ unsafe fn place_window(hwnd: HWND, w: i32, h: i32, dock: Dock, place: &Placement
         }
         Dock::Floating(_) => (x, y),
     };
+    // 自由态收进屏幕：展开/收起会改变窗口尺寸，若按细条时存下的比例
+    // 直接铺开，窗口会有一半落到屏幕外（贴顶的竖栏尤其明显：v=0 时
+    // 展开出来上半截看不见）。停靠态不用管，它本来就贴着边。
+    let (x, y) = if dock.is_docked() {
+        (x, y)
+    } else {
+        (
+            x.clamp(room.left, (room.right - w).max(room.left)),
+            y.clamp(room.top, (room.bottom - h).max(room.top)),
+        )
+    };
     SetWindowPos(
         hwnd,
         HWND_TOPMOST,
@@ -367,6 +394,39 @@ unsafe fn place_window(hwnd: HWND, w: i32, h: i32, dock: Dock, place: &Placement
         h,
         SWP_NOACTIVATE | SWP_NOZORDER,
     ).ok();
+}
+
+/// 胶囊（栏本体）在窗口物理坐标里占的那条带：(left, top, right, bottom)。
+///
+/// 必须与 `render_frame` 的几何一致：规范空间里栏沿长度轴居中、沿厚度轴
+/// 贴着 `bu`（屏幕边那一侧），再经轴向变换映射回物理空间。窗口比栏大
+/// （一侧留了卡片空间），所以「离某条边多远」推不出栏在哪。
+fn capsule_band(
+    dock: Dock,
+    win_w: f32,
+    win_h: f32,
+    openness: f32,
+    n: usize,
+    lm: &LayoutMetrics,
+) -> (f32, f32, f32, f32) {
+    let (bu, bv) = placement::canonical_size(dock, win_w as i32, win_h as i32);
+    // 必须用**当前实际环数**：用上限会让短栏的命中带比画出来的长一截，
+    // 指针落在空白处也算「在栏上」，拖拽起始点就会错位。
+    let expanded = lm.expanded_length(dock, n.max(1));
+    let thickness = lm.cross_thickness(dock);
+
+    // 与 render_frame 相同的插值
+    let cur_thickness = lm.sliver_w + (thickness - lm.sliver_w) * openness;
+    let cur_length = lm.sliver_h + (expanded - lm.sliver_h).max(0.0) * openness;
+
+    let v0 = (bv - cur_length) / 2.0;
+    let v1 = v0 + cur_length;
+    let u0 = bu - cur_thickness;
+    let u1 = bu;
+
+    let (x0, y0) = placement::canon_to_window(dock, u0, v0, bu, bv);
+    let (x1, y1) = placement::canon_to_window(dock, u1, v1, bu, bv);
+    (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))
 }
 
 /// 按当前 openness 把窗口物理尺寸同步到"细条 ↔ 展开胶囊"。
@@ -385,22 +445,24 @@ fn sync_window_size(hwnd: HWND) {
                 let lm = LayoutMetrics::new(scale);
                 let openness = state.openness.cur.clamp(0.0, 1.0);
 
-                // 宽度：细条 6pt ↔ 胶囊 64pt 随 openness 插值。
+                // 厚度：细条 6pt ↔ 胶囊厚度随 openness 插值。
+                // 竖栏 64pt，横栏 78pt（环 36 + 间隙 6 + 文字 16 + 上下各 10）。
                 // 卡片展开时额外加一个卡片宽度，避免卡片被窗口裁掉。
                 let card_extra = if state.card_openness.cur > 0.01 {
                     lm.card_w + 28.0 * scale
                 } else {
                     0.0
                 };
-                let want_w = lm.sliver_w + (lm.pill_w - lm.sliver_w) * openness + card_extra;
+                let thickness = lm.cross_thickness(state.dock);
+                let want_w = lm.sliver_w + (thickness - lm.sliver_w) * openness + card_extra;
 
-                // 高度：细条 96pt ↔ 内容高度随 openness 插值。
+                // 长度：细条 96pt ↔ 展开后长度随 openness 插值。
+                // 竖栏两端各留 46，横栏各留 10；节距也按轴向不同。
                 let n = state.metrics.len().min(8);
-                let slot_h = lm.ring_d + 6.0 * scale + 16.0 * scale + lm.item_spacing;
                 let content_h = if n == 0 {
                     lm.sliver_h
                 } else {
-                    (n as f32) * slot_h - lm.item_spacing + 46.0 * scale * 2.0
+                    lm.expanded_length(state.dock, n)
                 };
                 let want_h = lm.sliver_h + (content_h - lm.sliver_h).max(0.0) * openness;
 
@@ -424,10 +486,32 @@ fn sync_window_size(hwnd: HWND) {
                 }
 
                 if state.dragging {
-                    // 拖拽中换边：只换尺寸不跳位置（保持左上角，下一帧 MOUSEMOVE 继续跟手）
-                    let mut wr2 = RECT::default();
-                    GetWindowRect(hwnd, &mut wr2).ok();
-                    SetWindowPos(hwnd, HWND_TOPMOST, wr2.left, wr2.top, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER).ok();
+                    // 拖拽中换轴向（横条→竖栏，或反过来）。
+                    //
+                    // 拖拽跟手的公式是 `drag_start_window.left + dx`。换轴后
+                    // 窗口宽高互换，如果还拿按下那一刻的矩形当基准，窗口会被
+                    // 算回起点附近、并且与指针脱节（横向条拖到右边翻成竖栏之后
+                    // 指针再移动窗口也不动了）。
+                    //
+                    // 做法：把基准矩形重置成「保持指针在窗口内的相对位置」的新
+                    // 矩形，并同步 drag_start_cursor。之后每帧仍是同一套跟手公式。
+                    let mut cur = POINT::default();
+                    GetCursorPos(&mut cur).ok();
+                    let old_w = state.drag_start_window.right - state.drag_start_window.left;
+                    let old_h = state.drag_start_window.bottom - state.drag_start_window.top;
+                    // 指针在旧窗口里的相对位置
+                    let rx = if old_w > 0 { (cur.x - state.drag_start_window.left) as f64 / old_w as f64 } else { 0.5 };
+                    let ry = if old_h > 0 { (cur.y - state.drag_start_window.top) as f64 / old_h as f64 } else { 0.5 };
+                    let nx = cur.x - (rx * pw as f64).round() as i32;
+                    let ny = cur.y - (ry * ph as f64).round() as i32;
+                    SetWindowPos(hwnd, HWND_TOPMOST, nx, ny, pw, ph, SWP_NOACTIVATE | SWP_NOZORDER).ok();
+                    state.drag_start_window = RECT {
+                        left: nx,
+                        top: ny,
+                        right: nx + pw,
+                        bottom: ny + ph,
+                    };
+                    state.drag_start_cursor = cur;
                 } else {
                     place_window(hwnd, pw, ph, state.dock, &state.place.clone());
                 }
@@ -574,50 +658,27 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             let lx = (pt.x - wr.left) as f32;
                             let ly = (pt.y - wr.top) as f32;
                             let slack = 8.0f32;
+                            let win_w = (wr.right - wr.left) as f32;
+                            let win_h = (wr.bottom - wr.top) as f32;
                             // 指针必须在窗口矩形内（含 slack 容差）才算"在内容上"
-                            if lx < -slack || ly < -slack
-                                || lx > (wr.right - wr.left) as f32 + slack
-                                || ly > (wr.bottom - wr.top) as f32 + slack
-                            {
+                            if lx < -slack || ly < -slack || lx > win_w + slack || ly > win_h + slack {
                                 return false;
                             }
-                            if state.openness.cur < 0.3 {
-                                // sliver 命中：20pt 磁吸宽 + slack
-                                let hit = match state.dock {
-                                    Dock::Edge(Edge::Left) => {
-                                        (lx as f32) <= 20.0 * scale + slack
-                                    }
-                                    Dock::Edge(Edge::Right) => {
-                                        (lx as f32) >= state.width - 20.0 * scale - slack
-                                    }
-                                    Dock::Edge(Edge::Top) => {
-                                        (ly as f32) <= 20.0 * scale + slack
-                                    }
-                                    Dock::Edge(Edge::Bottom) => {
-                                        (ly as f32) >= state.height - 20.0 * scale - slack
-                                    }
-                                    Dock::Floating(_) => true,
-                                };
-                                hit
-                            } else {
-                                // 展开态：rail 条带 + 卡片条带（全幅，Pulse isOverContent）
-                                let rail_band = match state.dock {
-                                    Dock::Edge(Edge::Left) => {
-                                        (lx as f32) <= lm.pill_w + slack
-                                    }
-                                    Dock::Edge(Edge::Right) => {
-                                        (lx as f32) >= state.width - lm.pill_w - slack
-                                    }
-                                    Dock::Edge(Edge::Top) => {
-                                        (ly as f32) <= lm.pill_w + slack
-                                    }
-                                    Dock::Edge(Edge::Bottom) => {
-                                        (ly as f32) >= state.height - lm.pill_w - slack
-                                    }
-                                    Dock::Floating(_) => true,
-                                };
-                                rail_band
-                            }
+                            // 与命中检测同一套几何：栏在窗口里占的那条带。
+                            // 早前按「离停靠边多远」判断，横向长栏的栏身落在
+                            // 窗口中部，指针明明在栏上却被判成离开，一悬停就收。
+                            let (bl, bt, br, bb) = capsule_band(
+                                state.dock,
+                                win_w,
+                                win_h,
+                                state.openness.cur,
+                                state.metrics.len().min(8),
+                                &lm,
+                            );
+                            lx >= bl - slack
+                                && lx <= br + slack
+                                && ly >= bt - slack
+                                && ly <= bb + slack
                         } else {
                             false
                         }
@@ -771,10 +832,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
                     state.left_at = 0;
                     // 物理客户端坐标 → 规范空间（右边缘竖栏）
-                    let (bu, bv) = match state.dock {
-                        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (state.height, state.width),
-                        _ => (state.width, state.height),
-                    };
+                    let (bu, bv) =
+                        placement::canonical_size(state.dock, state.width as i32, state.height as i32);
                     let (x, y) = window_to_canon(state.dock, x, y, bu, bv);
                     if state.openness.target < 0.99 {
                         if state.openness.cur < 0.3 {
@@ -787,18 +846,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
                     let scale = state.scale;
                     let lm = LayoutMetrics::new(scale);
-                    let slot_h = lm.ring_d + 6.0 * scale + 16.0 * scale + lm.item_spacing;
                     let n = state.metrics.len().min(8);
-                    let total_content_h = (n as f32) * slot_h - lm.item_spacing;
-                    let expanded_h = total_content_h + 46.0 * scale * 2.0;
+                    let expanded_h = lm.expanded_length(state.dock, n);
                     let dock_top = (bv - expanded_h) / 2.0;
-                    let start_y = dock_top + 46.0 * scale + lm.ring_d / 2.0;
-                    let dock_left = bu - lm.pill_w;
+                    // 厚度轴：只有落在胶囊厚度内才算悬停到环（横栏 78，竖栏 64）。
+                    let dock_left = bu - lm.cross_thickness(state.dock);
 
                     let mut hovered_slot = None;
                     if x >= dock_left && x <= bu {
                         for i in 0..n {
-                            let cy = start_y + (i as f32) * slot_h;
+                            let cy = lm.ring_along(state.dock, dock_top, i);
                             if (y - cy).abs() <= 26.0 * scale {
                                 hovered_slot = Some((i, cy));
                                 break;
@@ -836,6 +893,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
 
             if dock_changed {
+                // sync_window_size 内部已按 state.dragging 分岔：拖拽中只换尺寸、
+                // 保持左上角，松开后位置由 WM_LBUTTONUP 对齐；非拖拽才 place_window。
                 sync_window_size(hwnd);
                 need_anim = true;
             }
@@ -879,24 +938,34 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     let lm = LayoutMetrics::new(state.scale);
                     let px = pt.x as f32;
                     let py = pt.y as f32;
-                    // 到停靠边的垂直距离（物理空间，四边通用）
-                    let edge_dist = match state.dock {
-                        Dock::Edge(Edge::Right) | Dock::Floating(true) => state.width - px,
-                        Dock::Edge(Edge::Left) => px,
-                        Dock::Edge(Edge::Top) | Dock::Floating(false) => py,
-                        Dock::Edge(Edge::Bottom) => state.height - py,
-                    };
+                    // 胶囊在窗口里占的那一条带，用物理坐标算，而不是「离某条边多远」。
+                    //
+                    // 窗口比栏大：竖栏两侧留了卡片宽度，横栏上下留了卡片高度。
+                    // 早前用 edge_dist（离停靠边的距离）判断，横向自由条因为
+                    // 被归进「横栏 → 看 py」，要求 py <= 78，可栏实际在窗口
+                    // 中间那条带上（展开态 y≈139..217），于是整条栏被判成透明，
+                    // 鼠标穿到下层窗口，连拖都拖不动 —— 这就是「不会靠右」的
+                    // 真正原因：拖拽压根没开始。
+                    let (band_l, band_t, band_r, band_b) = capsule_band(
+                        state.dock,
+                        state.width,
+                        state.height,
+                        state.openness.cur,
+                        state.metrics.len().min(8),
+                        &lm,
+                    );
+                    let in_band = px >= band_l && px <= band_r && py >= band_t && py <= band_b;
+
                     if state.openness.cur < 0.3 {
-                        // 细条命中区域（Pulse: 20pt 磁吸边缘）
-                        edge_dist <= 20.0 * state.scale
+                        // 收起态：细条本体命中即可
+                        in_band
                     } else {
-                        let pill_hit = edge_dist <= lm.pill_w;
                         let card_hit = state.card_openness.cur > 0.1
                             && render::CARD_RECT.with(|c| {
                                 let (l, t, rr, b) = c.get();
                                 px >= l && px <= rr && py >= t && py <= b
                             });
-                        pill_hit || card_hit
+                        in_band || card_hit
                     }
                 } else {
                     false
@@ -909,15 +978,48 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 LRESULT(HTTRANSPARENT as isize)
             }
         }
+        WM_CAPTURECHANGED => {
+            // 鼠标捕获丢了而 WM_LBUTTONUP 又不会到达本窗口时，dragging 会永久
+            // 为真：此后每次 WM_MOUSEMOVE 都进拖拽分支、看门狗也因 `dragging`
+            // 拒绝收起 —— 用户看到的就是「动也动不了」。
+            //
+            // 两个必须遵守的细节：
+            // 1. `ReleaseCapture` 是同步派发这条消息的，可能发生在别处正可变
+            //    借用 STATE 期间，所以用 try_borrow_mut，别 panic。
+            // 2. 程序自己 ReleaseCapture 时会先置 `releasing_capture`，
+            //    这条消息要认出来并跳过，否则正常松手也会被当成丢失。
+            STATE.with(|s| {
+                if let Ok(mut slot) = s.try_borrow_mut() {
+                    if let Some(state) = slot.as_mut() {
+                        if state.releasing_capture {
+                            state.releasing_capture = false;
+                            return;
+                        }
+                        if state.dragging {
+                            state.dragging = false;
+                            state.did_drag = false;
+                            state.pulled = 0.0;
+                            state.thinning = 1.0;
+                            state.parting_since = 0;
+                            state.parted = 0.0;
+                            log_msg("capture lost mid-drag: dragging reset");
+                        }
+                    }
+                }
+            });
+            LRESULT(0)
+        }
         WM_LBUTTONDOWN => {
             STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
                     state.dragging = true;
                     GetCursorPos(&mut state.drag_start_cursor).ok();
                     GetWindowRect(hwnd, &mut state.drag_start_window).ok();
-                    SetCapture(hwnd);
                 }
             });
+            // SetCapture 会同步派发 WM_CAPTURECHANGED，必须在 STATE 借用之外调用，
+            // 否则那条消息里的 borrow 与本处冲突，直接 panic。
+            SetCapture(hwnd);
             LRESULT(0)
         }
         WM_LBUTTONUP => {
@@ -925,42 +1027,78 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let uy = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
             let mut refresh_req: Option<(String, String)> = None;
             let mut sweep_idx: Option<usize> = None;
+            // ReleaseCapture 会同步派发 WM_CAPTURECHANGED，不能放在 STATE 借用内。
+            // 先置「自己放」标志，那条消息才不会把正常松手当成捕获丢失。
+            let was_dragging = STATE.with(|s| {
+                let mut slot = s.borrow_mut();
+                match slot.as_mut() {
+                    Some(st) if st.dragging => {
+                        st.releasing_capture = true;
+                        true
+                    }
+                    _ => false,
+                }
+            });
+            if was_dragging {
+                ReleaseCapture().ok();
+            }
             STATE.with(|s| {
                 if let Some(state) = s.borrow_mut().as_mut() {
                     if state.dragging {
                         state.dragging = false;
-                        ReleaseCapture().ok();
+                        // 兜底：正常情况下 WM_CAPTURECHANGED 已消费掉这个标志，
+                        // 但那条消息若因借用冲突被跳过，这里必须清掉，否则
+                        // 下一次真的丢失捕获时会被误判成「自己放的」而不重置。
+                        state.releasing_capture = false;
                         // 拖拽结束：自由态保留当前位置；停靠态按比例贴回
                         state.parting_since = 0;
                         state.parted = 0.0;
                         state.pulled = 0.0;
                         state.thinning = 1.0;
-                        if state.did_drag && state.dock.is_docked() {
+                        if state.did_drag {
                             let mut wr = RECT::default();
                             GetWindowRect(hwnd, &mut wr).ok();
                             let g = monitor_geom(hwnd);
                             let room = placement::room_for(state.dock, state.place.snaps, &g);
-                            match state.dock {
-                                Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
-                                    let span = (room.bottom - room.top - (wr.bottom - wr.top)).max(0);
-                                    if span > 0 {
-                                        state.place.v = ((wr.top - room.top) as f64 / span as f64).clamp(0.0, 1.0);
+                            if state.dock.is_docked() {
+                                // 停靠态：位置由 place.h/v 决定，不该从窗口矩形反推。
+                                // 拖拽中栏可能刚从横条翻成竖栏，此时 wr 还是旧轴向的
+                                // 宽高（342×502），拿它算比例、再拿它当尺寸去放置，
+                                // 会先放到错误的位置、再被 sync 纠正一次，中间闪一下。
+                                // 这里只按指针落点更新沿边轴的ratio，尺寸交给 sync。
+                                match state.dock {
+                                    Dock::Edge(Edge::Left) | Dock::Edge(Edge::Right) => {
+                                        let span = (room.bottom - room.top - wr.bottom + wr.top).max(0);
+                                        if span > 0 {
+                                            state.place.v =
+                                                ((wr.top - room.top) as f64 / span as f64).clamp(0.0, 1.0);
+                                        }
                                     }
-                                }
-                                Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => {
-                                    let span = (room.right - room.left - (wr.right - wr.left)).max(0);
-                                    if span > 0 {
-                                        state.place.h = ((wr.left - room.left) as f64 / span as f64).clamp(0.0, 1.0);
+                                    Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => {
+                                        let span = (room.right - room.left - wr.right + wr.left).max(0);
+                                        if span > 0 {
+                                            state.place.h =
+                                                ((wr.left - room.left) as f64 / span as f64).clamp(0.0, 1.0);
+                                        }
                                     }
+                                    Dock::Floating(_) => {}
                                 }
-                                Dock::Floating(_) => {}
+                                save_placement(&state.place.clone());
+                                // 尺寸按新轴向重算由本函数末尾的 sync_window_size 完成。
+                                // 不能在这里直接调它：它自己也要 borrow_mut，
+                                // 在 STATE 可变借用内部重入会直接 panic（实测崩过）。
+                            } else {
+                                // 自由态：位置两轴都要记，否则重启回到旧位置
+                                let (rh, rv) = placement::ratios(
+                                    wr,
+                                    room,
+                                    (wr.right - wr.left) as f32,
+                                    (wr.bottom - wr.top) as f32,
+                                );
+                                state.place.h = rh;
+                                state.place.v = rv;
+                                save_placement(&state.place.clone());
                             }
-                            save_placement(&state.place.clone());
-                            let dock = state.dock;
-                            let place = state.place.clone();
-                            let w = wr.right - wr.left;
-                            let h = wr.bottom - wr.top;
-                            place_window(hwnd, w, h, dock, &place);
                         } else if state.openness.cur > 0.9
                             && now_ms().saturating_sub(state.rail_opened_at) >= 300
                         {
@@ -968,21 +1106,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             // + 落点在环圆内（半径 ×1.08 容差）
                             let scale = state.scale;
                             let lm = LayoutMetrics::new(scale);
-                            let (bu, bv) = match state.dock {
-                                Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (state.height, state.width),
-                                _ => (state.width, state.height),
-                            };
+                            let (bu, bv) =
+                                placement::canonical_size(state.dock, state.width as i32, state.height as i32);
                             let (ux, uy) = window_to_canon(state.dock, ux, uy, bu, bv);
-                            let slot_h = lm.ring_d + 6.0 * scale + 16.0 * scale + lm.item_spacing;
                             let n = state.metrics.len().min(8);
-                            let expanded_h = (n as f32) * slot_h - lm.item_spacing + 46.0 * scale * 2.0;
+                            let expanded_h = lm.expanded_length(state.dock, n);
                             let dock_top = (bv - expanded_h) / 2.0;
-                            let start_y = dock_top + 46.0 * scale + lm.ring_d / 2.0;
-                            let mut cx = bu - lm.pill_w / 2.0;
-                            let _ = &mut cx;
+                            let cx = lm.ring_cross(state.dock, bu);
                             let hit_r = lm.ring_d / 2.0 * 1.08;
                             for i in 0..n {
-                                let cy = start_y + (i as f32) * slot_h;
+                                let cy = lm.ring_along(state.dock, dock_top, i);
                                 let dx = ux - cx;
                                 let dy = uy - cy;
                                 if dx * dx + dy * dy <= hit_r * hit_r {

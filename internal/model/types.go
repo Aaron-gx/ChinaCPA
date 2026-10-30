@@ -75,8 +75,11 @@ type QuotaInfo struct {
 
 // CheckinResult 签到结果。
 type CheckinResult struct {
-	OK            bool   `json:"ok"`
-	Already       bool   `json:"already,omitempty"` // 今日已签
+	OK      bool   `json:"ok"`
+	Already bool   `json:"already,omitempty"` // 今日已签
+	// Info 说明型结果（非失败）：平台无独立签到接口（发放由登录/服务端触发），
+	// 当日尚未观察到发放。前端渲染中性说明标签而非失败标签；调度层照常重试。
+	Info          bool   `json:"info,omitempty"`
 	Message       string `json:"message"`
 	CreditsEarned int64  `json:"credits_earned,omitempty"`
 }

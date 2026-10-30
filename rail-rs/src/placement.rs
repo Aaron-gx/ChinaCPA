@@ -59,6 +59,18 @@ impl Dock {
             Dock::Floating(v) => v,
         }
     }
+    /// 栏横置：环与文字沿厚度轴上下排布。
+    ///
+    /// **必须与 `canon_matrix` 的轴向分组完全一致**。那里把 `Floating(false)`
+    /// 与 `Top` 归为一类（都要转 90° 画），这里若只认 `Top`/`Bottom`，同一根
+    /// 自由横条就会「按横栏绘制、按竖栏定窗口尺寸」—— 画出来的东西跑到窗口
+    /// 外面，只剩左上角一块碎片。从顶栏拖离屏幕边得到的正是 `Floating(false)`。
+    pub fn lies_across(self) -> bool {
+        matches!(
+            self,
+            Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) | Dock::Floating(false)
+        )
+    }
     pub fn is_docked(self) -> bool {
         matches!(self, Dock::Edge(_))
     }
@@ -200,8 +212,17 @@ pub fn monitor_at(pt: POINT) -> Option<ScreenGeom> {
     }
 }
 
-/// 拖拽中的实时吸附判定（Pulse dragDock 的 y-down 移植）。
-/// pointer/rail 为屏幕坐标；vertical 为 rail 当前轴。
+/// 拖拽中的实时吸附判定（Pulse dragDock 的移植）。
+///
+/// 判据取「指针到屏幕边」与「栏的可视边缘到屏幕边」中**较近的那个**。
+///
+/// 只看指针时，横向长栏吸不上侧边：它展开有 400pt 宽，抓中段往右拖，
+/// 栏的右缘已经贴住屏幕右边，指针却还差两百多点，永远过不了 32pt 阈值
+/// —— 用户看到的就是「栏明明贴边了却不靠右」。竖栏窄，指针本来就在栏上，
+/// 两个判据结果一致，所以加这一条不影响它。
+///
+/// 拖拽时窗口就是栏本体（卡片在按下时已收起，不占额外宽度），
+/// `rail` 因此可以直接当作栏的可视边缘使用。
 pub fn drag_dock(
     pointer: POINT,
     rail: RECT,
@@ -213,22 +234,26 @@ pub fn drag_dock(
     if !snaps {
         return Dock::Floating(vertical);
     }
-    // 本实现的拖拽是"窗口整体跟随指针"，因此判据统一用指针到边的距离，
-    // 不能用 rail 自身边缘（那会恒差半个胶囊宽度，导致永远吸不上边）。
-    // Pulse 用 rail 边缘是因为它的 rail 在窗口内另有偏移。
     let px = pointer.x as f32;
     let py = pointer.y as f32;
-    let _ = rail;
+    let work = screen.work;
+
+    let d_top = (py - work.top as f32).min((rail.top - work.top) as f32);
+    let d_left = (px - work.left as f32).min((rail.left - work.left) as f32);
+    let d_bottom = (work.bottom as f32 - py).min((work.bottom - rail.bottom) as f32);
+    let d_right = (work.right as f32 - px).min((work.right - rail.right) as f32);
+
+    // 已停靠底部时保持：贴着屏幕自己的底边（不是工作区）就算还在底部。
     let stays_on_bottom =
         current == Dock::Edge(Edge::Bottom) && (screen.full.bottom - rail.bottom) as f32 <= DOCK_DISTANCE;
 
-    if py - screen.work.top as f32 <= DOCK_DISTANCE {
+    if d_top <= DOCK_DISTANCE {
         Dock::Edge(Edge::Top)
-    } else if stays_on_bottom || (screen.work.bottom as f32 - py) <= DOCK_DISTANCE {
+    } else if stays_on_bottom || d_bottom <= DOCK_DISTANCE {
         Dock::Edge(Edge::Bottom)
-    } else if px - screen.work.left as f32 <= DOCK_DISTANCE {
+    } else if d_left <= DOCK_DISTANCE {
         Dock::Edge(Edge::Left)
-    } else if (screen.work.right as f32 - px) <= DOCK_DISTANCE {
+    } else if d_right <= DOCK_DISTANCE {
         Dock::Edge(Edge::Right)
     } else {
         Dock::Floating(vertical)
@@ -267,19 +292,21 @@ pub fn position_from_ratios(h: f64, v: f64, room: RECT, rail_w: i32, rail_h: i32
 }
 
 /// 规范空间（右边缘竖栏）尺寸 → 窗口物理尺寸。
-/// Top/Bottom 需交换宽高。
+/// 横置的栏（顶/底/自由横条）交换宽高。
 pub fn window_size(dock: Dock, canon_w: i32, canon_h: i32) -> (i32, i32) {
-    match dock {
-        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (canon_h, canon_w),
-        _ => (canon_w, canon_h),
+    if dock.lies_across() {
+        (canon_h, canon_w)
+    } else {
+        (canon_w, canon_h)
     }
 }
 
 /// 窗口物理尺寸 → 规范空间尺寸（绘制用 U,V）。
 pub fn canonical_size(dock: Dock, win_w: i32, win_h: i32) -> (f32, f32) {
-    match dock {
-        Dock::Edge(Edge::Top) | Dock::Edge(Edge::Bottom) => (win_h as f32, win_w as f32),
-        _ => (win_w as f32, win_h as f32),
+    if dock.lies_across() {
+        (win_h as f32, win_w as f32)
+    } else {
+        (win_w as f32, win_h as f32)
     }
 }
 

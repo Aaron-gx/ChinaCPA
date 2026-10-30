@@ -138,7 +138,8 @@ func (s *Scheduler) CheckinAccount(a *model.Account) *model.CheckinResult {
 	var res *model.CheckinResult
 	if r, err := pr.Checkin(ctx, a); err != nil {
 		if err == provider.ErrNotSupported {
-			res = &model.CheckinResult{OK: false, Message: "该平台无每日签到"}
+			// 平台压根没有签到体系：说明型结果（非失败），面板以中性标签展示
+			res = &model.CheckinResult{OK: false, Info: true, Message: "该平台无每日签到"}
 		} else {
 			res = &model.CheckinResult{OK: false, Message: err.Error()}
 		}
@@ -157,11 +158,16 @@ func (s *Scheduler) CheckinAccount(a *model.Account) *model.CheckinResult {
 		}
 	}
 	s.st.RecordCheckin(a.Provider, a.UID, *res)
-	// 成功或已签：记当天完成（避免同一小时窗口内反复触发）
+	// 成功或已签：记当天完成（避免同一小时窗口内反复触发）。
+	// Info（无签到接口的说明型结果）不算完成：当日在后续窗口继续确认发放状态。
 	if res.OK || res.Already {
 		s.lastCheckin[a.Provider] = time.Now().Format("2006-01-02")
 	}
-	log.Printf("SCHED: [%s] 签到: %s", a.Provider+"/"+label(a), res.Message)
+	if res.Info {
+		log.Printf("SCHED: [%s] 签到: %s（说明型，非失败，稍后自动复查）", a.Provider+"/"+label(a), res.Message)
+	} else {
+		log.Printf("SCHED: [%s] 签到: %s", a.Provider+"/"+label(a), res.Message)
+	}
 	// 签到后立刻刷新额度
 	go s.refreshQuota(a)
 	return res
