@@ -529,55 +529,30 @@ code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;bo
   font-variant-numeric:tabular-nums}
 .acct-filter button:hover{border-color:var(--accent);color:var(--accent)}
 .acct-filter button.on{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
-.acct-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(316px,1fr));gap:14px}
-.acct-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px 16px;
-  box-shadow:var(--shadow);display:flex;flex-direction:column;gap:11px;
-  animation:fadeUp .35s both;animation-delay:calc(min(var(--i),10)*35ms);
-  transition:box-shadow .2s,border-color .2s,transform .2s cubic-bezier(.2,.8,.3,1);
-  min-width:0;position:relative;overflow:hidden}
-/* 平台色顶线：hover 时浮现，呼应左上角平台标签色 */
-.acct-card::before{content:"";position:absolute;left:0;right:0;top:0;height:3px;background:var(--pc,var(--accent));
-  transform:scaleX(0);transform-origin:left;transition:transform .25s cubic-bezier(.2,.8,.3,1)}
-.acct-card:hover{box-shadow:var(--shadow-lift);border-color:var(--border2);transform:translateY(-2px)}
-.acct-card:hover::before{transform:scaleX(1)}
-.acct-card.is-off{opacity:.62}
-.acct-head{display:flex;align-items:flex-start;gap:9px;min-width:0}
-.acct-id{min-width:0;flex:1}
-.acct-name{font-size:13.5px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.acct-sub{font-size:11px;color:var(--muted);margin-top:2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.acct-metrics{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-.acct-metric{background:var(--bg-soft);border-radius:9px;padding:7px 10px;min-width:0;
-  display:flex;flex-direction:column;gap:4px}
-.acct-metric .k{font-size:10.5px;color:var(--faint);letter-spacing:.05em;text-transform:uppercase;
-  white-space:nowrap;display:flex;align-items:center;justify-content:space-between;gap:6px}
-.acct-metric .k .pct{font-weight:600;letter-spacing:0;text-transform:none;color:var(--green);font-variant-numeric:tabular-nums}
-.acct-metric .k .pct.warn{color:var(--yellow)}
-.acct-metric .k .pct.full{color:var(--red)}
-.acct-metric .k .pct.nolim{color:var(--faint);font-weight:500;font-size:10px}
-.acct-metric .v{font-size:13.5px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.acct-metric .v .mini{font-weight:400;font-size:11.5px;color:var(--muted)}
-/* 进度条内嵌「剩余」框底部：轨道常驻（无上限留空轨），保证卡片等高 */
-.acct-bar{height:5px;border-radius:3px;background:var(--card);overflow:hidden;margin-top:auto}
-.acct-bar>i{display:block;height:100%;border-radius:3px;background:var(--green);transition:width .5s cubic-bezier(.22,.9,.28,1)}
-.acct-bar>i.warn{background:var(--yellow)}
-.acct-bar>i.full{background:var(--red)}
-/* 备注内嵌「已用」框底部：无内容时占位保持等高 */
-.m-note{font-size:10.5px;color:var(--muted);line-height:1.4;height:15px;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap;margin-top:auto}
-.m-note.ph{color:var(--faint);opacity:.5}
-.acct-tags{display:flex;gap:6px;align-items:center;min-height:22px;overflow:hidden;flex-wrap:nowrap}
-.acct-tags .tag{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0}
-.acct-tags .tag.chk{max-width:46%;flex-shrink:1}
-/* 卡片动作按钮：ghost 风格（无底色），hover 才浮现边框与文字色，弱化操作噪音 */
-.acct-acts{display:flex;gap:6px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--border);margin-top:auto}
-.acct-acts .btn{padding:4px 10px;font-size:11.5px;border-radius:8px;background:transparent;border-color:transparent;
+/* 账号池表格：一行一账号；额度单元格内嵌迷你进度条；操作按钮 ghost 风格 */
+#acctTable td{vertical-align:middle}
+#acctTable tr.is-off{opacity:.55}
+.aq-nick{font-weight:600;font-size:13px;display:inline-block;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom}
+.aq{display:flex;align-items:center;gap:7px;white-space:nowrap}
+.aq b{font-size:13px;font-variant-numeric:tabular-nums}
+.aq .mini{font-weight:400;font-size:11px;color:var(--muted)}
+.aq-bar{width:56px;height:5px;border-radius:3px;background:var(--bg-soft);overflow:hidden;flex:none}
+.aq-bar>i{display:block;height:100%;border-radius:3px;background:var(--green);transition:width .5s cubic-bezier(.22,.9,.28,1)}
+.aq-bar>i.warn{background:var(--yellow)}
+.aq-bar>i.full{background:var(--red)}
+.aq-pct{font-size:11px;font-weight:600;color:var(--green);font-variant-numeric:tabular-nums;min-width:32px}
+.aq-pct.warn{color:var(--yellow)}
+.aq-pct.full{color:var(--red)}
+.aq-pct.nolim{color:var(--faint);font-weight:400;font-size:10.5px}
+.aq-detail{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
+.aq-acts{white-space:nowrap}
+.aq-acts .btn{padding:3px 9px;font-size:11.5px;border-radius:8px;background:transparent;border-color:transparent;
   color:var(--muted);box-shadow:none}
-.acct-acts .btn:hover{background:var(--bg-soft);border-color:var(--border2);color:var(--text);transform:none;box-shadow:none}
-.acct-acts .btn.danger:hover{background:var(--red-soft);border-color:transparent;color:var(--red)}
+.aq-acts .btn:hover{background:var(--bg-soft);border-color:var(--border2);color:var(--text);transform:none;box-shadow:none}
+.aq-acts .btn.danger:hover{background:var(--red-soft);border-color:transparent;color:var(--red)}
 @media (max-width:640px){
-  .acct-grid{grid-template-columns:1fr;gap:11px}
-  .acct-metrics{grid-template-columns:1fr 1fr}
+  .aq-nick{max-width:90px}
+  .aq-detail{max-width:120px}
 }
 
 /* ── 网关信息 ─────────────────────────── */
@@ -1212,7 +1187,14 @@ section h2{letter-spacing:0.04em !important}
               style="padding:5px 12px;font-size:12.5px;border-radius:99px;border:1px solid var(--border);background:var(--bg-soft);color:var(--text);font-family:inherit;width:170px">
           </div>
         </div>
-        <div class="acct-grid" id="acctGrid"></div>
+        <div class="tblwrap" id="acctWrap">
+        <table id="acctTable">
+          <thead><tr>
+            <th>状态</th><th>平台</th><th>账号</th><th>剩余额度</th><th>已用</th><th>签到</th><th>Token</th><th>负载</th><th style="min-width:230px">操作</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+        </div>
         <div class="empty" id="acctEmpty" style="display:none">
           当前账号池暂未接入任何服务商凭据，请点击右上角「添加账号」接入上游实例<br>
           <span class="mini" style="color:var(--faint)">支持 WorkBuddy / Qwen / Trae / Qoder / 千问办公 / 豆包 等平台，接入后自动执行凭据托管与额度同步</span>
@@ -2207,10 +2189,10 @@ function renderAcctFilter(){
 }
 function setAcctFilter(k){ACCT_FILTER=k;renderAcctFilter();renderAcctCards()}
 
-/* 卡片主体渲染（筛选 + 搜索后） */
+/* 表格主体渲染（筛选 + 搜索后）：一行一账号，列对齐可扫读 */
 function renderAcctCards(){
-  const grid=$('#acctGrid');
-  if(!grid)return;
+  const wrap=$('#acctWrap'), tb=$('#acctTable tbody');
+  if(!tb)return;
   const q=(($('#acctSearch')&&$('#acctSearch').value)||'').trim().toLowerCase();
   const all=ACCT_LAST||[];
   const list=all.filter(a=>{
@@ -2219,7 +2201,7 @@ function renderAcctCards(){
     return [a.nickname,a.uid,a.provider_name,a.provider,PROV_NAMES[a.provider]]
       .filter(Boolean).some(s=>String(s).toLowerCase().includes(q));
   });
-  grid.innerHTML=list.map((a,i)=>{
+  tb.innerHTML=list.map((a,i)=>{
     /* 额度：数值 + 百分比进度条（仅当有明确上限） */
     let quotaMain='—',quotaSub='',pct=-1,usedTxt='—',detail='';
     if(a.quota){
@@ -2251,15 +2233,15 @@ function renderAcctCards(){
     if(a.status==='disabled'){cls='disabled';txt='已禁用'}
     if(a.status==='expired'){cls='expired';txt='令牌已过期'}
     if(a.status==='relogin'){cls='expired';txt='凭证失效'}
-    /* 签到：统一短标签，完整信息走 tooltip（长文案不再撑高卡片或挤占标签行） */
+    /* 签到：短标签，完整信息走 tooltip */
     let chk='<span class="tag plain">—</span>';
     if(a.checkin_today){
       const c=a.checkin_today;
       const full=String(c.message||'');
       const tip=full?` title="${esc(full)}"`:(c.info?' title="该平台无签到体系"':'');
-      if(c.ok)chk=`<span class="tag ok chk"${tip}>✓ ${c.already?'已签':'签到成功'}</span>`;
-      else if(c.info)chk=`<span class="tag info chk"${tip}>${esc(full||'无签到接口')}</span>`;
-      else chk=`<span class="tag cooldown chk"${tip}>${esc(full?full.slice(0,8)+'…':'未签')}</span>`;
+      if(c.ok)chk=`<span class="tag ok"${tip}>✓ ${c.already?'已签':'签到成功'}</span>`;
+      else if(c.info)chk=`<span class="tag info"${tip}>${esc(full||'无签到接口')}</span>`;
+      else chk=`<span class="tag cooldown"${tip}>${esc(full?full.slice(0,8)+'…':'未签')}</span>`;
     }
     /* Token 有效期 */
     const days=a.token_days_left;
@@ -2268,49 +2250,32 @@ function renderAcctCards(){
     const intl=(a.realm==='global'&&a.provider!=='workbuddy-intl'&&a.provider!=='qoder-intl')?'·国际':'';
     const shortName=({workbuddy:'WB','workbuddy-intl':'WB·INTL',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD',qwenwork:'QWW',doubao:'DB'})[a.provider]||a.provider;
     const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${shortName}${intl}</span>`;
-    const pcVar=({workbuddy:'--blue','workbuddy-intl':'--teal',qwen:'--purple',trae:'--accent',qoder:'--teal','qoder-intl':'--green',qwenwork:'--pink',doubao:'--accent2'})[a.provider]||'--accent';
-    /* 进度条内嵌「剩余」框底部：有上限显百分比+彩条，无上限显「无上限」灰字（避免误以为漏渲染） */
+    /* 额度单元格：数值 + 行内进度条（有上限彩条+百分比，无上限灰字标注） */
     const barCls=pct>=100?'full':pct>=70?'warn':'';
-    const bar=pct>=0
-      ?`<div class="acct-bar"><i class="${barCls}" style="width:${pct}%"></i></div>`
-      :`<div class="acct-bar none"></div>`;
-    const pctTag=pct>=0?`<b class="pct ${barCls}">${Math.round(pct)}%</b>`:'<b class="pct nolim">无上限</b>';
-    return `<div class="acct-card${a.disabled?' is-off':''}" style="--i:${i};--pc:var(${pcVar})">
-      <div class="acct-head">
-        <div class="acct-id">
-          <div class="acct-name" title="${esc(a.nickname||a.uid)}">${esc(a.nickname||a.uid)}</div>
-          <div class="acct-sub">${provTag}<span class="mini">${esc(a.provider_name||'')}</span></div>
-        </div>
-        <span class="tag ${cls}">${esc(txt)}</span>
-      </div>
-      <div class="acct-metrics">
-        <div class="acct-metric">
-          <div class="k">剩余额度${pctTag}</div>
-          <div class="v">${quotaMain}${quotaSub?` <span class="mini">${esc(quotaSub)}</span>`:''}</div>
-          ${bar}
-        </div>
-        <div class="acct-metric">
-          <div class="k">已用</div>
-          <div class="v">${usedTxt}</div>
-          ${detail?`<div class="m-note" title="${esc(detail)}">${esc(detail)}</div>`:'<div class="m-note ph">·</div>'}
-        </div>
-      </div>
-      <div class="acct-tags">
-        ${chk}
-        <span class="tag ${expCls}">Token ${esc(exp)}</span>
-        ${a.inflight>0?`<span class="tag ok">运行中 ${a.inflight}</span>`:'<span class="tag plain">空闲</span>'}
-      </div>
-      <div class="acct-acts">
+    const quotaCell=`<div class="aq"><b>${quotaMain}</b>${quotaSub?`<span class="mini">${esc(quotaSub)}</span>`:''}`
+      +(pct>=0
+        ?`<span class="aq-bar"><i class="${barCls}" style="width:${pct}%"></i></span><span class="aq-pct ${barCls}">${Math.round(pct)}%</span>`
+        :`<span class="aq-pct nolim">无上限</span>`)
+      +`</div>`+(detail?`<div class="mini aq-detail" title="${esc(detail)}">${esc(detail)}</div>`:'');
+    return `<tr style="--r:${i}"${a.disabled?' class="is-off"':''}>
+      <td><span class="tag ${cls}">${esc(txt)}</span></td>
+      <td>${provTag}<div class="mini" style="margin-top:2px">${esc(a.provider_name||'')}</div></td>
+      <td><span class="aq-nick" title="${esc(a.nickname||a.uid)}">${esc(a.nickname||a.uid)}</span>${a.needs_relogin?'<div class="mini" style="color:var(--red)">需重新登录</div>':''}</td>
+      <td>${quotaCell}</td>
+      <td><b>${usedTxt}</b></td>
+      <td>${chk}</td>
+      <td><span class="tag ${expCls}">${esc(exp)}</span></td>
+      <td>${a.inflight>0?`<span class="tag ok">运行中 ${a.inflight}</span>`:'<span class="tag plain">空闲</span>'}</td>
+      <td class="aq-acts">
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','checkin')">签到巡检</button>
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','quota')">同步配额</button>
         <button class="btn sm" onclick="act('${a.provider}','${a.uid}','toggle')">${a.disabled?'启用':'禁用'}</button>
         ${a.needs_relogin?`<button class="btn sm" onclick="act('${a.provider}','${a.uid}','resume')">连接重试</button>`:''}
         <button class="btn sm danger" onclick="delAcct('${a.provider}','${a.uid}')">移除</button>
-      </div>
-    </div>`;
+      </td></tr>`;
   }).join('');
   const hasAccts=all.length>0;
-  grid.style.display=hasAccts?'':'none';
+  wrap.style.display=hasAccts?'':'none';
   const emptyEl=$('#acctEmpty');
   if(emptyEl){
     if(!hasAccts){emptyEl.style.display='block';emptyEl.innerHTML='当前账号池暂未接入任何服务商凭据，请点击右上角「添加账号」接入上游实例<br><span class="mini" style="color:var(--faint)">支持 WorkBuddy / Qwen / Trae / Qoder / 千问办公 / 豆包 等平台，接入后自动执行凭据托管与额度同步</span>'}
