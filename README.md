@@ -1,5 +1,7 @@
 # ChinaCPA 🇨🇳 国产大模型反代网关
 
+> ⚠️ **本项目仅供个人学习研究使用**，请勿用于任何商业用途或违反各平台服务条款的场景。
+>
 > 本仓库为 [XingQiPan/ChinaCPA](https://github.com/XingQiPan/ChinaCPA) 的**二创版本**（个人 fork 持续开发），详见文末「参考」。
 >
 > 一站式纳管多家国产 AI 平台账号，自动签到攒积分、自动刷新额度、自动统计计费，
@@ -311,8 +313,8 @@ internal/
 
 ## ⚠️ 注意
 
-- 本项目仅供学习研究，请遵守各平台服务条款；上游风控收紧时对应通道可能失效
-- 各平台凭证即金钱：`data/` 目录请妥善保管，不要外传
+- **本项目仅限个人学习研究使用**：接口逆向、账号纳管、额度反代均为技术探索性质，请勿用于商业用途、转售分发或任何违反各平台服务条款的场景；使用者需自行承担全部风险与后果
+- 上游风控收紧时对应通道可能失效；各平台凭证即金钱：`data/` 目录请妥善保管，不要外传
 - WorkBuddy 刷新 token 有防重放（12153），本工具已做单账号串行刷新；多进程同时跑同一 data 目录有风险
 - Trae 登录回调要求面板与浏览器同机（127.0.0.1 回调）或局域网可达；服务器部署时可用「粘贴凭证」方式纳管
 
@@ -326,6 +328,10 @@ internal/
 - [connectedGraph/trae2api-web](https://github.com/connectedGraph/trae2api-web)（Trae SOLO 通道）
 - [router-for-me/CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)（Qwen OAuth，v6.0.0 实现）
 - [ardeyouxipianyi/workbuddy2api-hub](https://github.com/ardeyouxipianyi/workbuddy2api-hub)（计价/用量思路）
+
+桌面浮动栏（`rail-rs/`）的悬浮交互与视觉设计参考自：
+
+- [qunqin24/Pulse](https://github.com/qunqin24/Pulse)（macOS 屏幕边缘 AI 用量监视器，Apache-2.0；本项目以 Rust + Direct2D 为其 Windows 复刻实现）
 
 ## License
 
