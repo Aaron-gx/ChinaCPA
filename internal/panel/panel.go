@@ -46,8 +46,43 @@ type Panel struct {
 	mu     sync.Mutex
 	tokens map[string]*loginTicket // 登录票据（轮询用）
 
+	// 历史费用缓存：7/30 日全量扫描请求日志较贵，5 分钟复用
+	//（面板 25s 轮询与仪表板/用量页共用）
+	histCostMu  sync.Mutex
+	histCostAt  time.Time
+	histCostVal [2]float64 // [d7, d30]
+
 	eventMu   sync.Mutex
 	eventSubs map[chan struct{}]struct{} // SSE 订阅者集合
+}
+
+// histCosts 近 7/30 日折合成本：从持久化请求日志的 CostByModel 按当前价格现算
+//（JSONL 日汇总无模型明细，无法重算；改价后历史成本自动跟价）。
+func (p *Panel) histCosts() (float64, float64) {
+	p.histCostMu.Lock()
+	defer p.histCostMu.Unlock()
+	if time.Since(p.histCostAt) < 5*time.Minute {
+		return p.histCostVal[0], p.histCostVal[1]
+	}
+	cost := func(daysAgo int) float64 {
+		if p.rlog == nil {
+			return 0
+		}
+		now := time.Now()
+		todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		_, stats, err := p.rlog.Query(reqlog.QueryOpts{From: todayStart.AddDate(0, 0, -daysAgo).Unix(), To: now.Unix(), Limit: 1})
+		if err != nil {
+			return 0
+		}
+		var c float64
+		for _, mc := range stats.CostByModel {
+			c += p.usage.CostFull(mc.Model, mc.Prompt, mc.Complete, mc.Cache, 0, "")
+		}
+		return c
+	}
+	p.histCostVal = [2]float64{cost(6), cost(29)}
+	p.histCostAt = time.Now()
+	return p.histCostVal[0], p.histCostVal[1]
 }
 
 type loginTicket struct {
@@ -355,7 +390,7 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	// 近 7/30 日 token 汇总
 	days := p.usage.HistoryDays(30)
-	sumDays := func(list []usage.DayTotal) map[string]int64 {
+	sumDays := func(list []usage.DayTotal) map[string]any {
 		var reqs, pr, cp, tt, ca int64
 		for _, d := range list {
 			reqs += d.Requests
@@ -364,9 +399,15 @@ func (p *Panel) handleOverview(w http.ResponseWriter, r *http.Request) {
 			tt += d.Total
 			ca += d.Cache
 		}
-		return map[string]int64{"requests": reqs, "prompt_tokens": pr, "completion_tokens": cp, "total_tokens": tt, "cache_tokens": ca}
+		return map[string]any{"requests": reqs, "prompt_tokens": pr, "completion_tokens": cp, "total_tokens": tt, "cache_tokens": ca}
 	}
-	usageDays := map[string]any{"d7": sumDays(days[len(days)-7:]), "d30": sumDays(days)}
+	d7, d30 := sumDays(days[len(days)-7:]), sumDays(days)
+	// 7/30 日费用：JSONL 日汇总无按模型明细、无法按当前价重算 → 从持久化请求日志
+	// 的 CostByModel 现算；全量扫描有成本，结果缓存 5 分钟（面板 25s 轮询复用）。
+	c7, c30 := p.histCosts()
+	d7["cost_cny"] = c7
+	d30["cost_cny"] = c30
+	usageDays := map[string]any{"d7": d7, "d30": d30}
 	// 签到调度信息
 	schedule := map[string]any{
 		"checkin_enabled":       p.cfg.Schedule.CheckinEnabled,

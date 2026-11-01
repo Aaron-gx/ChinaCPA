@@ -2102,8 +2102,8 @@ function renderDashHist(o){
 
   const histRows=[
     ['今日',today.requests||0,today.prompt_tokens||0,today.cache_tokens||0,today.completion_tokens||0,today.total_tokens||0,today.cost_cny||0],
-    ['近 7 日',d7s.requests||0,d7s.prompt_tokens||0,d7s.cache_tokens||0,d7s.completion_tokens||0,d7s.total_tokens||0,null],
-    ['近 30 日',d30.requests||0,d30.prompt_tokens||0,d30.cache_tokens||0,d30.completion_tokens||0,d30.total_tokens||0,null],
+    ['近 7 日',d7s.requests||0,d7s.prompt_tokens||0,d7s.cache_tokens||0,d7s.completion_tokens||0,d7s.total_tokens||0,d7s.cost_cny],
+    ['近 30 日',d30.requests||0,d30.prompt_tokens||0,d30.cache_tokens||0,d30.completion_tokens||0,d30.total_tokens||0,d30.cost_cny],
   ];
   $('#dashHistTbl').innerHTML=`<div class="tblwrap"><table class="mini-tbl">
     <thead><tr><th>时段</th><th class="r">请求</th><th class="r">输入</th><th class="r">缓存</th>
