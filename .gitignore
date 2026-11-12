@@ -16,3 +16,6 @@ rail.json
 
 # rail-rs（Rust 浮动栏）构建产物
 rail-rs/target/
+
+# ZCode 本地会话状态（工具产物，不入库）
+.mimosa/

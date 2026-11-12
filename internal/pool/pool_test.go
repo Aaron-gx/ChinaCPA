@@ -66,7 +66,7 @@ func TestPickRoundRobin(t *testing.T) {
 	p, _ := newTestPool(t)
 	seen := map[string]int{}
 	for i := 0; i < 6; i++ {
-		a, err := p.Pick("test", "m1", "")
+		a, err := p.Pick("test", "m1", "", nil)
 		if err != nil {
 			t.Fatalf("pick: %v", err)
 		}
@@ -85,9 +85,9 @@ func TestPickRoundRobin(t *testing.T) {
 // TestPickSticky 同一 sessionKey 固定同一账号。
 func TestPickSticky(t *testing.T) {
 	p, _ := newTestPool(t)
-	a1, _ := p.Pick("test", "m1", "sess-1")
+	a1, _ := p.Pick("test", "m1", "sess-1", nil)
 	for i := 0; i < 5; i++ {
-		a, err := p.Pick("test", "m1", "sess-1")
+		a, err := p.Pick("test", "m1", "sess-1", nil)
 		if err != nil {
 			t.Fatalf("pick: %v", err)
 		}
@@ -97,11 +97,81 @@ func TestPickSticky(t *testing.T) {
 	}
 	other := map[string]bool{}
 	for i := 0; i < 4; i++ {
-		a, _ := p.Pick("test", "m1", "sess-x"+string(rune('a'+i)))
+		a, _ := p.Pick("test", "m1", "sess-x"+string(rune('a'+i)), nil)
 		other[a.UID] = true
 	}
 	if len(other) < 2 {
 		t.Fatalf("不同会话应覆盖多个账号，实际 %v", other)
+	}
+}
+
+// TestPickAccounts 渠道账号白名单：只在名单内选号；空名单 = 全部；
+// 交集为空报错；不同白名单的会话黏性互不干扰。
+func TestPickAccounts(t *testing.T) {
+	p, _ := newTestPool(t) // 账号 a1、a2
+	// 白名单只含 a1：反复选都必须是 a1
+	for i := 0; i < 6; i++ {
+		a, err := p.Pick("test", "m1", "", []string{"a1"})
+		if err != nil {
+			t.Fatalf("pick: %v", err)
+		}
+		if a.UID != "a1" {
+			t.Fatalf("白名单 [a1] 却选中 %s", a.UID)
+		}
+	}
+	// 名单含不存在账号：忽略之，仍能选到 a2
+	a, err := p.Pick("test", "m1", "", []string{"ghost", "a2"})
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+	if a.UID != "a2" {
+		t.Fatalf("白名单 [ghost,a2] 应选 a2，实际 %s", a.UID)
+	}
+	// 空名单 = 全部账号（轮询覆盖两个）
+	seen := map[string]bool{}
+	for i := 0; i < 4; i++ {
+		a, err := p.Pick("test", "m1", "", nil)
+		if err != nil {
+			t.Fatalf("pick: %v", err)
+		}
+		seen[a.UID] = true
+	}
+	if len(seen) != 2 {
+		t.Fatalf("空名单应覆盖全部账号，实际 %v", seen)
+	}
+	// 交集为空：账号禁用后白名单只剩禁用号 → 报错
+	if err := p.SetDisabled("test", "a1", true); err != nil {
+		t.Fatalf("disable a1: %v", err)
+	}
+	if _, err := p.Pick("test", "m1", "", []string{"a1"}); err == nil {
+		t.Fatal("白名单内账号全部禁用时应报错")
+	}
+	// 会话黏性按白名单隔离：同 sessionKey 在 [a2] 名单下不得黏到 a1
+	if err := p.SetDisabled("test", "a1", false); err != nil {
+		t.Fatalf("enable a1: %v", err)
+	}
+	first, err := p.Pick("test", "m1", "sess-acct", []string{"a2"})
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+	if first.UID != "a2" {
+		t.Fatalf("白名单 [a2] 会话应选 a2，实际 %s", first.UID)
+	}
+	// 同会话、无白名单：允许黏到别的号（key 带指纹，不会顶掉上面的绑定）
+	for i := 0; i < 3; i++ {
+		a, err := p.Pick("test", "m1", "sess-acct", nil)
+		if err != nil {
+			t.Fatalf("pick: %v", err)
+		}
+		_ = a
+	}
+	// 再回到 [a2] 白名单：仍黏 a2
+	again, err := p.Pick("test", "m1", "sess-acct", []string{"a2"})
+	if err != nil {
+		t.Fatalf("pick: %v", err)
+	}
+	if again.UID != "a2" {
+		t.Fatalf("白名单黏性被顶掉：期望 a2，实际 %s", again.UID)
 	}
 }
 
@@ -115,14 +185,14 @@ func TestMarkErrorNeedsRelogin(t *testing.T) {
 	if !p.Accounts()[0].NeedsRelogin {
 		t.Fatal("期望账号被标记需重新登录")
 	}
-	if _, err := p.Pick("test", "m1", ""); err == nil {
+	if _, err := p.Pick("test", "m1", "", nil); err == nil {
 		t.Fatal("全部需重新登录的账号不应再被选中")
 	}
 	// 恢复后重新可用
 	if !p.ClearNeedsRelogin("test", "a1") {
 		t.Fatal("ClearNeedsRelogin 应返回 true")
 	}
-	if _, err := p.Pick("test", "m1", ""); err != nil {
+	if _, err := p.Pick("test", "m1", "", nil); err != nil {
 		t.Fatalf("恢复后应可再选: %v", err)
 	}
 }
@@ -130,7 +200,7 @@ func TestMarkErrorNeedsRelogin(t *testing.T) {
 // TestAddAccountClearsRelogin 重新导入账号时清除标记。
 func TestAddAccountClearsRelogin(t *testing.T) {
 	p, _ := newTestPool(t)
-	a, _ := p.Pick("test", "m1", "")
+	a, _ := p.Pick("test", "m1", "", nil)
 	p.MarkError(a, "m1", &provider.Error{Kind: provider.ErrAuth, Msg: "expired"})
 	if !a.NeedsRelogin {
 		t.Fatal("前置：需标记")
@@ -231,7 +301,7 @@ func TestPickLeastInflight(t *testing.T) {
 	p.Acquire(&model.Account{Provider: "test", UID: "a1"})
 	// 连续选 6 次，应全部命中空闲的 a2
 	for i := 0; i < 6; i++ {
-		a, err := p.Pick("test", "m1", "")
+		a, err := p.Pick("test", "m1", "", nil)
 		if err != nil {
 			t.Fatalf("pick: %v", err)
 		}
@@ -241,7 +311,7 @@ func TestPickLeastInflight(t *testing.T) {
 	}
 	// 释放 a1 一个后，a1 仍比 a2 忙（4 vs 0），继续选 a2
 	p.Release(&model.Account{Provider: "test", UID: "a1"})
-	a, _ := p.Pick("test", "m1", "")
+	a, _ := p.Pick("test", "m1", "", nil)
 	if a.UID != "a2" {
 		t.Fatalf("a1 仍忙，应选 a2，实际 %s", a.UID)
 	}
@@ -252,7 +322,7 @@ func TestPickLeastInflight(t *testing.T) {
 	p.Release(&model.Account{Provider: "test", UID: "a1"})
 	found := false
 	for i := 0; i < 10; i++ {
-		a, _ := p.Pick("test", "m1", "")
+		a, _ := p.Pick("test", "m1", "", nil)
 		if a.UID == "a1" {
 			found = true
 			break

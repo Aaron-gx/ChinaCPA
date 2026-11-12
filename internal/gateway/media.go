@@ -151,7 +151,7 @@ func (g *Gateway) tryImage(ctx context.Context, ig provider.ImageGenerator, ch p
 	tried := map[string]bool{}
 	var lastErr error
 	for {
-		a, perr := g.pool.Pick(ch.PID, ch.Model, "")
+		a, perr := g.pool.Pick(ch.PID, ch.Model, "", ch.Accounts)
 		if perr != nil {
 			break
 		}
@@ -463,7 +463,7 @@ func (g *Gateway) tryVideoCreate(ctx context.Context, vg provider.VideoGenerator
 	var lastErr error
 	var lastAcct *model.Account
 	for {
-		a, perr := g.pool.Pick(ch.PID, ch.Model, "")
+		a, perr := g.pool.Pick(ch.PID, ch.Model, "", ch.Accounts)
 		if perr != nil {
 			break
 		}

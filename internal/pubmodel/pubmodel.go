@@ -18,6 +18,9 @@ type Channel struct {
 	Provider string `json:"provider"` // workbuddy / qwen / trae / qoder / qoder-intl
 	Model    string `json:"model"`    // 上游模型裸名（不带前缀）
 	Note     string `json:"note,omitempty"`
+	// Accounts 账号 UID 白名单：该渠道只在这些账号里选路；
+	// 空 = 使用该平台全部可用账号（兼容存量配置）。
+	Accounts []string `json:"accounts,omitempty"`
 }
 
 // Pricing 单价。对话模型用 Input/Output/Cache（$/1M tokens）；
@@ -66,6 +69,22 @@ func normalizeType(t string) string {
 	default:
 		return ""
 	}
+}
+
+// normalizeAccounts 归一化渠道账号白名单：trim、去重、保序；
+// 空结果归一为 nil（omitempty 下不落盘，语义 = 全部账号）。
+func normalizeAccounts(acs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, u := range acs {
+		u = strings.TrimSpace(u)
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		out = append(out, u)
+	}
+	return out
 }
 
 // Config 发布模型配置文件。
@@ -231,6 +250,7 @@ func (m *Manager) Save(cfg *Config) error {
 			if ch.Provider == "" || ch.Model == "" {
 				return fmt.Errorf("模型 %q 存在未选平台/模型的渠道", mo.ID)
 			}
+			ch.Accounts = normalizeAccounts(ch.Accounts)
 		}
 	}
 	sort.SliceStable(cfg.Models, func(i, j int) bool { return strings.ToLower(cfg.Models[i].ID) < strings.ToLower(cfg.Models[j].ID) })

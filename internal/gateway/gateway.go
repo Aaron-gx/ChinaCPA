@@ -234,7 +234,7 @@ func sessionKeyOf(body []byte) string {
 // 失败返回聚合错误信息与账号级尝试轨迹（不写响应，供上层跨渠道重试）。
 // trail 形如 "a4ad5f80 ✗429…; f029fc7a ✗429…"，写入请求日志的失败转移链路，
 // 让「渠道内切账号」在面板上可见。
-func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey, client string) (*openAIStream, *provider.Error, int, []byte, string) {
+func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body []byte, sessionKey, client string, accounts []string) (*openAIStream, *provider.Error, int, []byte, string) {
 	pr, ok := g.pool.Provider(pid)
 	if !ok {
 		return nil, &provider.Error{Kind: provider.ErrClient, Msg: "未知平台 " + pid}, 0, nil, ""
@@ -248,7 +248,7 @@ func (g *Gateway) tryProviderStream(ctx context.Context, pid, mname string, body
 	}
 	tried := map[string]bool{}
 	for {
-		a, perr := g.pool.Pick(pid, mname, sessionKey)
+		a, perr := g.pool.Pick(pid, mname, sessionKey, accounts)
 		if perr != nil {
 			break
 		}
@@ -384,7 +384,7 @@ func (g *Gateway) tryRouteChannels(ctx context.Context, route *pool.Route, body 
 		if ctx.Err() != nil {
 			break
 		}
-		s, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey, client)
+		s, err, status, respBody, trail := g.tryProviderStream(ctx, ch.PID, ch.Model, body, sessionKey, client, ch.Accounts)
 		if s != nil {
 			g.bumpChannel(route, ch, true)
 			out = append(out, reqlog.Attempt(ch.PID, ch.Model, true, trail))

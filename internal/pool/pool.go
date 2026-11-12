@@ -262,10 +262,18 @@ func (p *Pool) SetDisabled(providerID, uid string, disabled bool) error {
 // 自动换下一个并重新黏住。sessionKey 为空（简单调用）时优先选「实时负载最低」的账号
 // （进行中请求数最少），负载相同再按 provider+model 轮询，避免全部流量压到第一个账号。
 // 冷却是软性的：所有账号都在冷却中时仍照常尝试，避免冷却窗口内的请求被硬拒。
-func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, error) {
+// accounts 非空时为渠道级账号白名单：只在名单内选号（与可用集合取交集），
+// 交集为空直接报错；为空 = 全部可用账号（原行为）。
+func (p *Pool) Pick(providerID, modelName, sessionKey string, accounts []string) (*model.Account, error) {
 	avail := p.AccountsByModel(providerID, modelName)
 	if len(avail) == 0 {
 		avail = p.AccountsBy(providerID)
+	}
+	if len(accounts) > 0 {
+		avail = filterByAccounts(avail, accounts)
+		if len(avail) == 0 {
+			return nil, fmt.Errorf("provider %s 渠道所选账号范围内无可用账号（未添加、已禁用或需重新登录）", providerID)
+		}
 	}
 	if len(avail) == 0 {
 		return nil, fmt.Errorf("provider %s 无可用账号（未添加、已禁用或需重新登录）", providerID)
@@ -274,6 +282,12 @@ func (p *Pool) Pick(providerID, modelName, sessionKey string) (*model.Account, e
 		return p.pickLeastInflight(providerID, modelName, avail), nil
 	}
 	mapKey := providerID + "|" + sessionKey
+	if len(accounts) > 0 {
+		// 白名单指纹进 key：同一会话打到不同白名单的渠道时互不顶掉黏性
+		fp := append([]string(nil), accounts...)
+		sort.Strings(fp)
+		mapKey += "|accts:" + strings.Join(fp, ",")
+	}
 	now := time.Now()
 	p.stickyMu.Lock()
 	defer p.stickyMu.Unlock()
@@ -307,6 +321,22 @@ func (p *Pool) roundRobin(providerID, modelName string, avail []*model.Account) 
 	p.rr[key] = n + 1
 	p.rrMu.Unlock()
 	return avail[n%uint64(len(avail))]
+}
+
+// filterByAccounts 按渠道账号白名单过滤 avail：保持 avail 原有顺序，
+// 只留 UID 在名单内的账号。名单外的 UID 自然忽略（可能已被移除）。
+func filterByAccounts(avail []*model.Account, accounts []string) []*model.Account {
+	set := make(map[string]bool, len(accounts))
+	for _, u := range accounts {
+		set[u] = true
+	}
+	out := make([]*model.Account, 0, len(accounts))
+	for _, a := range avail {
+		if set[a.UID] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // pickLeastInflight 从 avail 中选「实时负载最低」的账号（进行中请求数最少），
@@ -643,8 +673,10 @@ func (p *Pool) Published() *pubmodel.Manager {
 
 // ChannelTarget 一个候选上游渠道。
 type ChannelTarget struct {
-	PID   string // provider ID
-	Model string // 上游模型裸名
+	PID   string   // provider ID
+	Model string   // 上游模型裸名
+	// Accounts 账号 UID 白名单（空 = 全部可用账号），来自发布模型渠道配置。
+	Accounts []string
 }
 
 // Route 一次请求的完整路由：对外名（记账/计价用）+ 有序渠道列表。
@@ -674,7 +706,7 @@ func (p *Pool) ResolveRoute(ctx context.Context, name string) (*Route, error) {
 			var chs []ChannelTarget
 			for _, ch := range mo.Channels {
 				if _, ok := p.provs[ch.Provider]; ok {
-					chs = append(chs, ChannelTarget{PID: ch.Provider, Model: ch.Model})
+					chs = append(chs, ChannelTarget{PID: ch.Provider, Model: ch.Model, Accounts: ch.Accounts})
 				}
 			}
 			if len(chs) == 0 {
