@@ -544,6 +544,9 @@ code{background:var(--bg-soft);border:1px solid var(--border);padding:2px 7px;bo
 .aq-pct.warn{color:var(--yellow)}
 .aq-pct.full{color:var(--red)}
 .aq-pct.nolim{color:var(--faint);font-weight:400;font-size:10.5px}
+/* 额度耗尽：数字与标注标红，一眼看出该续额度了 */
+.aq b.exhausted{color:var(--red)}
+.aq-pct.nolim.exhausted,.aq .mini.exhausted{color:var(--red);font-weight:600}
 .aq-detail{max-width:210px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px}
 .aq-acts{white-space:nowrap}
 .aq-acts .btn{padding:3px 9px;font-size:11.5px;border-radius:8px;background:transparent;border-color:transparent;
@@ -760,7 +763,14 @@ svg.ui.cp-ok{color:var(--green);animation:cpPop .35s cubic-bezier(.2,1.6,.4,1)}
 .ch-accts{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;
   font-size:11.5px;color:var(--muted);padding:5px 0 0 2px;line-height:1.5}
 .ch-accts .who{display:inline-flex;align-items:center;gap:4px;background:var(--bg-soft);
-  border:1px solid var(--border);border-radius:99px;padding:1px 8px;color:var(--text2);max-width:100%}
+  border:1px solid var(--border);border-radius:99px;padding:1px 8px;color:var(--text2);max-width:100%;
+  cursor:pointer;transition:border-color .15s,background .15s,color .15s}
+/* 账号 chip 多选：选中态用主题 accent 标出；只读展示时无 hover 效果 */
+.ch-accts .who:hover{border-color:var(--accent)}
+.ch-accts .who.sel{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.ch-accts .who.sel::before{content:'✓';font-size:10px;font-weight:700}
+.ch-accts .who.ghost{border-style:dashed;color:var(--red);opacity:.8;text-decoration:line-through}
+.ch-accts .use-all{color:var(--accent);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .ch-accts .who .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px}
 .ch-accts .who .ld{font-variant-numeric:tabular-nums;color:var(--accent);font-weight:600}
 .ch-accts .who.busy{border-color:var(--accent)}
@@ -1639,12 +1649,23 @@ function renderGatewayStrip(o){
 }
 
 /* ── 动态告警横幅 ───────────────────────── */
+// acctSpent 判定账号额度是否耗尽：服务商明确说不健康，且余额≤0；
+// 网页通道（unit==='web'）只看健康判定，没有余额概念。禁用行不参与。
+// 配额接口本身报错（quota_error）时不判耗尽——那是"取不到数"，不是"没额度"。
+function acctSpent(a){
+  const q=a.quota;
+  if(!q||a.disabled||q.healthy!==false)return false;
+  if(q.detail&&q.detail.quota_error)return false;
+  return q.unit==='web'||!(q.remaining>0);
+}
 function renderAlertBanner(o){
   const el=$('#dashAlertBanner');if(!el)return;
   const accs=o.accounts||[];
   const reloginAccs=accs.filter(a=>a.needs_relogin||a.status==='relogin');
   const expiredAccs=accs.filter(a=>a.status==='expired');
   const cooldownAccs=accs.filter(a=>a.status==='cooldown');
+  // 临期：有到期时间、还没过期、且剩余不足 3 天（与账号池 TOKEN 列橙色高亮同阈值）
+  const soonAccs=accs.filter(a=>!a.disabled&&a.expires_at>0&&a.token_days_left>0&&a.token_days_left<3);
   if(reloginAccs.length>0){
     const t=reloginAccs[0];
     el.className='alert-banner err';el.style.display='flex';
@@ -1661,6 +1682,29 @@ function renderAlertBanner(o){
       <div class="msg"><b>上游访问令牌（Access Token）已过期：</b>${esc(PROV_NAMES[t.provider]||t.provider)} (${esc(t.nickname||t.uid)})，系统正尝试执行自动刷新。</div>
       <div class="actions">
         <button class="btn sm" onclick="act('${t.provider}','${t.uid}','quota')">刷新凭证</button>
+        <button class="btn sm primary" onclick="openAdd()">重新授权</button>
+      </div>`;
+  }else if(accs.some(acctSpent)){
+    const spentAccs=accs.filter(acctSpent);
+    const names=spentAccs.slice(0,3).map(a=>`${esc(PROV_NAMES[a.provider]||a.provider)} (${esc(a.nickname||a.uid)})`).join('、')
+      +(spentAccs.length>3?` 等 ${spentAccs.length} 个`:'');
+    const t=spentAccs[0];
+    el.className='alert-banner err';el.style.display='flex';
+    el.innerHTML=`<span style="font-size:18px"><svg class="ui" ><use href="#i-alert"/></svg></span>
+      <div class="msg"><b>上游额度已耗尽：</b>${names}，这些实例无法再产生新响应，请充值/切换账号或清理实例池。</div>
+      <div class="actions">
+        <button class="btn sm" onclick="act('${t.provider}','${t.uid}','quota')">同步配额</button>
+        <button class="btn sm primary" onclick="switchView('accounts')">查看实例池</button>
+      </div>`;
+  }else if(soonAccs.length>0){
+    const names=soonAccs.slice(0,3).map(a=>`${esc(PROV_NAMES[a.provider]||a.provider)} (${esc(a.nickname||a.uid)}，剩 ${a.token_days_left.toFixed(1)} 天)`).join('、')
+      +(soonAccs.length>3?` 等 ${soonAccs.length} 个`:'');
+    const t=soonAccs.slice().sort((x,y)=>x.token_days_left-y.token_days_left)[0];
+    el.className='alert-banner warn';el.style.display='flex';
+    el.innerHTML=`<span style="font-size:18px">⏰</span>
+      <div class="msg"><b>登录令牌即将过期，请及时续期：</b>${names}。过期后该实例将无法请求，建议现在重新登录。</div>
+      <div class="actions">
+        <button class="btn sm" onclick="act('${t.provider}','${t.uid}','quota')">立即刷新</button>
         <button class="btn sm primary" onclick="openAdd()">重新授权</button>
       </div>`;
   }else if(cooldownAccs.length>0){
@@ -1683,7 +1727,7 @@ function renderKPI(o){
   const compTk=today.completion_tokens||0;
   const cacheTk=today.cache_tokens||0;
   const cacheRate=promptTk>0?Math.round(cacheTk/promptTk*100):0;
-  const online=accs.filter(a=>a.status==='ok').length;
+  const online=accs.filter(a=>a.status==='ok'&&!acctSpent(a)).length;
   const totalAcc=accs.length;
   const signed=accs.filter(a=>a.checkin_today&&(a.checkin_today.ok||a.checkin_today.info)).length;
   const reqs=today.requests||0;
@@ -1784,8 +1828,9 @@ function renderOverview(o){
   const accs=o.accounts||[];
   const na=$('#navAcctCnt');if(na)na.textContent=o.account_total||0;
 
-  const online=accs.filter(a=>a.status==='ok').length;
-  const problems=accs.filter(a=>a.status==='cooldown'||a.status==='expired'||a.status==='relogin'||a.needs_relogin).length;
+  // 可用 = 状态 ok 且额度未耗尽；异常统计也计入耗尽（与账号池表格、横幅同口径）
+  const online=accs.filter(a=>a.status==='ok'&&!acctSpent(a)).length;
+  const problems=accs.filter(a=>a.status==='cooldown'||a.status==='expired'||a.status==='relogin'||a.needs_relogin||acctSpent(a)).length;
   const provs=Object.entries(o.provider_count||{});
 
   $('#dashStatus').innerHTML=
@@ -2124,7 +2169,7 @@ function nextCheckinText(unix){
 function renderCheckList(o){
   const el=$('#dashCheck');if(!el)return;
   const accs=o.accounts||[],sch=o.schedule||{};
-  const online=accs.filter(a=>a.status==='ok').length;
+  const online=accs.filter(a=>a.status==='ok'&&!acctSpent(a)).length;
   const signed=accs.filter(a=>a.checkin_today&&(a.checkin_today.ok||a.checkin_today.info)).length;
   const pubLen=(PUB.models||[]).length;
   const checks=[
@@ -2233,14 +2278,20 @@ function renderAcctCards(){
     if(a.status==='disabled'){cls='disabled';txt='已禁用'}
     if(a.status==='expired'){cls='expired';txt='令牌已过期'}
     if(a.status==='relogin'){cls='expired';txt='凭证失效'}
-    /* 签到：短标签，完整信息走 tooltip */
+    /* 额度耗尽：服务商判定不可用且余额为 0（网页通道只看判定）；禁用行不参与 */
+    const spent=acctSpent(a);
+    if(spent&&cls==='ok'){cls='expired';txt='额度耗尽'}
+    /* 签到：短标签，完整信息走 tooltip；info 长句取括号前主句，避免撑宽表格出横向滚动条 */
     let chk='<span class="tag plain">—</span>';
     if(a.checkin_today){
       const c=a.checkin_today;
       const full=String(c.message||'');
       const tip=full?` title="${esc(full)}"`:(c.info?' title="该平台无签到体系"':'');
       if(c.ok)chk=`<span class="tag ok"${tip}>✓ ${c.already?'已签':'签到成功'}</span>`;
-      else if(c.info)chk=`<span class="tag info"${tip}>${esc(full||'无签到接口')}</span>`;
+      else if(c.info){
+        const brief=full.split(/[（(]/)[0].trim()||'无签到接口';
+        chk=`<span class="tag info"${tip}>${esc(brief.length>10?brief.slice(0,10)+'…':brief)}</span>`;
+      }
       else chk=`<span class="tag cooldown"${tip}>${esc(full?full.slice(0,8)+'…':'未签')}</span>`;
     }
     /* Token 有效期 */
@@ -2250,12 +2301,13 @@ function renderAcctCards(){
     const intl=(a.realm==='global'&&a.provider!=='workbuddy-intl'&&a.provider!=='qoder-intl')?'·国际':'';
     const shortName=({workbuddy:'WB','workbuddy-intl':'WB·INTL',qwen:'QWEN',trae:'TRAE',qoder:'QD','qoder-intl':'QD',qwenwork:'QWW',doubao:'DB'})[a.provider]||a.provider;
     const provTag=`<span class="tag ${PROV_TAG[a.provider]||'plain'}">${shortName}${intl}</span>`;
-    /* 额度单元格：数值 + 行内进度条（有上限彩条+百分比，无上限灰字标注） */
+    /* 额度单元格：数值 + 行内进度条（有上限彩条+百分比，无上限灰字标注；耗尽标红） */
     const barCls=pct>=100?'full':pct>=70?'warn':'';
-    const quotaCell=`<div class="aq"><b>${quotaMain}</b>${quotaSub?`<span class="mini">${esc(quotaSub)}</span>`:''}`
+    const spentCls=spent?' exhausted':'';
+    const quotaCell=`<div class="aq"><b class="${spent?'exhausted':''}">${quotaMain}</b>${quotaSub?`<span class="mini${spentCls}">${esc(quotaSub)}</span>`:''}`
       +(pct>=0
         ?`<span class="aq-bar"><i class="${barCls}" style="width:${pct}%"></i></span><span class="aq-pct ${barCls}">${Math.round(pct)}%</span>`
-        :`<span class="aq-pct nolim">无上限</span>`)
+        :`<span class="aq-pct nolim${spentCls}">无上限</span>`)
       +`</div>`+(detail?`<div class="mini aq-detail" title="${esc(detail)}">${esc(detail)}</div>`:'');
     return `<tr style="--r:${i}"${a.disabled?' class="is-off"':''}>
       <td><span class="tag ${cls}">${esc(txt)}</span></td>
@@ -2892,7 +2944,7 @@ function renderEdChannels(){
   $('#mmChannels').innerHTML=ED.channels.map((ch,i)=>`
     <div class="ed-ch-wrap">
       <div class="ed-ch">
-        <select onchange="ED.channels[${i}].provider=this.value;renderEdChannels()">
+        <select onchange="ED.channels[${i}].provider=this.value;ED.channels[${i}].accounts=[];renderEdChannels()">
           ${Object.entries(PROV_NAMES).map(([k,v])=>`<option value="${k}" ${ch.provider===k?'selected':''}>${v}</option>`).join('')}
         </select>
         <div class="combo" id="combo${i}">
@@ -2909,7 +2961,7 @@ function renderEdChannels(){
           <button class="btn sm icon danger" title="删除" onclick="ED.channels.splice(${i},1);renderEdChannels()"><svg class="ui" ><use href="#i-trash"/></svg></button>
         </span>
       </div>
-      ${acctHintHtml(ch.provider)}
+      ${acctHintHtml(i)}
     </div>`).join('');
 }
 
@@ -3024,20 +3076,60 @@ window.addEventListener('scroll',e=>{if(e.target&&e.target.closest&&e.target.clo
 window.addEventListener('resize',()=>closeCombos());
 
 /* 渠道所属平台的账号分布：说明「发布的是平台，账号在请求时按会话黏性+低负载自动选」 */
-function acctHintHtml(pid){
+/* 渠道账号多选：点击 chip 勾/取消该账号；ED.channels[i].accounts 空 = 用全部。
+   白名单里已不存在的 uid（账号被移除）显示虚线 ghost chip，点击可清掉。 */
+function acctHintHtml(i){
+  const ch=ED&&ED.channels[i];
   if(!OVERVIEW)return `<div class="ch-accts"><span class="hint">正在加载账号信息…</span></div>`;
-  const list=acctListOf(pid);
-  if(!list.length)return `<div class="ch-accts"><span class="hint" style="color:var(--red)">该平台暂无账号，此渠道会直接失败</span></div>`;
-  const names=list.slice(0,4).map(a=>{
+  if(!ch)return `<div class="ch-accts"><span class="hint">—</span></div>`;
+  const list=acctListOf(ch.provider);
+  const sel=ch.accounts||[];
+  const selSet=new Set(sel);
+  if(!list.length){
+    return `<div class="ch-accts">${sel.length?`<span class="hint" style="color:var(--red)">所选 ${sel.length} 个账号已不存在，点击 ghost 标签移除，或</span><span class="use-all" onclick="clearChAccts(${i})">改用全部</span>`:`<span class="hint" style="color:var(--red)">该平台暂无账号，此渠道会直接失败</span>`}</div>`;
+  }
+  /* 已选但平台里已没有的 uid → ghost chip（可点击移除） */
+  const ghosts=sel.filter(uid=>!list.some(a=>a.uid===uid))
+    .map(uid=>`<span class="who ghost sel" title="账号已不存在，点击移除" onclick="toggleChAcct(${i},'${esc(uid)}')"><span class="nm">${esc(acctNameOf(ch.provider,uid))}</span></span>`)
+    .join('');
+  const names=list.map(a=>{
     const nm=esc(a.nickname||a.uid);
-    const cls=a.needs_relogin||a.disabled?'who off':(a.inflight>0?'who busy':'who');
+    const off=a.needs_relogin||a.disabled;
+    const cls='who'+(selSet.has(a.uid)?' sel':'')+(off?' off':(a.inflight>0?' busy':''));
     const ld=a.inflight>0?`<span class="ld">${a.inflight}</span>`:'';
-    const tip=a.needs_relogin?'需重新登录':(a.disabled?'已禁用':(a.inflight>0?`进行中 ${a.inflight}`:'空闲'));
-    return `<span class="${cls}" title="${tip}"><span class="nm">${nm}</span>${ld}</span>`;
+    const tip=off
+      ?(a.needs_relogin?'需重新登录（仍可勾选，路由时自动跳过）':'已禁用（仍可勾选，路由时自动跳过）')
+      :(a.inflight>0?`进行中 ${a.inflight}`:'空闲 · 点击选择/取消');
+    return `<span class="${cls}" title="${tip}" onclick="toggleChAcct(${i},'${esc(a.uid)}')"><span class="nm">${nm}</span>${ld}</span>`;
   }).join('');
-  const more=list.length>4?`<span class="hint">等 ${list.length} 个</span>`:'';
   const n=list.length;
-  return `<div class="ch-accts">${names}${more}<span class="hint">共 ${n} 个账号 · 请求时按会话黏性与实时负载自动选择</span></div>`;
+  const hint=sel.length
+    ?`已选 ${sel.length}/${n} · 仅使用所选账号 · <span class="use-all" onclick="clearChAccts(${i})">用全部</span>`
+    :`共 ${n} 个账号 · 自动选择（全部）`;
+  const more=n>6?`<span class="hint">等 ${n} 个</span>`:'';
+  return `<div class="ch-accts">${ghosts}${names}${more}<span class="hint">${hint}</span></div>`;
+}
+/* 点击账号 chip：切换该 uid 在渠道白名单里的选中态。
+   只刷新该渠道的胶囊区，不重建整行（避免 fadeUp 入场动画重播 + 输入框失焦）。 */
+function toggleChAcct(i,uid){
+  const ch=ED&&ED.channels[i];if(!ch)return;
+  ch.accounts=ch.accounts||[];
+  const idx=ch.accounts.indexOf(uid);
+  if(idx>=0)ch.accounts.splice(idx,1);else ch.accounts.push(uid);
+  if(!ch.accounts.length)ch.accounts=[]; /* 归一为空数组：语义 = 全部 */
+  refreshChAccts(i);
+}
+/* 清空渠道白名单：恢复「使用全部账号」 */
+function clearChAccts(i){
+  const ch=ED&&ED.channels[i];if(!ch)return;
+  ch.accounts=[];
+  refreshChAccts(i);
+}
+/* 局部替换某渠道的账号胶囊区（与 refreshAcctHints 同思路） */
+function refreshChAccts(i){
+  const w=document.querySelectorAll('#mmChannels .ed-ch-wrap')[i];
+  const box=w&&w.querySelector('.ch-accts');
+  if(box)box.outerHTML=acctHintHtml(i);
 }
 /* 某平台的账号列表（来自 /api/overview 的 accounts） */
 function acctListOf(pid){
@@ -3058,7 +3150,7 @@ function refreshAcctHints(){
     const box=w.querySelector('.ch-accts');
     const ch=ED.channels[i];
     if(!box||!ch)return;
-    box.outerHTML=acctHintHtml(ch.provider);
+    box.outerHTML=acctHintHtml(i);
   });
 }
 /* 查内部模型库里的计价倍率 */
@@ -3073,7 +3165,7 @@ function addEdChannel(){
   let pid;
   if(media){pid='doubao'}
   else{const used=ED.channels.map(c=>c.provider);pid=used.includes('qwen')?'workbuddy':'qwen'}
-  ED.channels.push({provider:pid,model:''});
+  ED.channels.push({provider:pid,model:'',accounts:[]});
   renderEdChannels();
   const inputs=document.querySelectorAll('#mmChannels input');
   if(inputs.length)inputs[inputs.length-1].focus();
