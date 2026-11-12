@@ -44,6 +44,7 @@ type Quota struct {
 		Plan              string `json:"plan"`
 		ResetsAt      string `json:"resets_at"`
 		QuotaExceeded bool   `json:"quota_exceeded"`
+		QuotaError    string `json:"quota_error"` // 配额接口报错：是"取不到数"，不是"没额度"
 		RequestsUsedToday int64 `json:"requests_used_today"`
 		ImagesUsedToday   int64 `json:"images_used_today"`
 		ImagesLimit       int64 `json:"images_limit"`
@@ -61,6 +62,9 @@ type Account struct {
 	Nickname     string `json:"nickname"`
 	Status       string `json:"status"`
 	Quota        *Quota `json:"quota"`
+	// 令牌有效期：expires_at=0 表示长期/未知，不参与临期提醒。
+	ExpiresAt     int64   `json:"expires_at"`
+	TokenDaysLeft float64 `json:"token_days_left"`
 }
 
 // Overview 面板总览的精简投影。
@@ -252,6 +256,9 @@ type Metric struct {
 	Busy bool
 	// Spent 服务商明确说这个额度已耗尽（不只是比例到 100%）。
 	Spent bool
+	// NoBalance 零余额耗尽：服务商判定不可用，且既无上限也无余额。
+	// 与 Empty（取不到数据）区分开——画红环 + "0"，不是灰色 "—"。
+	NoBalance bool
 }
 
 // MetricRow 详情卡里的一行用量。

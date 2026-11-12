@@ -157,11 +157,23 @@ type trackMouseEvent struct {
 	HoverTime uint32
 }
 
+// frame 一轮取数的结果：圆环数据 + 令牌提醒清单。
+//
+// 两者走同一条 channel，保证 UI 线程读到的是同一时刻的快照，
+// 不会出现「环已经更新、提醒还是上一轮的」。
+// ok=false 表示这轮取数失败：alerts 不可信，保留上一轮的。
+type frame struct {
+	metrics []Metric
+	alerts  []TokenAlert
+	ok      bool
+}
+
 // Rail 浮动栏窗口。
 type Rail struct {
 	hwnd     windows.Handle
 	opts     Options
 	metrics  []Metric
+	alerts   []TokenAlert // 最近一轮的令牌提醒（UI 线程独占）
 	dib      *dib // 缓存的内存位图表面，尺寸未变时跨帧复用，避免频繁创建/销毁 GDI 对象
 	edge     string // 吸附边：left/right/top/bottom
 	isVertical bool // 竖排（贴左/右）还是横排（贴上/下）
@@ -172,7 +184,7 @@ type Rail struct {
 	width    int32
 	height   int32
 	// 通信：后台 goroutine 把抓到的数据投进 channel，UI 线程消费
-	incoming chan []Metric
+	incoming chan frame
 	// 回调
 	onMenu func()
 	onRefresh func()
@@ -214,7 +226,7 @@ func NewRail(opts Options) (*Rail, error) {
 		isVertical: opts.Edge == "left" || opts.Edge == "right",
 		expanded:   false, // 收起态起步：只显示胶囊，悬停才弹出详情卡
 		hoverIndex: 0,
-		incoming:   make(chan []Metric, 4),
+		incoming:   make(chan frame, 4),
 	}
 	if err := r.registerClass(); err != nil {
 		return nil, err
@@ -413,10 +425,10 @@ func (r *Rail) Run() {
 	}
 }
 
-// Push 由后台 goroutine 调用，投递最新指标。
-func (r *Rail) Push(m []Metric) {
+// Push 由后台 goroutine 调用，投递最新指标与令牌提醒。
+func (r *Rail) Push(f frame) {
 	select {
-	case r.incoming <- m:
+	case r.incoming <- f:
 	default:
 		// 上一批还没画完，丢掉这次，避免堆积
 	}
@@ -424,8 +436,9 @@ func (r *Rail) Push(m []Metric) {
 }
 
 // Seed 立即设置首帧数据（构造后、Run 前调用，避免首帧画出"未连接"）。
-func (r *Rail) Seed(m []Metric) {
-	r.metrics = m
+func (r *Rail) Seed(f frame) {
+	r.metrics = f.metrics
+	r.alerts = f.alerts
 	r.fitHeight()
 	r.applyPlacement()
 }
@@ -506,13 +519,19 @@ func (r *Rail) drainUpdates() {
 	updated := false
 	for {
 		select {
-		case m := <-r.incoming:
-			r.metrics = m
+		case f := <-r.incoming:
+			r.metrics = f.metrics
+			if f.ok {
+				// 取数失败的那轮不带提醒清单，保留上一轮的，
+				// 免得临期账号在断连窗口里"消失"后又被重新提醒。
+				r.alerts = f.alerts
+			}
 			updated = true
 		default:
 			if updated {
 				r.syncAnims(r.animElapsed)
 				r.maybeAlert()
+				r.maybeTokenAlert()
 				r.ensureAnimTicker()
 				if r.fitHeight() {
 					r.applyPlacement()

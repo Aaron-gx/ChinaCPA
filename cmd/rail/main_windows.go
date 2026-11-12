@@ -62,7 +62,7 @@ func main() {
 	}
 
 	if *demo {
-		rail.Seed(demoMetrics())
+		rail.Seed(frame{metrics: demoMetrics()})
 		// -demo-expanded 直接把详情卡展开，便于核对卡片布局
 		if *demoExpanded {
 			rail.hovered = true
@@ -97,18 +97,19 @@ func main() {
 			if err != nil {
 				log.Printf("取数失败: %v", err)
 				if first {
-					rail.Seed(nil)
+					rail.Seed(frame{})
 					first = false
 				} else {
-					rail.Push(nil)
+					rail.Push(frame{})
 				}
 				return
 			}
+			f := frame{metrics: Metrics(ov), alerts: TokenAlerts(ov), ok: true}
 			if first {
-				rail.Seed(Metrics(ov))
+				rail.Seed(f)
 				first = false
 			} else {
-				rail.Push(Metrics(ov))
+				rail.Push(f)
 			}
 		}
 		tick()

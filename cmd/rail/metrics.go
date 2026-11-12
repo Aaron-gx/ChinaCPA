@@ -25,6 +25,7 @@ func Metrics(ov *Overview) []Metric {
 		resetsAt               string
 		quotaExceeded          bool
 		unhealthy              bool
+		spentAcc               int // 判定"额度耗尽"的账号数（与面板 acctSpent 同口径）
 	}
 
 	byProvider := map[string]*agg{}
@@ -58,6 +59,9 @@ func Metrics(ov *Overview) []Metric {
 			// 服务商说不可用，且没有任何额度数字
 			g.unhealthy = true
 		}
+		if accountSpent(q) {
+			g.spentAcc++
+		}
 
 		// 每个账号贡献一行
 		label := "每日配额"
@@ -85,6 +89,10 @@ func Metrics(ov *Overview) []Metric {
 		} else {
 			detail = "无额度数据"
 		}
+		if accountSpent(q) {
+			// 服务商判定不可用且余额为 0：明确标耗尽，别显示成"无额度数据"
+			detail = "额度已耗尽"
+		}
 		row := MetricRow{Label: label, UsedPct: pct, Detail: detail}
 		row.Reset = resetTextFor(q)
 		g.rows = append(g.rows, row)
@@ -110,6 +118,7 @@ func Metrics(ov *Overview) []Metric {
 		resetsAt              string
 		quotaExceeded         bool
 		unhealthy             bool
+		spentAcc              int
 		daily                 bool
 	}
 
@@ -140,6 +149,7 @@ func Metrics(ov *Overview) []Metric {
 		}
 		gr.quotaExceeded = gr.quotaExceeded || g.quotaExceeded
 		gr.unhealthy = gr.unhealthy || g.unhealthy
+		gr.spentAcc += g.spentAcc
 		gr.daily = gr.daily || g.daily
 	}
 
@@ -167,13 +177,19 @@ func Metrics(ov *Overview) []Metric {
 			m.Used = 1
 			m.Balance = true
 			m.Text = shortCompact(gr.remaining)
+		} else if gr.spentAcc > 0 {
+			// 零余额耗尽：服务商判定不可用，既没上限也没余额。
+			// 画满红环 + "0"，而不是灰色 "—"（那是"取不到数据"）。
+			m.Used = 1
+			m.NoBalance = true
+			m.Text = "0"
 		} else {
 			m.Empty = true
 			m.Text = "0"
 		}
 
-		// 耗尽：服务商明说超限，或比例已满
-		m.Spent = gr.quotaExceeded || m.Used >= 1
+		// 耗尽：服务商明说超限，或比例已满，或零余额判定不可用
+		m.Spent = gr.quotaExceeded || m.Used >= 1 || m.NoBalance
 
 		// 窗口时钟弧：从 resets_at 反推这一轮窗口过去多少。
 		//
@@ -239,4 +255,67 @@ func resetTextFor(q *Quota) string {
 		return q.Detail.ResetsAt + " 重置"
 	}
 	return resetText(q.Unit, q.Daily)
+}
+
+// accountSpent 判定单账号额度耗尽，与面板 acctSpent 同口径：
+// 服务商明确说不可用，且（无上限时）余额为 0；网页通道只看判定。
+// 配额接口报错（quota_error）不算耗尽——那是"取不到数"，不是"没额度"。
+func accountSpent(q *Quota) bool {
+	if q == nil || q.Healthy {
+		return false
+	}
+	if q.Detail.QuotaError != "" {
+		return false
+	}
+	return q.Unit == "web" || !(q.Limit > 0 || q.Remaining > 0)
+}
+
+// TokenAlert 一个账号的登录令牌提醒（浮动栏托盘通知用）。
+type TokenAlert struct {
+	Key   string  // provider|uid，去重键
+	Who   string  // 「平台 · 昵称」，通知正文用
+	Days  float64 // 剩余天数（已过期为负）
+	State string  // soon / expired / relogin / ""（正常，用于清提醒状态）
+}
+
+// soonTokenDays 临期阈值：与面板账号池 TOKEN 列的橙色高亮一致。
+const soonTokenDays = 3
+
+// TokenAlerts 扫描所有账号的登录令牌，给浮动栏出续登录提醒清单。
+//
+// 每个未禁用账号一条（含正常的），正常项 State="" 让上层清掉旧的
+// 提醒状态——重新登录成功后，下次临期/过期才能再次提醒。
+func TokenAlerts(ov *Overview) []TokenAlert {
+	if ov == nil {
+		return nil
+	}
+	var out []TokenAlert
+	for _, a := range ov.Accounts {
+		if a.Status == "disabled" {
+			continue
+		}
+		t := TokenAlert{Key: a.Provider + "|" + a.UID, Who: tokenAlertWho(a), Days: a.TokenDaysLeft}
+		switch {
+		case a.Status == "relogin":
+			t.State = "relogin"
+		case a.ExpiresAt > 0 && a.TokenDaysLeft <= 0:
+			t.State = "expired"
+		case a.ExpiresAt > 0 && a.TokenDaysLeft < soonTokenDays:
+			t.State = "soon"
+		}
+		out = append(out, t)
+	}
+	return out
+}
+
+func tokenAlertWho(a Account) string {
+	name := a.Nickname
+	if name == "" {
+		name = a.UID
+	}
+	pn := a.ProviderName
+	if pn == "" {
+		pn = a.Provider
+	}
+	return pn + " · " + name
 }

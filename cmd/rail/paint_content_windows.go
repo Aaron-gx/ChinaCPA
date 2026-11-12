@@ -314,7 +314,7 @@ func (r *Rail) paintPill(p *painter, L layout) {
 		if m.Empty {
 			col = colPercentDim
 		}
-		if !m.Balance && !m.Empty && m.Used >= warningThreshold {
+		if (m.NoBalance || !m.Balance && !m.Empty) && m.Used >= warningThreshold {
 			col = colPercentWarn
 		}
 		textW := int32(percentWidth())
@@ -323,11 +323,14 @@ func (r *Rail) paintPill(p *painter, L layout) {
 	}
 }
 
-// percentLabel 环下方的文字：有上限时显示已用百分比，纯余额显示金额。
+// percentLabel 环下方的文字：有上限时显示已用百分比，纯余额显示金额，
+// 零余额耗尽显示 "0"（红环 + 0 比 "100%" 直观）。
 func percentLabel(m Metric) string {
 	switch {
 	case m.Empty:
 		return "—"
+	case m.NoBalance:
+		return "0"
 	case m.Balance:
 		return m.Text
 	default:
