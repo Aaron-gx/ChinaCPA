@@ -7,6 +7,7 @@
 package doubao
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -31,6 +32,10 @@ const dbUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 type Provider struct {
 	http *http.Client // 重定向不跟随：登录链路需手动收每跳 Set-Cookie；登录失效时上游会 302
 
+	// streamHTTP 同步对话内联 SSE 长连接专用：http.Client.Timeout 覆盖 Body 读取
+	// 全程，30s 默认值会掐断流，这里不设请求级超时（靠 ctx 与空闲判定）。
+	streamHTTP *http.Client
+
 	// ImageDailyLimit / VideoDailyLimit 每账号每日生成上限（本地计数，config 注入）
 	ImageDailyLimit int64
 	VideoDailyLimit int64
@@ -54,6 +59,12 @@ func New(imageLimit, videoLimit int64) *Provider {
 	return &Provider{
 		http: &http.Client{
 			Timeout: 30 * time.Second,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		streamHTTP: &http.Client{
+			Timeout: 0,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
@@ -104,6 +115,10 @@ func cookieValue(cookie, name string) string {
 
 // fpOf 设备指纹（s_v_web_id Cookie；风控关键字段，缺失上游会拒）。
 func fpOf(a *model.Account) string { return cookieValue(a.WebCookie, "s_v_web_id") }
+
+// msTokenOf 字节风控令牌（Cookie 里的 msToken）。缺失时返回空串——
+// query 侧必须整个省略该参数，发空值会被上游判为伪造触发限流（710022002）。
+func msTokenOf(a *model.Account) string { return cookieValue(a.WebCookie, "msToken") }
 
 // regionOf 账号区域（cookie flow_user_country / store-country-code，兜底 CN）。
 func regionOf(a *model.Account) string {
@@ -232,7 +247,7 @@ func (p *Provider) ImportCredential(ctx context.Context, raw string) (*model.Acc
 // validate 校验登录态并尽力取用户名（POST /samantha/aispace/homepage）。
 func (p *Provider) validate(ctx context.Context, a *model.Account) error {
 	ids := p.seedOf(a)
-	q := commonQuery(ids, fpOf(a), regionOf(a))
+	q := commonQuery(ids, fpOf(a), regionOf(a), msTokenOf(a))
 	body, _ := json.Marshal(map[string]any{})
 	resp, err := p.dbPost(ctx, a, "/samantha/aispace/homepage", q, "application/json", body, nil)
 	if err != nil {
@@ -347,12 +362,22 @@ func (p *Provider) Checkin(_ context.Context, _ *model.Account) (*model.CheckinR
 
 // ── 模型目录 ─────────────────────────────────────────────
 
-// Models 内置目录：文本（网页默认助手）+ Seedream 图片 + Seedance 视频。
+// Models 内置目录：文本（网页模型选择菜单反带）+ Seedream 图片 + Seedance 视频。
 // Kind 标注类别，发布编辑器按此分组图片/视频渠道候选。
 func (p *Provider) Models(_ context.Context, _ *model.Account) ([]model.ModelInfo, error) {
 	out := []model.ModelInfo{
-		{ID: textModelID, Name: "豆包对话（网页助手）", Provider: p.ID(), Kind: "chat",
+		{ID: "doubao-fast", Name: "豆包 快速", Provider: p.ID(), Kind: "chat",
 			ContextWindow: 131072, MaxTokens: 8192},
+		{ID: textModelID, Name: "豆包对话（快速·别名）", Provider: p.ID(), Kind: "chat",
+			ContextWindow: 131072, MaxTokens: 8192},
+		{ID: "doubao-expert", Name: "豆包 专家（深度检索）", Provider: p.ID(), Kind: "chat",
+			ContextWindow: 128000, MaxTokens: 8192},
+		{ID: "doubao-2.1-lite", Name: "豆包 2.1 Lite", Provider: p.ID(), Kind: "chat",
+			ContextWindow: 256000, MaxTokens: 16384},
+		{ID: "doubao-2.1-pro", Name: "豆包 2.1 Pro（会员）", Provider: p.ID(), Kind: "chat",
+			ContextWindow: 256000, MaxTokens: 16384},
+		{ID: "doubao-auto", Name: "豆包 工作任务 Auto", Provider: p.ID(), Kind: "chat",
+			ContextWindow: 256000, MaxTokens: 16384},
 	}
 	for _, m := range imageModels {
 		out = append(out, model.ModelInfo{ID: m.Public, Name: m.Upstream, Provider: p.ID(),
@@ -373,7 +398,7 @@ func (p *Provider) submit(ctx context.Context, a *model.Account, payload map[str
 		ext["fp"] = fpOf(a)
 	}
 	ids := p.seedOf(a)
-	q := commonQuery(ids, fpOf(a), regionOf(a))
+	q := commonQuery(ids, fpOf(a), regionOf(a), msTokenOf(a))
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -432,10 +457,135 @@ func (p *Provider) submit(ctx context.Context, a *model.Account, payload map[str
 	return parseSseAck(sb.String())
 }
 
+// liveAck submitKeep 的返回：SSE_ACK 解析结果 + 尚未消费的剩余流。
+// 上游在 ACK 之后立刻推送文本事件，读 ACK 时缓冲的尾部字节必须续读，不能丢。
+type liveAck struct {
+	ack  *sseAck
+	read *bufio.Reader // 活的响应流（ACK 之后的事件从这里继续读）
+	body io.ReadCloser // 原始 Body（调用方负责 Close）
+}
+
+// submitKeep 提交对话并保持 SSE 连接：读到 SSE_ACK 即返回（含已缓冲的后续字节），
+// 供内联流式解析续读。HTTP ≥300 / STREAM_ERROR 时返回错误并已关闭连接。
+func (p *Provider) submitKeep(ctx context.Context, a *model.Account, payload map[string]any) (*liveAck, error) {
+	if ext, ok := payload["ext"].(map[string]any); ok {
+		ext["fp"] = fpOf(a)
+	}
+	ids := p.seedOf(a)
+	q := commonQuery(ids, fpOf(a), regionOf(a), msTokenOf(a))
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		dbOrigin+"/chat/completion?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range dbHeaders(a, "application/json") {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("agw-js-conv", "str, str")
+	req.Header.Set("last-event-id", "undefined")
+	req.Header.Set("x-flow-trace", flowTrace())
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := p.streamHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden ||
+			(resp.StatusCode >= 300 && resp.StatusCode < 400) {
+			return nil, authExpiredError(resp.StatusCode, string(raw))
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return nil, &provider.Error{Kind: provider.ErrQuota, Status: resp.StatusCode,
+				Msg: "上游限流: " + truncateRunes(string(raw), 160)}
+		}
+		return nil, &provider.Error{Kind: classifyStatus(resp.StatusCode), Status: resp.StatusCode,
+			Msg: fmt.Sprintf("提交失败 HTTP %d: %s", resp.StatusCode, truncateRunes(string(raw), 200))}
+	}
+	rd := bufio.NewReader(resp.Body)
+	packets, err := readSSEUntilAckPacket(rd)
+	if err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	ack, err := parseSseAck(packets)
+	if err != nil {
+		resp.Body.Close()
+		return nil, err
+	}
+	return &liveAck{ack: ack, read: rd, body: resp.Body}, nil
+}
+
+// readSSEUntilAckPacket 逐 packet 读到 SSE_ACK / STREAM_ERROR（含已缓冲的后续字节
+// 一并返回，交给 parseSseAck 提取 conversation_id；续读从 rd 接着来）。
+// io.EOF 是流正常结束信号，吞掉并返回已收集内容：登录失效时上游返回纯 JSON 错误体
+// （无 event/data、无结尾空行），此时 packets 即该 JSON，由 parseSseAck →
+// classifyJSONErrorBody 归类为 ErrAuth；若流在 ACK 前断开，parseSseAck 报"缺少 SSE_ACK"。
+func readSSEUntilAckPacket(rd *bufio.Reader) (string, error) {
+	var sb strings.Builder
+	for {
+		pkt, err := readSSEPacket(rd)
+		if pkt != "" {
+			sb.WriteString(pkt)
+			sb.WriteString("\n\n")
+		}
+		if err == io.EOF {
+			return sb.String(), nil
+		}
+		if err != nil {
+			return sb.String(), err
+		}
+		if ev := sseEventName(pkt); ev == "SSE_ACK" || ev == "STREAM_ERROR" {
+			return sb.String(), nil
+		}
+		if sb.Len() > 4<<20 {
+			return sb.String(), fmt.Errorf("SSE_ACK 前响应过大（疑似异常流）")
+		}
+	}
+}
+
+// sseEventName 取 packet 的 event: 字段值。
+func sseEventName(pkt string) string {
+	for _, line := range strings.Split(pkt, "\n") {
+		if t := strings.TrimSpace(line); strings.HasPrefix(t, "event:") {
+			return strings.TrimSpace(strings.TrimPrefix(t, "event:"))
+		}
+	}
+	return ""
+}
+
+// readSSEPacket 读到空行为止，返回 packet 原文（含换行，行尾 \r 归一）。
+func readSSEPacket(rd *bufio.Reader) (string, error) {
+	var sb strings.Builder
+	for {
+		line, err := rd.ReadString('\n')
+		if line != "" {
+			sb.WriteString(strings.TrimRight(line, "\r"))
+			sb.WriteString("\n")
+		}
+		if err != nil {
+			return sb.String(), err
+		}
+		if strings.TrimRight(line, "\r\n") == "" {
+			trimmed := strings.TrimRight(sb.String(), "\n")
+			if trimmed == "" {
+				sb.Reset() // 连续空行：继续等下一个 packet
+				continue
+			}
+			return trimmed, nil
+		}
+	}
+}
+
 // pollChain 轮询一次会话链。
 func (p *Provider) pollChain(ctx context.Context, a *model.Account, conversationID string) (*chainResponse, error) {
 	ids := p.seedOf(a)
-	q := commonQuery(ids, fpOf(a), regionOf(a))
+	q := commonQuery(ids, fpOf(a), regionOf(a), msTokenOf(a))
 	body, err := json.Marshal(chainBody(conversationID))
 	if err != nil {
 		return nil, err
@@ -475,7 +625,7 @@ func (p *Provider) sendConfirm(ctx context.Context, a *model.Account, conversati
 // 上游是「提交 + 轮询」模型，流式为轮询增量模拟（每次轮询到新文本即推 delta）；
 // 非流式则同步跑完整个轮询返回完整 JSON。
 func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName string, body []byte) (*provider.ChatResult, error) {
-	_ = resolveModel(modelName) // 文本通道不选上游模型（网页默认助手）
+	rm := resolveModel(modelName)
 	var req struct {
 		Stream   *bool `json:"stream"`
 		Messages []struct {
@@ -491,57 +641,350 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 		return nil, fmt.Errorf("请求体不是合法 JSON: %w", err)
 	}
 	prompt := flattenMessages(req.Messages)
-	deepThink := false
-	if req.EnableThinking != nil {
-		deepThink = *req.EnableThinking
-	}
-	if req.Thinking != nil && req.Thinking.Enabled != nil {
-		deepThink = *req.Thinking.Enabled
+
+	// 推理档位：模型表默认档为基准；客户端显式 thinking 开关只在同步模式内切换
+	// 快速(0)↔专家(3)档。任务模式（Pro/Lite/Auto）的档位与 agent_mode 绑定，
+	// 线上未验证 0 值形态，不跟随覆盖。
+	if rm.AgentMode != 1 && (req.EnableThinking != nil || (req.Thinking != nil && req.Thinking.Enabled != nil)) {
+		want := req.EnableThinking != nil && *req.EnableThinking
+		if req.Thinking != nil && req.Thinking.Enabled != nil {
+			want = *req.Thinking.Enabled
+		}
+		if want {
+			rm.DeepThink = 3
+		} else {
+			rm.DeepThink = 0
+		}
 	}
 
 	unlock := p.lockAccount(a.UID)
 	unlock.Lock()
 	defer unlock.Unlock()
 
-	ack, err := p.submit(ctx, a, submitPayload("", prompt, nil, deepThink))
+	stream := req.Stream != nil && *req.Stream
+
+	// ── 异步任务模式（2.1 Pro/Lite、Auto）：全文落会话链，SSE 只有片段 ──
+	// 保持旧路径：提交即断流 + /im/chain/single 轮询。
+	if rm.AgentMode == 1 {
+		ack, err := p.submit(ctx, a, textSubmitPayload("", prompt, rm))
+		if err != nil {
+			return nil, err
+		}
+		countChat(a.UID)
+		if !stream {
+			text, cerr := p.awaitText(ctx, a, ack.ConversationID, 240*time.Second)
+			if cerr != nil {
+				return nil, cerr
+			}
+			out, _ := json.Marshal(openAICompletion(rm.Public, text))
+			return &provider.ChatResult{
+				Body:        io.NopCloser(bytes.NewReader(out)),
+				ContentType: "application/json",
+			}, nil
+		}
+		pr, pw := io.Pipe()
+		go func() {
+			p.streamText(ctx, a, ack.ConversationID, rm.Public, pw)
+		}()
+		return &provider.ChatResult{Body: pr, ContentType: "text/event-stream"}, nil
+	}
+
+	// ── 同步模式（快速/专家）：文本内联在 SSE 流里，保持连接实时转 chunk ──
+	live, err := p.submitKeep(ctx, a, textSubmitPayload("", prompt, rm))
 	if err != nil {
 		return nil, err
 	}
 	countChat(a.UID)
-
-	stream := req.Stream != nil && *req.Stream
 	if !stream {
-		// 非流式：同步轮询到完成，返回完整 OpenAI JSON
-		text, cerr := p.awaitText(ctx, a, ack.ConversationID, 240*time.Second)
-		if cerr != nil {
-			return nil, cerr
+		defer live.body.Close()
+		text, ierr := p.inlineAwait(ctx, live.read, 240*time.Second)
+		if ierr != nil {
+			return nil, ierr
 		}
-		out, _ := json.Marshal(openAICompletion(textModelID, text))
+		out, _ := json.Marshal(openAICompletion(rm.Public, text))
 		return &provider.ChatResult{
 			Body:        io.NopCloser(bytes.NewReader(out)),
 			ContentType: "application/json",
 		}, nil
 	}
-
-	// 流式：后台轮询 → 增量 OpenAI chunk
 	pr, pw := io.Pipe()
 	go func() {
-		p.streamText(ctx, a, ack.ConversationID, pw)
+		p.streamInline(ctx, live, rm.Public, pw)
 	}()
 	return &provider.ChatResult{Body: pr, ContentType: "text/event-stream"}, nil
 }
 
-// streamText 轮询文本并增量写 OpenAI SSE（出错时写错误事件后 [DONE]）。
-func (p *Provider) streamText(ctx context.Context, a *model.Account, conversationID string, w io.Writer) {
-	chunkID := "chatcmpl-doubao-" + conversationID
+// inlineTextAcc 内联 SSE 文本累积器：notify 初始块、chunk patch_object=1 补丁、
+// delta 增量三路都带文本分片（实测三路按到达顺序拼出全文），统一顺序拼接。
+type inlineTextAcc struct {
+	sb    strings.Builder
+	brief string // SSE_REPLY_END end_type=1 权威全文
+}
+
+func (t *inlineTextAcc) text() string { return t.sb.String() }
+
+// feedPacket 解析一个 SSE packet，返回（新增文本, 是否结束, 错误消息）。
+func (t *inlineTextAcc) feedPacket(event, data string) (string, bool, string) {
+	switch event {
+	case "STREAM_ERROR":
+		return "", true, truncateRunes(data, 300)
+	case "STREAM_MSG_NOTIFY":
+		var j struct {
+			Content struct {
+				ContentBlock []struct {
+					BlockType int `json:"block_type"`
+					Content   struct {
+						TextBlock struct {
+							Text string `json:"text"`
+						} `json:"text_block"`
+					} `json:"content"`
+				} `json:"content_block"`
+			} `json:"content"`
+		}
+		if json.Unmarshal([]byte(data), &j) != nil {
+			return "", false, ""
+		}
+		var add string
+		for _, b := range j.Content.ContentBlock {
+			if b.BlockType == blockTypeText {
+				add += b.Content.TextBlock.Text
+			}
+		}
+		return add, false, ""
+	case "STREAM_CHUNK":
+		var j struct {
+			PatchOp []struct {
+				PatchObject int `json:"patch_object"`
+				PatchValue  struct {
+					ContentBlock []struct {
+						BlockType int `json:"block_type"`
+						Content   struct {
+							TextBlock struct {
+								Text string `json:"text"`
+							} `json:"text_block"`
+						} `json:"content"`
+					} `json:"content_block"`
+				} `json:"patch_value"`
+			} `json:"patch_op"`
+		}
+		if json.Unmarshal([]byte(data), &j) != nil {
+			return "", false, ""
+		}
+		var add string
+		for _, po := range j.PatchOp {
+			if po.PatchObject != 1 {
+				continue // tts/状态类补丁
+			}
+			for _, b := range po.PatchValue.ContentBlock {
+				if b.BlockType == blockTypeText {
+					add += b.Content.TextBlock.Text
+				}
+			}
+		}
+		return add, false, ""
+	case "CHUNK_DELTA":
+		var j struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal([]byte(data), &j) != nil {
+			return "", false, ""
+		}
+		return j.Text, false, ""
+	case "SSE_REPLY_END":
+		var j struct {
+			EndType       int    `json:"end_type"`
+			MsgFinishAttr struct {
+				Brief string `json:"brief"`
+			} `json:"msg_finish_attr"`
+		}
+		if json.Unmarshal([]byte(data), &j) == nil && j.EndType == 1 {
+			t.brief = j.MsgFinishAttr.Brief
+			return "", true, ""
+		}
+		return "", false, ""
+	}
+	return "", false, ""
+}
+
+// reconcile 用权威 brief 校正累积文本，返回需补发的差额。
+func (t *inlineTextAcc) reconcile() string {
+	acc := t.text()
+	switch {
+	case t.brief == "":
+		return ""
+	case t.brief == acc:
+		return ""
+	case strings.HasPrefix(t.brief, acc):
+		return t.brief[len(acc):]
+	case acc == "":
+		return t.brief
+	default:
+		// 三路拼接与 brief 对不上（如 brief 被上游截断、分片乱序）：信任已流出的文本。
+		return ""
+	}
+}
+
+// inlineAwait 非流式：读内联 SSE 到结束，返回全文。
+func (p *Provider) inlineAwait(ctx context.Context, rd *bufio.Reader, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	t := &inlineTextAcc{}
+	for {
+		if time.Now().After(deadline) {
+			if t.text() != "" || t.brief != "" {
+				break
+			}
+			return "", &provider.Error{Kind: provider.ErrUpstream, Msg: "豆包回复超时"}
+		}
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		pkt, err := readSSEPacket(rd)
+		if pkt != "" {
+			event, data := splitSSEPacket(pkt)
+			add, done, errMsg := t.feedPacket(event, data)
+			t.sb.WriteString(add)
+			if errMsg != "" {
+				if kw, quota := hitFailKeyword(errMsg); kw != "" {
+					kind := provider.ErrUpstream
+					if quota {
+						kind = provider.ErrQuota
+					}
+					return "", &provider.Error{Kind: kind, Msg: "上游失败: " + truncateRunes(errMsg, 300)}
+				}
+				return "", &provider.Error{Kind: provider.ErrUpstream, Msg: "上游流内错误: " + truncateRunes(errMsg, 300)}
+			}
+			if done {
+				break
+			}
+		}
+		if err != nil {
+			break // EOF：有文本就用
+		}
+	}
+	text := t.text()
+	if len(t.brief) > len(text) && strings.HasPrefix(t.brief, text) {
+		text = t.brief
+	}
+	if text == "" && t.brief != "" {
+		text = t.brief
+	}
+	if text == "" {
+		return "", &provider.Error{Kind: provider.ErrUpstream, Msg: "豆包回复为空"}
+	}
+	if kw, quota := hitFailKeyword(text); kw != "" {
+		kind := provider.ErrUpstream
+		if quota {
+			kind = provider.ErrQuota
+		}
+		return "", &provider.Error{Kind: kind, Msg: "上游失败: " + truncateRunes(text, 300)}
+	}
+	return text, nil
+}
+
+// splitSSEPacket 拆 packet 为 event 名与合并后的 data 文本。
+func splitSSEPacket(pkt string) (string, string) {
+	var event, data strings.Builder
+	for _, line := range strings.Split(pkt, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "event:"):
+			event.WriteString(strings.TrimSpace(strings.TrimPrefix(t, "event:")))
+		case strings.HasPrefix(t, "data:"):
+			data.WriteString(strings.TrimSpace(strings.TrimPrefix(t, "data:")))
+		}
+	}
+	return event.String(), data.String()
+}
+
+// streamInline 同步模式流式：内联 SSE → OpenAI chunk（三路文本按到达顺序推 delta，
+// 结束时用 brief 校正补尾）。负责关闭 live.body 与 pw。
+func (p *Provider) streamInline(ctx context.Context, live *liveAck, modelName string, pw *io.PipeWriter) {
+	defer live.body.Close()
+	defer pw.CloseWithError(nil)
+
+	chunkID := "chatcmpl-doubao-" + live.ack.ConversationID
+	created := time.Now().Unix()
 	emit := func(delta map[string]any, finish string) {
 		choice := map[string]any{"index": 0, "delta": delta}
 		if finish != "" {
 			choice["finish_reason"] = finish
 		}
 		chunk := map[string]any{
-			"id": chunkID, "object": "chat.completion.chunk", "model": textModelID,
-			"choices": []any{choice},
+			"id": chunkID, "object": "chat.completion.chunk", "model": modelName,
+			"created": created, "choices": []any{choice},
+		}
+		raw, _ := json.Marshal(chunk)
+		_, _ = pw.Write(append(append([]byte("data: "), raw...), '\n', '\n'))
+	}
+	fail := func(msg string) {
+		errPayload, _ := json.Marshal(map[string]any{"error": map[string]any{"message": msg, "type": "upstream_error"}})
+		_, _ = pw.Write(append(append([]byte("data: "), errPayload...), '\n', '\n'))
+		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+	}
+
+	t := &inlineTextAcc{}
+	deadline := time.Now().Add(240 * time.Second)
+	for {
+		if time.Now().After(deadline) {
+			fail("豆包回复超时")
+			return
+		}
+		if ctx.Err() != nil {
+			return // 客户端断开：静默收尾
+		}
+		pkt, err := readSSEPacket(live.read)
+		if pkt != "" {
+			event, data := splitSSEPacket(pkt)
+			add, done, errMsg := t.feedPacket(event, data)
+			if errMsg != "" {
+				fail("上游失败：" + errMsg)
+				return
+			}
+			if add != "" {
+				if kw, _ := hitFailKeyword(add); kw != "" {
+					fail("上游失败：" + truncateRunes(t.text()+add, 200))
+					return
+				}
+				t.sb.WriteString(add)
+				emit(map[string]any{"content": add}, "")
+			}
+			if done {
+				if tail := t.reconcile(); tail != "" {
+					emit(map[string]any{"content": tail}, "")
+				}
+				emit(map[string]any{}, "stop")
+				_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+				return
+			}
+		}
+		if err != nil {
+			// 连接提前断开：有文本就体面收尾
+			if t.text() != "" || t.brief != "" {
+				if tail := t.reconcile(); tail != "" {
+					emit(map[string]any{"content": tail}, "")
+				}
+				emit(map[string]any{}, "stop")
+				_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+				return
+			}
+			fail("豆包连接中断")
+			return
+		}
+	}
+}
+
+// streamText 轮询文本并增量写 OpenAI SSE（出错时写错误事件后 [DONE]）。
+func (p *Provider) streamText(ctx context.Context, a *model.Account, conversationID, modelName string, w io.Writer) {
+	chunkID := "chatcmpl-doubao-" + conversationID
+	created := time.Now().Unix()
+	emit := func(delta map[string]any, finish string) {
+		choice := map[string]any{"index": 0, "delta": delta}
+		if finish != "" {
+			choice["finish_reason"] = finish
+		}
+		chunk := map[string]any{
+			"id": chunkID, "object": "chat.completion.chunk", "model": modelName,
+			"created": created, "choices": []any{choice},
 		}
 		raw, _ := json.Marshal(chunk)
 		_, _ = w.Write(append(append([]byte("data: "), raw...), '\n', '\n'))

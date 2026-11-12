@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"chinacpa/internal/provider"
 )
 
 // timeNowMs 毫秒时间戳（协议字段 create_time_ms 等）。
@@ -106,7 +108,8 @@ type deviceIDs struct {
 }
 
 // commonQuery /chat/completion 与 /im/chain/single 等共用 query（use-olympus-account 是关键开关）。
-func commonQuery(ids deviceIDs, fp, region string) url.Values {
+// msToken 无真值时必须整个省略：社区 doubao2api 实测「空/伪造值触发风控 710022002」。
+func commonQuery(ids deviceIDs, fp, region, msToken string) url.Values {
 	q := url.Values{
 		"version_code":           {dbVersionCode},
 		"language":               {"zh"},
@@ -127,7 +130,9 @@ func commonQuery(ids deviceIDs, fp, region string) url.Values {
 		"web_tab_id":             {newUUID()},
 		"tz_name":                {"Asia/Shanghai"},
 		"fp":                     {fp},
-		"msToken":                {""},
+	}
+	if msToken != "" {
+		q.Set("msToken", msToken)
 	}
 	q.Set("use-olympus-account", "1")
 	return q
@@ -248,6 +253,23 @@ func submitPayload(conversationID, prompt string, ability map[string]any, deepTh
 	return payload
 }
 
+// textSubmitPayload 文本对话顶层 payload：在 submitPayload 基础上写入模型选择三元组
+// （ext.model_item_key / option.agent_mode / option.need_deep_think）。
+// rm.AgentMode==0（回落快速）时与旧 submitPayload 形态一致，向后兼容。
+func textSubmitPayload(conversationID, prompt string, rm resolvedModel) map[string]any {
+	p := submitPayload(conversationID, prompt, nil, rm.DeepThink != 0)
+	if opt, ok := p["option"].(map[string]any); ok {
+		opt["need_deep_think"] = rm.DeepThink
+		if rm.AgentMode != 0 {
+			opt["agent_mode"] = rm.AgentMode
+		}
+	}
+	if ext, ok := p["ext"].(map[string]any); ok && rm.ModelItemKey != "" {
+		ext["model_item_key"] = rm.ModelItemKey
+	}
+	return p
+}
+
 // confirmPayload 确认轮（agent_mode=2，不带 ability）：上游反问参数时回一条「确认」。
 func confirmPayload(conversationID, text string) map[string]any {
 	nowMs := timeNowMs()
@@ -320,8 +342,51 @@ type sseAck struct {
 	QuestionID     string
 }
 
+// dbAuthErrorCodes 上游"HTTP 200 + JSON 错误体"形态的登录失效码。
+var dbAuthErrorCodes = map[int64]bool{710012001: true}
+
+// dbRiskErrorCodes 风控/限流码（社区 doubao2api 实测值）：与凭证无关，
+// 归类 ErrRate 短冷却、不罚号；命中常伴随 verify 挑战（滑块），由人工在网页端过一次即可。
+var dbRiskErrorCodes = map[int64]bool{710022002: true, 710022004: true}
+
+// classifyJSONErrorBody 响应开头是 JSON 错误对象（而非 SSE event）时归类：
+// 登录失效 → ErrAuth（账号池标记需重新登录）；风控/限流 → ErrRate（短冷却不罚号）；
+// 其余错误 → ErrUpstream；不是错误对象返回 nil，交回上层按 SSE 解析。
+func classifyJSONErrorBody(text string) *provider.Error {
+	t := strings.TrimSpace(text)
+	if !strings.HasPrefix(t, "{") {
+		return nil
+	}
+	var probe struct {
+		Code    int64  `json:"code"`
+		Msg     string `json:"msg"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal([]byte(t), &probe) != nil {
+		return nil
+	}
+	if dbRiskErrorCodes[probe.Code] {
+		return &provider.Error{Kind: provider.ErrRate,
+			Msg: "豆包风控限流（" + probe.Msg + "）：请求过密或需滑块验证，稍后自动重试；持续失败请到 www.doubao.com 网页端过一次验证"}
+	}
+	if dbAuthErrorCodes[probe.Code] || strings.Contains(probe.Msg+probe.Message, "登录已过期") ||
+		strings.Contains(probe.Msg+probe.Message, "login invalid") {
+		return &provider.Error{Kind: provider.ErrAuth,
+			Msg: "豆包登录已过期，请重新扫码导入凭证"}
+	}
+	if probe.Code != 0 || probe.Msg != "" {
+		return &provider.Error{Kind: provider.ErrUpstream,
+			Msg: fmt.Sprintf("上游错误 %d: %s", probe.Code, truncateRunes(probe.Msg, 160))}
+	}
+	return nil
+}
+
 // parseSseAck 从提交响应的 SSE 文本里取 conversation_id；STREAM_ERROR 时返回错误。
+// 上游登录失效时返回 HTTP 200 + 纯 JSON 错误体（非 SSE），按内容归类为 ErrAuth。
 func parseSseAck(text string) (*sseAck, error) {
+	if err := classifyJSONErrorBody(text); err != nil {
+		return nil, err
+	}
 	normalized := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
 	for _, packet := range strings.Split(normalized, "\n\n") {
 		var event, data string
@@ -348,7 +413,10 @@ func parseSseAck(text string) (*sseAck, error) {
 				} `json:"query_list"`
 			}
 			if err := json.Unmarshal([]byte(data), &payload); err != nil {
-				return nil, fmt.Errorf("SSE_ACK 解析失败: %v", err)
+				// ACK 数据被截断/空：风控拦截的常见形态（连接被半途掐断，
+				// event 行到了 data 没到全）。归 ErrRate 短冷却，不罚号。
+				return nil, &provider.Error{Kind: provider.ErrRate,
+					Msg: fmt.Sprintf("SSE_ACK 不完整（疑似风控限流/连接被掐断）: %v", err)}
 			}
 			ack := &sseAck{
 				ConversationID: payload.AckClientMeta.ConversationID,
@@ -583,22 +651,30 @@ type resolvedModel struct {
 	Public   string // 对外 ID
 	Upstream string // 上游 ability_param 用名
 	Kind     modelKind
+	// 以下仅文本模型有意义：网页端"模型选择"三元组（实测回显 commerce_model_data_v1 验证）。
+	// ModelItemKey → payload ext.model_item_key；AgentMode → option.agent_mode；
+	// DeepThink → option.need_deep_think（0 快速 / 3 专家 / 4 工作任务 / 5 Pro）。
+	// Window → 对外 context_window（面板/客户端展示）。
+	ModelItemKey string
+	AgentMode    int
+	DeepThink    int
+	Window       int
 }
 
 var imageModels = []resolvedModel{
-	{"seedream-5.0-flash", "Seedream 5.0 Flash", modelImage},
-	{"seedream-5.0-pro", "Seedream 5.0 Pro", modelImage},
-	{"seedream-4.5", "Seedream 4.5", modelImage},
-	{"seedream-4.0", "Seedream 4.0", modelImage},
+	{Public: "seedream-5.0-flash", Upstream: "Seedream 5.0 Flash", Kind: modelImage},
+	{Public: "seedream-5.0-pro", Upstream: "Seedream 5.0 Pro", Kind: modelImage},
+	{Public: "seedream-4.5", Upstream: "Seedream 4.5", Kind: modelImage},
+	{Public: "seedream-4.0", Upstream: "Seedream 4.0", Kind: modelImage},
 }
 
 var videoModels = []resolvedModel{
-	{"seedance-2.5", "seedance_v2.5", modelVideo},
-	{"seedance-2.0", "seedance_v2.0", modelVideo},
-	{"seedance-2.0-pro", "seedance_v2.0_std", modelVideo},
-	{"seedance-2.0-fast", "seedance_v2.0", modelVideo},
-	{"seedance-2.0-mini", "seedance_v2.0_mini", modelVideo},
-	{"seedance-1.0", "ic_mini", modelVideo},
+	{Public: "seedance-2.5", Upstream: "seedance_v2.5", Kind: modelVideo},
+	{Public: "seedance-2.0", Upstream: "seedance_v2.0", Kind: modelVideo},
+	{Public: "seedance-2.0-pro", Upstream: "seedance_v2.0_std", Kind: modelVideo},
+	{Public: "seedance-2.0-fast", Upstream: "seedance_v2.0", Kind: modelVideo},
+	{Public: "seedance-2.0-mini", Upstream: "seedance_v2.0_mini", Kind: modelVideo},
+	{Public: "seedance-1.0", Upstream: "ic_mini", Kind: modelVideo},
 }
 
 var videoModelMaxDuration = map[string]int{
@@ -607,6 +683,30 @@ var videoModelMaxDuration = map[string]int{
 }
 
 const textModelID = "doubao-chat"
+
+// textModels 网页"模型选择"菜单反带的对话模型（参数为实测线上 payload 三元组）。
+// doubao-chat 作为"快速"的别名保留（向后兼容存量配置）；未知名回落快速（原行为）。
+var textModels = []resolvedModel{
+	{Public: "doubao-fast", Upstream: "", Kind: modelText, ModelItemKey: "0", AgentMode: 2, DeepThink: 0, Window: 131072},
+	{Public: textModelID, Upstream: "", Kind: modelText, ModelItemKey: "0", AgentMode: 2, DeepThink: 0, Window: 131072},
+	{Public: "doubao-expert", Upstream: "", Kind: modelText, ModelItemKey: "3", AgentMode: 2, DeepThink: 3, Window: 128000},
+	{Public: "doubao-2.1-lite", Upstream: "", Kind: modelText, ModelItemKey: "seed-lite-7b", AgentMode: 1, DeepThink: 4, Window: 256000},
+	{Public: "doubao-2.1-pro", Upstream: "", Kind: modelText, ModelItemKey: "5", AgentMode: 1, DeepThink: 5, Window: 256000},
+	{Public: "doubao-auto", Upstream: "", Kind: modelText, ModelItemKey: "9", AgentMode: 1, DeepThink: 4, Window: 256000},
+}
+
+// textModelByName 查文本模型表；未命中返回快速（AgentMode=2 走内联流）。
+func textModelByName(name string) resolvedModel {
+	key := normalizeKey(name)
+	for _, m := range textModels {
+		if normalizeKey(m.Public) == key {
+			return m
+		}
+	}
+	fast := textModels[0]
+	fast.Public = name
+	return fast
+}
 
 // normalizeKey 模型名归一化比较键：小写、去掉空格与 . _ - 。
 func normalizeKey(s string) string {
@@ -622,7 +722,7 @@ func normalizeKey(s string) string {
 	return b.String()
 }
 
-// resolveModel 归一化解析模型名；未命中图片/视频表则按文本对话处理。
+// resolveModel 归一化解析模型名：图片/视频表 → 文本表 → 回落快速（透传原名）。
 func resolveModel(name string) resolvedModel {
 	key := normalizeKey(name)
 	for _, m := range imageModels {
@@ -635,7 +735,7 @@ func resolveModel(name string) resolvedModel {
 			return m
 		}
 	}
-	return resolvedModel{Public: name, Upstream: "", Kind: modelText}
+	return textModelByName(name)
 }
 
 // sizeToRatio 分辨率字符串（1024x1024 / 2K 等）→ Seedream 比例（就近匹配）。

@@ -232,7 +232,7 @@ func (p *Provider) resolveOriginal(ctx context.Context, a *model.Account, vid st
 	defer func() { _ = recover() }() // 防御：上游结构异常不拖垮生成主流程
 
 	ids := p.seedOf(a)
-	q := commonQuery(ids, fpOf(a), regionOf(a))
+	q := commonQuery(ids, fpOf(a), regionOf(a), msTokenOf(a))
 	post := func(path string, body map[string]any) (any, int, error) {
 		raw, err := json.Marshal(body)
 		if err != nil {
