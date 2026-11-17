@@ -69,6 +69,99 @@ func NormalizeToolTupleItems(obj map[string]any) {
 	}
 }
 
+// patternMaxDepth：JSON Schema pattern 的括号嵌套深度阈值。超过视为"复杂正则"，
+// WorkBuddy/CodeBuddy 上游校验器会判非法（HTTP 400 code=11129
+// invalid_function_parameters）。实测 ZCode 的 REA 逆向插件工具 schema（环境键
+// 正则，十余层嵌套 alternation）必触发；普通 pattern（邮箱/路径/枚举式）深度 ≤ 2，
+// 保留不受影响。
+const patternMaxDepth = 6
+
+// NormalizeToolSchemaPatterns 删除 tools[].function.parameters 里嵌套过深的
+// pattern 字段。pattern 仅是 JSON Schema 校验元数据，LLM function-calling 不会
+// 执行它，删除不影响工具调用正确性，可根治上游对复杂正则的 11129 拒单。
+func NormalizeToolSchemaPatterns(obj map[string]any) {
+	tools, ok := obj["tools"].([]any)
+	if !ok {
+		return
+	}
+	for _, t := range tools {
+		tool, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		fn, ok := tool["function"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if p, ok := fn["parameters"].(map[string]any); ok {
+			walkDeleteComplexPatterns(p)
+		}
+	}
+}
+
+// walkDeleteComplexPatterns 递归遍历 schema 任意层，删除括号嵌套深度超阈值的
+// pattern 键（含 properties/items/anyOf/propertyNames 等任意位置）。返回是否有改动。
+func walkDeleteComplexPatterns(node any) bool {
+	switch v := node.(type) {
+	case map[string]any:
+		changed := false
+		if p, ok := v["pattern"].(string); ok && regexParenDepth(p) > patternMaxDepth {
+			delete(v, "pattern")
+			changed = true
+		}
+		for _, sub := range v {
+			if walkDeleteComplexPatterns(sub) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, sub := range v {
+			if walkDeleteComplexPatterns(sub) {
+				changed = true
+			}
+		}
+		return changed
+	default:
+		return false
+	}
+}
+
+// regexParenDepth 返回正则里括号的最大嵌套深度（忽略字符类 [...] 内的括号）。
+func regexParenDepth(pat string) int {
+	depth, max := 0, 0
+	esc, inClass := false, false
+	for _, r := range pat {
+		if esc {
+			esc = false
+			continue
+		}
+		switch r {
+		case '\\':
+			esc = true
+		case '[':
+			if !inClass {
+				inClass = true
+			}
+		case ']':
+			inClass = false
+		case '(':
+			if !inClass {
+				depth++
+				if depth > max {
+					max = depth
+				}
+			}
+		case ')':
+			if !inClass && depth > 0 {
+				depth--
+			}
+		}
+	}
+	return max
+}
+
 // normalizeSchemaTupleItems 递归改写 JSON Schema 节点，返回是否有改动。
 func normalizeSchemaTupleItems(node any) bool {
 	switch v := node.(type) {

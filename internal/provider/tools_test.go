@@ -66,3 +66,50 @@ func TestNormalizeToolTupleItemsSkipsNonObject(t *testing.T) {
 	}
 	NormalizeToolTupleItems(mustObj(t, `{"messages":[]}`))
 }
+
+func TestRegexParenDepth(t *testing.T) {
+	cases := map[string]int{
+		`^[a-z]+$`:                          0,
+		`^(?:foo|bar)$`:                     1,
+		`^(?:a(?:b(?:c|d))?)$`:              3,
+		`^[^\u0000]+$`:                        0,   // 字符类里的括号不算
+		`^(?:[^\u0000R][^\u0000]*|R(?:x|y))$`:   2,
+	}
+	for pat, want := range cases {
+		if got := regexParenDepth(pat); got != want {
+			t.Errorf("regexParenDepth(%q)=%d 期望 %d", pat, got, want)
+		}
+	}
+	// REA 环境键正则（真实触发形态）：深度远超阈值
+	big := `^(?:[^\u0000R][^\u0000]*|R(?:[^\u0000E][^\u0000]*|E(?:[^\u0000A][^\u0000]*|A(?:[^\u0000_][^\u0000]*|_(?:[^\u0000P][^\u0000]*|P(?:[^\u0000R][^\u0000]*|R(?:[^\u0000O][^\u0000]*|O(?:[^\u0000C][^\u0000]*|C(?:[^\u0000E][^\u0000]*|E(?:[^\u0000S][^\u0000]*|S(?:[^\u0000S][^\u0000]*|S(?:[^\u0000_][^\u0000]*|_(?:[^\u0000R][^\u0000]*|R(?:[^\u0000U][^\u0000]*|U(?:[^\u0000N][^\u0000]*|N(?:[^\u0000_][^\u0000]*|_(?:[^\u0000I][^\u0000]*|I(?:[^\u0000D][^\u0000]*|D[^\u0000]+)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)?)$`
+	if regexParenDepth(big) <= patternMaxDepth {
+		t.Fatalf("REA 正则深度 %d 应超过阈值 %d", regexParenDepth(big), patternMaxDepth)
+	}
+}
+
+func TestNormalizeToolSchemaPatterns(t *testing.T) {
+	obj := mustObj(t, `{"tools":[
+	  {"type":"function","function":{"name":"a","parameters":{"type":"object","properties":{
+	     "k":{"pattern":"^(?:[^\u0000R][^\u0000]*|R(?:[^\u0000E][^\u0000]*|E(?:[^\u0000A][^\u0000]*|A(?:[^\u0000_][^\u0000]*|_(?:[^\u0000P][^\u0000]*|P(?:[^\u0000R][^\u0000]*|R(?:[\u0000])+))?)?)?)?)?)?$","type":"string"},
+	     "env":{"propertyNames":{"pattern":"^(?:a|b)$","type":"string"},"type":"object"}}}}},
+	  {"type":"function","function":{"name":"b","parameters":{"type":"object","properties":{
+	     "path":{"pattern":"^/[a-z]+$","type":"string"}}}}}]}`)
+	NormalizeToolSchemaPatterns(obj)
+
+	pa := obj["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["parameters"].(map[string]any)
+	props := pa["properties"].(map[string]any)
+	k := props["k"].(map[string]any)
+	if _, has := k["pattern"]; has {
+		t.Fatal("深层嵌套 pattern 应被删除")
+	}
+	// 浅 pattern（propertyNames 深度 1）保留
+	env := props["env"].(map[string]any)["propertyNames"].(map[string]any)
+	if _, has := env["pattern"]; !has {
+		t.Fatal("浅 pattern 应保留")
+	}
+	// 另一个工具的浅 pattern 保留
+	pb := obj["tools"].([]any)[1].(map[string]any)["function"].(map[string]any)["parameters"].(map[string]any)
+	if _, has := pb["properties"].(map[string]any)["path"].(map[string]any)["pattern"]; !has {
+		t.Fatal("普通 pattern 应保留")
+	}
+}

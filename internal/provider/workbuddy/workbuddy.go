@@ -1455,8 +1455,11 @@ func rewriteChatBody(body []byte, modelName, uid string) []byte {
 	if _, exists := obj["prompt_cache_key"]; !exists {
 		obj["prompt_cache_key"] = "chinacpa:" + uid
 	}
-	// 上游校验器拒收 draft-07 元组 items（HTTP 400 code=11129），改写为等价 anyOf。
+	// 上游校验器拒收 draft-07 元组 items（HTTP 400 code=11129），改写为等价 anyOf；
+	// 深层嵌套正则 pattern（ZCode REA 插件的环境键校验，实测同样触发 11129）直接删除
+	// ——pattern 只是校验元数据，function-calling 不执行，删除无副作用。
 	provider.NormalizeToolTupleItems(obj)
+	provider.NormalizeToolSchemaPatterns(obj)
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return body
