@@ -1046,25 +1046,11 @@ section h2{letter-spacing:0.04em !important}
               <div class="topo-cols">
                 <!-- 左列：客户端/Agent 请求源 -->
                 <div class="topo-col topo-clients" id="topoClients">
-                  <div class="topo-node-client active" data-id="c1">
+                  <div class="topo-node-client active" data-client="">
                     <div class="dot-live"></div>
                     <div class="tn-info">
-                      <div class="tn-name">Go-http-client</div>
-                      <div class="tn-sub">auto/deepseek-v3</div>
-                    </div>
-                  </div>
-                  <div class="topo-node-client" data-id="c2">
-                    <div class="dot-live"></div>
-                    <div class="tn-info">
-                      <div class="tn-name">Cursor / IDE Agent</div>
-                      <div class="tn-sub">claude-3.5-sonnet</div>
-                    </div>
-                  </div>
-                  <div class="topo-node-client" data-id="c3">
-                    <div class="dot-live"></div>
-                    <div class="tn-info">
-                      <div class="tn-name">OpenAI SDK Client</div>
-                      <div class="tn-sub">qwen-max / chat</div>
+                      <div class="tn-name">等待请求</div>
+                      <div class="tn-sub">有调用后显示真实客户端</div>
                     </div>
                   </div>
                 </div>
@@ -1857,6 +1843,16 @@ function renderOverview(o){
 /* ── 图3：实时网关调度拓扑流光动画 ──────────────── */
 let TOPO_TIMER = null;
 
+/* topoModelSummary 从真实模型目录（/api/models 的 MODELS 全局）为该 provider
+   生成代表模型串：优先 chat 类，其次按目录顺序，最多 2 个；目录未就绪返回空串。 */
+function topoModelSummary(p){
+  const list=(MODELS&&MODELS[p])||[];
+  if(!list.length)return '';
+  const chats=list.filter(m=>!m.kind||m.kind==='chat');
+  const pick=(chats.length?chats:list).slice(0,2).map(m=>m.id);
+  const more=list.length>pick.length?` +${list.length-pick.length}`:'';
+  return pick.join(' / ')+more;
+}
 function renderTopology(o){
   const wrap = $('#topoCanvasWrap');
   if(!wrap) return;
@@ -1905,15 +1901,9 @@ function renderTopology(o){
       grouped[p].names.push(a.nickname||a.uid||p);
     });
 
-    const provModelMap = {
-      'workbuddy': 'deepseek-v3 / flash',
-      'trae': 'claude-3.5-sonnet',
-      'qoder': 'deepseek-v3 / qoder-v1',
-      'qoder-intl': 'gpt-4o / claude',
-      'doubao': 'doubao-seedream / 1.5',
-      'qwenwork': 'qwen-max / plus',
-      'qwen': 'qwen-flash / 2k'
-    };
+    // 真实模型目录（/api/models 的 MODELS 全局）取每渠道代表模型，
+    // 优先 chat 类，最多 2 个；目录未就绪时留空待下次轮询刷新。
+    const modelStr = topoModelSummary(p);
 
     const provKeys = Object.keys(grouped);
     if(provKeys.length === 0){
@@ -1926,7 +1916,7 @@ function renderTopology(o){
       targetCol.innerHTML = provKeys.map((p, idx)=>{
         const g = grouped[p];
         const pName = PROV_NAMES[p] || p;
-        const modelStr = provModelMap[p] || 'default-model';
+        const modelStr = topoModelSummary(p) || '同步目录…';
         return `
           <div class="topo-node-target ${idx===0?'active':''}" data-prov="${esc(p)}" data-idx="${idx}">
             <div class="t-ico">${p.toUpperCase().slice(0,2)}</div>
@@ -3205,6 +3195,12 @@ async function loadModels(force){
     if(!provs.includes(MODEL_TAB))MODEL_TAB=provs[0]||'workbuddy';
     $('#modelTabs').innerHTML=provs.map(p=>`<span class="tab ${p===MODEL_TAB?'active':''}" onclick="MODEL_TAB='${p}';renderModels()">${PROV_NAMES[p]||p}（${(MODELS[p]||[]).length}）</span>`).join('');
     renderModels();
+    // 模型目录就绪：回填拓扑卡片真实模型名（只改文本节点，不重绘拓扑避免动画重播）
+    document.querySelectorAll('#topoTargets .topo-node-target').forEach(node=>{
+      const p=node.dataset.prov;if(!p)return;
+      const el=node.querySelector('.t-model');if(!el)return;
+      const s=topoModelSummary(p);if(s)el.textContent=s;
+    });
   }catch(e){}
 }
 function renderModels(){
