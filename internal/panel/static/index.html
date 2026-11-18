@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ChinaCPA · 国产反代管理面板</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='5' fill='%23c96442'/><path d='M12 5v14M5 12h14M7 7l10 10M17 7L7 17' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'/></svg>">
 <style>
 :root{
   --bg:#faf9f5; --bg-soft:#f4f2ea; --card:#ffffff; --border:#e8e4d9; --border2:#d8d3c4;
@@ -1901,9 +1902,8 @@ function renderTopology(o){
       grouped[p].names.push(a.nickname||a.uid||p);
     });
 
-    // 真实模型目录（/api/models 的 MODELS 全局）取每渠道代表模型，
-    // 优先 chat 类，最多 2 个；目录未就绪时留空待下次轮询刷新。
-    const modelStr = topoModelSummary(p);
+    // 每渠道代表模型见 map 回调内 topoModelSummary(p)：真实目录未就绪显示「同步目录…」，
+    // loadModels 完成后回填文本节点。
 
     const provKeys = Object.keys(grouped);
     if(provKeys.length === 0){
