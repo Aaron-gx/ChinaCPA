@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -21,23 +22,28 @@ type Scheduler struct {
 	pool *pool.Pool
 	st   *store.Store
 
-	// lastCheckin 每 provider 上次成功签到的日期（YYYY-MM-DD）；
-	// 失败的账号不记录，60 秒后由 tick 再次尝试，直至成功或当天结束。
-	lastCheckin   map[string]string
+	// 定时签到、导入账号和面板按钮共用同一账号的在途操作。
+	checkinMu     sync.Mutex
+	checkins      map[[2]string]*checkinFlight
 	lastTokenDay  string
 	lastQuotaTick time.Time
 	quit          chan struct{}
 	stopOnce      sync.Once
 }
 
+type checkinFlight struct {
+	done   chan struct{}
+	result model.CheckinResult
+}
+
 // New 构造。
 func New(cfg *config.Config, p *pool.Pool, st *store.Store) *Scheduler {
 	return &Scheduler{
-		cfg:          cfg,
-		pool:         p,
-		st:           st,
-		lastCheckin:  map[string]string{},
-		quit:         make(chan struct{}),
+		cfg:      cfg,
+		pool:     p,
+		st:       st,
+		checkins: map[[2]string]*checkinFlight{},
+		quit:     make(chan struct{}),
 	}
 }
 
@@ -75,7 +81,7 @@ func (s *Scheduler) tick(now time.Time) {
 	day := now.Format("2006-01-02")
 	// 2) 每日签到：配置小时窗口内启动；失败的账号不记日期，下个 tick 自动重试
 	if cfg.CheckinEnabled && containsHour(cfg.CheckinHours, hour) {
-		s.tickCheckins(day)
+		s.tickCheckins()
 	}
 	// 3) token 保活
 	if s.lastTokenDay != day && containsHour(cfg.TokenRefreshHours, hour) {
@@ -93,19 +99,13 @@ func containsHour(hours []int, h int) bool {
 	return false
 }
 
-// tickCheckins 对「今天还没签到成功」的账号发起签到（跨 provider 去重）。
-func (s *Scheduler) tickCheckins(day string) {
-	// 只处理存在且当日未成功的账号，避免每次 tick 全量空转
+// tickCheckins 按账号检查落盘的签到记录，每个账号独立重试。
+func (s *Scheduler) tickCheckins() {
 	for _, a := range s.pool.Accounts() {
 		if a.Disabled || a.NeedsRelogin {
 			continue
 		}
-		if s.lastCheckin[a.Provider] == day {
-			continue
-		}
-		// 面板手动签到成功会写 lastCheckin（CheckinAccount 内更新）
-		if r, ok := s.st.TodayCheckin(a.Provider, a.UID); ok && r.OK {
-			s.lastCheckin[a.Provider] = day
+		if r, ok := s.st.TodayCheckin(a.Provider, a.UID); ok && (r.OK || r.Already) {
 			continue
 		}
 		go s.CheckinAccount(a)
@@ -125,29 +125,61 @@ func (s *Scheduler) runAllCheckins() {
 // CheckinAccount 单账号签到（面板手动触发同一入口）：
 // 签到 → WorkBuddy 任务中心自动接受/领奖 → 立即刷新额度。
 func (s *Scheduler) CheckinAccount(a *model.Account) *model.CheckinResult {
+	key := [2]string{a.Provider, a.UID}
+	s.checkinMu.Lock()
+	if inFlight := s.checkins[key]; inFlight != nil {
+		s.checkinMu.Unlock()
+		<-inFlight.done
+		result := inFlight.result
+		return &result
+	}
+	if r, ok := s.st.TodayCheckin(a.Provider, a.UID); ok && (r.OK || r.Already) {
+		s.checkinMu.Unlock()
+		return &r
+	}
+	inFlight := &checkinFlight{done: make(chan struct{})}
+	s.checkins[key] = inFlight
+	s.checkinMu.Unlock()
+
+	res := s.checkinAccount(a)
+	s.checkinMu.Lock()
+	inFlight.result = *res
+	delete(s.checkins, key)
+	close(inFlight.done)
+	s.checkinMu.Unlock()
+	return res
+}
+
+func (s *Scheduler) checkinAccount(a *model.Account) *model.CheckinResult {
 	pr, ok := s.pool.Provider(a.Provider)
 	if !ok {
 		return &model.CheckinResult{OK: false, Message: "未知平台"}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	// 临期 token 先刷新
-	if _, err := s.pool.EnsureFreshToken(ctx, a); err != nil {
-		log.Printf("SCHED: [%s] token 刷新失败: %v", a.Provider+"/"+label(a), err)
-	}
 	var res *model.CheckinResult
-	if r, err := pr.Checkin(ctx, a); err != nil {
-		if err == provider.ErrNotSupported {
-			// 平台压根没有签到体系：说明型结果（非失败），面板以中性标签展示
-			res = &model.CheckinResult{OK: false, Info: true, Message: "该平台无每日签到"}
-		} else {
-			res = &model.CheckinResult{OK: false, Message: err.Error()}
-		}
+	if _, err := s.pool.EnsureFreshToken(ctx, a); err != nil {
+		res = &model.CheckinResult{Message: err.Error()}
 	} else {
-		res = r
+		r, err := pr.Checkin(ctx, a)
+		switch {
+		case errors.Is(err, provider.ErrNotSupported):
+			res = &model.CheckinResult{Info: true, Message: "该平台无每日签到"}
+		case err != nil:
+			if provider.AsError(err).Kind == provider.ErrAuth {
+				s.pool.MarkError(a, "", err)
+			}
+			res = &model.CheckinResult{Message: err.Error()}
+		default:
+			if r == nil {
+				res = &model.CheckinResult{Message: "平台未返回签到结果"}
+			} else {
+				res = r
+			}
+		}
 	}
 	// WorkBuddy：任务中心自动完成
-	if s.cfg.Schedule.TasksEnabled {
+	if s.cfg.Schedule.TasksEnabled && !a.NeedsRelogin {
 		if wb, ok := pr.(interface {
 			RunTasks(ctx context.Context, a *model.Account) (int64, string, error)
 		}); ok {
@@ -158,18 +190,10 @@ func (s *Scheduler) CheckinAccount(a *model.Account) *model.CheckinResult {
 		}
 	}
 	s.st.RecordCheckin(a.Provider, a.UID, *res)
-	// 成功或已签：记当天完成（避免同一小时窗口内反复触发）。
-	// Info（无签到接口的说明型结果）不算完成：当日在后续窗口继续确认发放状态。
-	if res.OK || res.Already {
-		s.lastCheckin[a.Provider] = time.Now().Format("2006-01-02")
+	log.Printf("SCHED: [%s] 签到: %s", a.Provider+"/"+label(a), res.Message)
+	if res.OK || res.Already || res.Info {
+		go s.refreshQuota(a)
 	}
-	if res.Info {
-		log.Printf("SCHED: [%s] 签到: %s（说明型，非失败，稍后自动复查）", a.Provider+"/"+label(a), res.Message)
-	} else {
-		log.Printf("SCHED: [%s] 签到: %s", a.Provider+"/"+label(a), res.Message)
-	}
-	// 签到后立刻刷新额度
-	go s.refreshQuota(a)
 	return res
 }
 

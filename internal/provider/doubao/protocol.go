@@ -374,7 +374,7 @@ func classifyJSONErrorBody(text string) *provider.Error {
 		return &provider.Error{Kind: provider.ErrAuth,
 			Msg: "豆包登录已过期，请重新扫码导入凭证"}
 	}
-	if probe.Code != 0 || probe.Msg != "" {
+	if probe.Code != 0 {
 		return &provider.Error{Kind: provider.ErrUpstream,
 			Msg: fmt.Sprintf("上游错误 %d: %s", probe.Code, truncateRunes(probe.Msg, 160))}
 	}
@@ -400,6 +400,9 @@ func parseSseAck(text string) (*sseAck, error) {
 			}
 		}
 		if event == "STREAM_ERROR" {
+			if err := classifyJSONErrorBody(data); err != nil {
+				return nil, err
+			}
 			return nil, fmt.Errorf("上游 STREAM_ERROR: %s", truncateRunes(data, 300))
 		}
 		if event == "SSE_ACK" {
@@ -421,6 +424,9 @@ func parseSseAck(text string) (*sseAck, error) {
 			ack := &sseAck{
 				ConversationID: payload.AckClientMeta.ConversationID,
 				SectionID:      payload.AckClientMeta.SectionID,
+			}
+			if ack.ConversationID == "" {
+				return nil, &provider.Error{Kind: provider.ErrUpstream, Msg: "豆包 SSE_ACK 缺少会话 ID"}
 			}
 			if len(payload.QueryList) > 0 {
 				ack.QuestionID = payload.QueryList[0].QuestionID

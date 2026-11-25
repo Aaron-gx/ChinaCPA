@@ -31,6 +31,8 @@ const dbUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.3
 // 设备标识直连网页 API（fp=s_v_web_id 随 Cookie 自带，msToken 可为空）。
 type Provider struct {
 	http *http.Client // 重定向不跟随：登录链路需手动收每跳 Set-Cookie；登录失效时上游会 302
+	// apiOrigin 默认指向豆包网页 API；测试和本地协议回放可替换为模拟服务地址。
+	apiOrigin string
 
 	// streamHTTP 同步对话内联 SSE 长连接专用：http.Client.Timeout 覆盖 Body 读取
 	// 全程，30s 默认值会掐断流，这里不设请求级超时（靠 ctx 与空闲判定）。
@@ -63,6 +65,7 @@ func New(imageLimit, videoLimit int64) *Provider {
 				return http.ErrUseLastResponse
 			},
 		},
+		apiOrigin: dbOrigin,
 		streamHTTP: &http.Client{
 			Timeout: 0,
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -73,6 +76,13 @@ func New(imageLimit, videoLimit int64) *Provider {
 		VideoDailyLimit: videoLimit,
 		qrSessions:      map[string]*qrSession{},
 	}
+}
+
+func (p *Provider) origin() string {
+	if p.apiOrigin != "" {
+		return p.apiOrigin
+	}
+	return dbOrigin
 }
 
 func (p *Provider) ID() string          { return "doubao" }
@@ -144,7 +154,7 @@ func dbHeaders(a *model.Account, contentType string) map[string]string {
 
 // dbPost POST JSON（SSE/JSON 通用；重定向已被 client 禁止，3xx 即凭证失效）。
 func (p *Provider) dbPost(ctx context.Context, a *model.Account, path string, query url.Values, contentType string, body []byte, extra map[string]string) (*http.Response, error) {
-	u := dbOrigin + path + "?" + query.Encode()
+	u := p.origin() + path + "?" + query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -262,6 +272,9 @@ func (p *Provider) validate(ctx context.Context, a *model.Account) error {
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("校验失败 HTTP %d: %s", resp.StatusCode, truncateRunes(string(raw), 160))
 	}
+	if err := classifyJSONErrorBody(string(raw)); err != nil {
+		return err
+	}
 	// 尽力取昵称（响应结构上游未公开，递归找 nickname/name 字段）
 	var data any
 	if json.Unmarshal(raw, &data) == nil {
@@ -355,11 +368,6 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 	}, nil
 }
 
-// Checkin 豆包无签到体系。
-func (p *Provider) Checkin(_ context.Context, _ *model.Account) (*model.CheckinResult, error) {
-	return nil, provider.ErrNotSupported
-}
-
 // ── 模型目录 ─────────────────────────────────────────────
 
 // Models 内置目录：文本（网页模型选择菜单反带）+ Seedream 图片 + Seedance 视频。
@@ -429,32 +437,11 @@ func (p *Provider) submit(ctx context.Context, a *model.Account, payload map[str
 		return nil, &provider.Error{Kind: classifyStatus(resp.StatusCode), Status: resp.StatusCode,
 			Msg: fmt.Sprintf("提交失败 HTTP %d: %s", resp.StatusCode, truncateRunes(string(raw), 200))}
 	}
-	// SSE 增量读：见到 SSE_ACK / STREAM_ERROR 事件（其后跟随空行）即断流，
-	// 生成结果改走 /im/chain/single 轮询（Doora 同款策略）
-	var sb strings.Builder
-	chunk := make([]byte, 16*1024)
-	readDone := func() bool {
-		s := sb.String()
-		for _, marker := range []string{"SSE_ACK", "STREAM_ERROR"} {
-			if i := strings.Index(s, marker); i >= 0 && strings.Contains(s[i:], "\n\n") {
-				return true
-			}
-		}
-		return sb.Len() > 2<<20 // 防御性上限
+	packets, err := readSSEUntilAckPacket(bufio.NewReader(resp.Body))
+	if err != nil {
+		return nil, err
 	}
-	for {
-		n, rerr := resp.Body.Read(chunk)
-		if n > 0 {
-			sb.Write(chunk[:n])
-			if readDone() {
-				break
-			}
-		}
-		if rerr != nil {
-			break // EOF / 超时 / 连接重置：交给 parseSseAck 判定
-		}
-	}
-	return parseSseAck(sb.String())
+	return parseSseAck(packets)
 }
 
 // liveAck submitKeep 的返回：SSE_ACK 解析结果 + 尚未消费的剩余流。
@@ -561,24 +548,28 @@ func sseEventName(pkt string) string {
 
 // readSSEPacket 读到空行为止，返回 packet 原文（含换行，行尾 \r 归一）。
 func readSSEPacket(rd *bufio.Reader) (string, error) {
+	const maxPacket = 4 << 20
 	var sb strings.Builder
+	continuing := false
 	for {
-		line, err := rd.ReadString('\n')
-		if line != "" {
-			sb.WriteString(strings.TrimRight(line, "\r"))
-			sb.WriteString("\n")
+		line, prefix, err := rd.ReadLine()
+		if sb.Len()+len(line) > maxPacket {
+			return "", fmt.Errorf("豆包 SSE 事件超过大小限制")
 		}
 		if err != nil {
 			return sb.String(), err
 		}
-		if strings.TrimRight(line, "\r\n") == "" {
-			trimmed := strings.TrimRight(sb.String(), "\n")
-			if trimmed == "" {
-				sb.Reset() // 连续空行：继续等下一个 packet
-				continue
+		if len(line) == 0 && !continuing && !prefix {
+			if sb.Len() != 0 {
+				return strings.TrimSuffix(sb.String(), "\n"), nil
 			}
-			return trimmed, nil
+			continue
 		}
+		sb.Write(line)
+		if !prefix {
+			sb.WriteByte('\n')
+		}
+		continuing = prefix
 	}
 }
 
@@ -604,6 +595,9 @@ func (p *Provider) pollChain(ctx context.Context, a *model.Account, conversation
 			return nil, authExpiredError(resp.StatusCode, string(raw))
 		}
 		return nil, fmt.Errorf("轮询失败 HTTP %d: %s", resp.StatusCode, truncateRunes(string(raw), 160))
+	}
+	if err := classifyJSONErrorBody(string(raw)); err != nil {
+		return nil, err
 	}
 	var cr chainResponse
 	if err := json.Unmarshal(raw, &cr); err != nil {
@@ -684,6 +678,7 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 		}
 		pr, pw := io.Pipe()
 		go func() {
+			defer pw.Close()
 			p.streamText(ctx, a, ack.ConversationID, rm.Public, pw)
 		}()
 		return &provider.ChatResult{Body: pr, ContentType: "text/event-stream"}, nil
@@ -792,7 +787,7 @@ func (t *inlineTextAcc) feedPacket(event, data string) (string, bool, string) {
 		return j.Text, false, ""
 	case "SSE_REPLY_END":
 		var j struct {
-			EndType       int    `json:"end_type"`
+			EndType       int `json:"end_type"`
 			MsgFinishAttr struct {
 				Brief string `json:"brief"`
 			} `json:"msg_finish_attr"`
@@ -998,20 +993,24 @@ func (p *Provider) streamText(ctx context.Context, a *model.Account, conversatio
 		_, _ = w.Write(append(append([]byte("data: "), errPayload...), '\n', '\n'))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) && ctx.Err() == nil {
 		cr, err := p.pollChain(ctx, a, conversationID)
 		if err != nil {
 			if pe, ok := err.(*provider.Error); ok && pe.Kind == provider.ErrAuth {
 				fail(err.Error())
 				return
 			}
-			time.Sleep(3 * time.Second)
+			if !waitPoll(ctx, 3*time.Second) {
+				break
+			}
 			continue
 		}
 		if readClarifyState(cr) && confirmRounds < 4 {
 			confirmRounds++
 			_ = p.sendConfirm(ctx, a, conversationID, "确认")
-			time.Sleep(2 * time.Second)
+			if !waitPoll(ctx, 2*time.Second) {
+				break
+			}
 			continue
 		}
 		text := parseConversationText(cr)
@@ -1041,7 +1040,9 @@ func (p *Provider) streamText(ctx context.Context, a *model.Account, conversatio
 		case <-time.After(2500 * time.Millisecond):
 		}
 	}
-	fail("豆包回复超时")
+	if ctx.Err() == nil {
+		fail("豆包回复超时")
+	}
 }
 
 // awaitText 阻塞轮询直到助手文本稳定（或超时）。
@@ -1049,19 +1050,23 @@ func (p *Provider) awaitText(ctx context.Context, a *model.Account, conversation
 	deadline := time.Now().Add(timeout)
 	sent, stable := "", 0
 	confirmRounds := 0
-	for time.Now().Before(deadline) {
+	for time.Now().Before(deadline) && ctx.Err() == nil {
 		cr, err := p.pollChain(ctx, a, conversationID)
 		if err != nil {
 			if pe, ok := err.(*provider.Error); ok && pe.Kind == provider.ErrAuth {
 				return "", err
 			}
-			time.Sleep(3 * time.Second)
+			if !waitPoll(ctx, 3*time.Second) {
+				break
+			}
 			continue
 		}
 		if readClarifyState(cr) && confirmRounds < 4 {
 			confirmRounds++
 			_ = p.sendConfirm(ctx, a, conversationID, "确认")
-			time.Sleep(2 * time.Second)
+			if !waitPoll(ctx, 2*time.Second) {
+				break
+			}
 			continue
 		}
 		text := parseConversationText(cr)
@@ -1088,10 +1093,22 @@ func (p *Provider) awaitText(ctx context.Context, a *model.Account, conversation
 		case <-time.After(2500 * time.Millisecond):
 		}
 	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
 	if sent != "" {
 		return sent, nil
 	}
 	return "", &provider.Error{Kind: provider.ErrUpstream, Msg: "豆包回复超时"}
+}
+
+func waitPoll(ctx context.Context, delay time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(delay):
+		return true
+	}
 }
 
 // flattenMessages OpenAI messages → 单条用户文本（网页协议无多轮结构，历史平铺）。

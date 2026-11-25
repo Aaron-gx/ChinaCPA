@@ -2,11 +2,19 @@ package trae
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
+	"net/http"
 	"strings"
 	"testing"
+
+	"chinacpa/internal/model"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 // TestSoloToOpenAIStream 验证 SOLO SSE → OpenAI SSE 转换：
 // output 增量 → chat.completion.chunk；token_usage → 带 usage 的块；done → finish + [DONE]。
@@ -110,7 +118,7 @@ func TestAggregateSolo(t *testing.T) {
 
 // TestPrepareBody OpenAI → SOLO 请求体转换。
 func TestPrepareBody(t *testing.T) {
-	in := `{"model":"glm-5.2","stream":false,"messages":[{"role":"user","content":"hi"}]}`
+	in := `{"model":"glm-5.2","stream":false,"messages":[{"role":"system","content":"stable"},{"role":"user","content":"hi"}]}`
 	out := prepareBody([]byte(in), "glm-5.2", fallbackScene)
 	var obj map[string]any
 	if err := json.Unmarshal(out, &obj); err != nil {
@@ -126,13 +134,117 @@ func TestPrepareBody(t *testing.T) {
 		t.Errorf("config_name 错误: %v", obj["config_name"])
 	}
 	msgs := obj["messages"].([]any)
-	m := msgs[0].(map[string]any)
+	system := msgs[0].(map[string]any)
+	systemContent := system["content"].([]any)[0].(map[string]any)
+	cacheControl := systemContent["cache_control"].(map[string]any)
+	if cacheControl["type"] != "ephemeral" {
+		t.Errorf("应为稳定系统提示添加 ephemeral 缓存断点: %v", systemContent["cache_control"])
+	}
+	m := msgs[1].(map[string]any)
 	content, ok := m["content"].([]any)
 	if !ok || len(content) != 1 {
 		t.Fatalf("content 应转为数组: %v", m["content"])
 	}
 	if content[0].(map[string]any)["text"] != "hi" {
 		t.Fatalf("content 文本错误: %v", content)
+	}
+}
+
+func TestPrepareBodyPreservesExplicitCacheControl(t *testing.T) {
+	in := `{"messages":[{"role":"system","content":[{"type":"text","text":"prompt","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`
+	var body map[string]any
+	if err := json.Unmarshal(prepareBody([]byte(in), "glm-5.2", primaryScene), &body); err != nil {
+		t.Fatal(err)
+	}
+	part := body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	cache := part["cache_control"].(map[string]any)
+	if cache["ttl"] != "1h" {
+		t.Fatalf("explicit cache control 被覆盖: %v", cache)
+	}
+}
+
+func TestCheckinUsesTraeIDERequestAndVerifiesClaim(t *testing.T) {
+	var paths []string
+	provider := New()
+	provider.http.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		paths = append(paths, req.URL.Path)
+		if req.Header.Get("Authorization") != "Cloud-IDE-JWT access" ||
+			req.Header.Get("X-Device-Id") != "device" ||
+			req.Header.Get("X-Device-Type") != "windows" {
+			t.Errorf("签到请求缺少 Trae IDE 头: %v", req.Header)
+		}
+		raw, _ := io.ReadAll(req.Body)
+		if string(raw) != `{"req_source":1}` {
+			t.Errorf("签到请求没有包含 Windows Trae 的 req_source: %s", raw)
+		}
+		responseBody := `{"code":0,"enable":true,"checked_in":false,"credits":100,"extra_credits":100}`
+		if strings.HasSuffix(req.URL.Path, "/claim") {
+			responseBody = `{"code":0}`
+		} else if len(paths) > 1 {
+			responseBody = `{"code":0,"enable":true,"checked_in":true,"credits":100,"extra_credits":100}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(responseBody)), Header: make(http.Header), Request: req}, nil
+	})
+
+	result, err := provider.Checkin(context.Background(), &model.Account{UID: "u1", AccessToken: "access", DeviceID: "device"})
+	if err != nil {
+		t.Fatalf("checkin: %v", err)
+	}
+	if !result.OK || result.CreditsEarned != 200 {
+		t.Fatalf("签到奖励或确认状态错误: %+v", result)
+	}
+	want := []string{epCheckinStatus, epCheckinClaim, epCheckinStatus}
+	if strings.Join(paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("状态/领取/回查顺序错误: %v", paths)
+	}
+}
+
+func TestMarkCachePrefixOnlyMarksStableSystemText(t *testing.T) {
+	obj := map[string]any{"tools": []any{map[string]any{"type": "function"}}, "messages": []any{
+		map[string]any{"role": "system", "content": []any{map[string]any{"type": "text", "text": "instructions"}}},
+		map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "request"}}},
+	}}
+	markCachePrefix(obj)
+	got := obj["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"].(map[string]string)
+	if got["type"] != "ephemeral" {
+		t.Fatalf("稳定系统提示缺少缓存断点: %v", got)
+	}
+	if got := obj["messages"].([]any)[1].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"]; got != nil {
+		t.Fatalf("用户消息不应被单独设置为缓存前缀: %v", got)
+	}
+}
+
+func TestCheckinReportsAlreadySignedAndInvalidClaim(t *testing.T) {
+	for _, tt := range []struct {
+		name                string
+		responses           []string
+		wantOK, wantAlready bool
+	}{
+		{name: "already signed", responses: []string{`{"code":0,"enable":true,"checked_in":false,"did_checked_in":true}`}, wantOK: true, wantAlready: true},
+		{name: "rejected claim", responses: []string{`{"code":0,"enable":true,"checked_in":false}`, `{"code":4001,"message":"try again"}`}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			index := 0
+			p := New()
+			p.http.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if index >= len(tt.responses) {
+					t.Fatal("unexpected upstream request")
+				}
+				responseBody := tt.responses[index]
+				index++
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(responseBody)), Header: make(http.Header), Request: req}, nil
+			})
+			result, err := p.Checkin(context.Background(), &model.Account{UID: "u1", AccessToken: "access"})
+			if tt.wantOK {
+				if err != nil || !result.OK || result.Already != tt.wantAlready {
+					t.Fatalf("已签到状态识别失败: result=%+v err=%v", result, err)
+				}
+				return
+			}
+			if err == nil || index != 2 {
+				t.Fatalf("无效的领取响应应返回错误: result=%+v err=%v requests=%d", result, err, index)
+			}
+		})
 	}
 }
 
@@ -158,10 +270,10 @@ func TestSumPacks(t *testing.T) {
 		return p
 	}
 	list := []entPack{
-		mk(100, 0),    // 签到奖励 100/100
-		mk(500, 500),  // 每月登录赠送 0/500（已用完）
-		mk(2000, 2000),// 新用户福利 0/2000（已用完）
-		mk(0, 0),      // 纯功能开关包：无数值，跳过
+		mk(100, 0),     // 签到奖励 100/100
+		mk(500, 500),   // 每月登录赠送 0/500（已用完）
+		mk(2000, 2000), // 新用户福利 0/2000（已用完）
+		mk(0, 0),       // 纯功能开关包：无数值，跳过
 	}
 	remain, limit, used, packs := sumPacks(list)
 	if packs != 3 {

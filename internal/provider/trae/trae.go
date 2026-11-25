@@ -801,27 +801,14 @@ func (p *Provider) Quota(ctx context.Context, a *model.Account) (*model.QuotaInf
 	}, nil
 }
 
-// freeCredits 查签到状态接口的免费余额（credits + extra_credits）。
-// 第二返回值为 checked_in 指针（接口失败时 nil）。
+// freeCredits 仅用于额度查询的兜底，不吞掉签到流程本身的错误。
 func (p *Provider) freeCredits(ctx context.Context, a *model.Account) (int64, *bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epCheckinStatus, bytes.NewReader([]byte("{}")))
+	status, err := p.checkinStatus(ctx, a)
 	if err != nil {
 		return 0, nil
 	}
-	p.ugHeaders(req, a)
-	data, err := p.doJSON(req)
-	if err != nil {
-		return 0, nil
-	}
-	var st struct {
-		CheckedIn    bool  `json:"checked_in"`
-		Credits      int64 `json:"credits"`
-		ExtraCredits int64 `json:"extra_credits"`
-	}
-	if json.Unmarshal(data, &st) != nil {
-		return 0, nil
-	}
-	return st.Credits + st.ExtraCredits, &st.CheckedIn
+	checked := status.signed()
+	return status.Credits + status.ExtraCredits, &checked
 }
 
 // ReportIdeCredits 对话流 notify_usage 实时上报（SOLO 通道真实余额）。
@@ -848,41 +835,6 @@ func (p *Provider) LastIdeCredits(uid string) (ide, work float64, ok bool) {
 	defer ideReportMu.Unlock()
 	e, exists := ideReport[uid]
 	return e.ide, e.work, exists && time.Now().Unix()-e.ts < 86400
-}
-
-// ── 签到（每日 +200 ide_credits） ────────────────────────
-
-func (p *Provider) Checkin(ctx context.Context, a *model.Account) (*model.CheckinResult, error) {
-	before, beforeChecked := p.freeCredits(ctx, a)
-	if beforeChecked != nil && *beforeChecked {
-		return &model.CheckinResult{OK: true, Already: true, Message: "今天已签到", CreditsEarned: before}, nil
-	}
-	creq, err := http.NewRequestWithContext(ctx, http.MethodPost, ugHost+epCheckinClaim, bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return nil, err
-	}
-	p.ugHeaders(creq, a)
-	if _, err := p.doJSON(creq); err != nil {
-		pe := provider.AsError(err)
-		if strings.Contains(pe.Msg, "9074") || strings.Contains(pe.Msg, "人数太多") {
-			return &model.CheckinResult{OK: false, Message: "签到人数过多（9074），明日 9 点自动再试"}, nil
-		}
-		return nil, err
-	}
-	// claim 返回 code 0 不代表记上（设备指纹被拒也返回 0）：回查状态确认。
-	after, afterChecked := p.freeCredits(ctx, a)
-	if afterChecked == nil || !*afterChecked {
-		// 回查失败或未翻真：无法确认，按未生效处理（调度层当日还会重试）
-		return &model.CheckinResult{OK: false, Message: "签到未确认生效（设备指纹被拒或已领过），明日 9 点自动再试"}, nil
-	}
-	// 奖励额以实际差额为准；无法确认差额时不臆造 200
-	earned := int64(0)
-	if after > before {
-		earned = after - before
-	}
-	// 回填实时余额，面板额度立即可见
-	p.ReportIdeCredits(a.UID, float64(after), 0)
-	return &model.CheckinResult{OK: true, Message: "签到成功", CreditsEarned: earned}, nil
 }
 
 // ── 模型列表（双 scene 合并） ────────────────────────────
@@ -1053,6 +1005,7 @@ func prepareBody(src []byte, modelName, scene string) []byte {
 		delete(obj, "tools")
 		delete(obj, "tool_choice")
 	}
+	markCachePrefix(obj)
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return src

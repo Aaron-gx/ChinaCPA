@@ -6,12 +6,158 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
+	"chinacpa/internal/model"
 	"chinacpa/internal/provider"
 )
+
+func TestCheckinClaimsEligibleDesktopCampaignAndConfirmsResult(t *testing.T) {
+	const scene = "g_1229d8e3a1becc5ab073ebf150db7104"
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodPost || r.URL.Query().Get("aid") != dbAid {
+			t.Errorf("豆包活动请求头/参数错误: %s %s", r.Method, r.URL.String())
+		}
+		if r.Header.Get("Cookie") != "sessionid=test; s_v_web_id=verify_test" {
+			t.Errorf("未传入账号 Cookie")
+		}
+		switch r.URL.Path {
+		case doubaoLandingPath:
+			var body struct {
+				Target string         `json:"target_card_group_id"`
+				Badge  map[string]int `json:"badge_counts"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("landing 请求体无效: %v", err)
+			}
+			if body.Target != scene || body.Badge["incentive"] != 1 {
+				t.Errorf("landing 活动参数错误: %+v", body)
+			}
+			_, _ = io.WriteString(w, `{"code":200,"data":{"chosen_type":2,"extra_params":{"scene":"`+scene+`"},"complete_page_info":{"title":"今日签到领 200 额度","buttons":[{"interaction_type":2}]}}}`)
+		case doubaoCheckinPath:
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Errorf("checkin 请求体无效: %v", err)
+			}
+			if body["scene"] != scene {
+				t.Errorf("签到 scene=%q, want %q", body["scene"], scene)
+			}
+			_, _ = io.WriteString(w, `{"code":200,"data":{"checked_in":true,"credits":200}}`)
+		default:
+			t.Errorf("unexpected path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	p := New(50, 10)
+	p.apiOrigin = server.URL
+	p.http = server.Client()
+	result, err := p.Checkin(context.Background(), &model.Account{
+		UID: "test-user", WebCookie: "sessionid=test; s_v_web_id=verify_test",
+	})
+	if err != nil {
+		t.Fatalf("签到失败: %v", err)
+	}
+	if !result.OK || result.Already || result.CreditsEarned != 200 || calls != 2 {
+		t.Fatalf("签到结果或请求次数错误: result=%+v calls=%d", result, calls)
+	}
+}
+
+func TestCheckinSkipsUnavailableAndAlreadyClaimedCampaigns(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		body      string
+		wantOK    bool
+		wantInfo  bool
+		wantCalls int
+	}{
+		{name: "no active landing", body: `{"code":0,"data":{"chosen_type":0}}`, wantInfo: true, wantCalls: 1},
+		{name: "already checked", body: `{"code":200,"data":{"checked_in":true,"credits":200}}`, wantOK: true, wantCalls: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			defer server.Close()
+			p := New(50, 10)
+			p.apiOrigin, p.http = server.URL, server.Client()
+			result, err := p.Checkin(context.Background(), &model.Account{UID: "test-user", WebCookie: "sessionid=s; s_v_web_id=fp"})
+			if err != nil {
+				t.Fatalf("签到查询失败: %v", err)
+			}
+			if result.OK != tt.wantOK || result.Info != tt.wantInfo || calls != tt.wantCalls {
+				t.Fatalf("结果错误: result=%+v calls=%d", result, calls)
+			}
+		})
+	}
+}
+
+func TestCheckinDoesNotReportSuccessWhenClaimIsUnconfirmed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case doubaoLandingPath:
+			_, _ = io.WriteString(w, `{"code":0,"data":{"chosen_type":2,"extra_params":{"scene":"g_test"},"complete_page_info":{"buttons":[{"interaction_type":2}]}}}`)
+		case doubaoCheckinPath:
+			_, _ = io.WriteString(w, `{"code":0,"data":{"checked_in":false}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	p := New(50, 10)
+	p.apiOrigin, p.http = server.URL, server.Client()
+	result, err := p.Checkin(context.Background(), &model.Account{UID: "test-user", WebCookie: "sessionid=s; s_v_web_id=fp"})
+	if err != nil || result.OK || result.Already || result.Info {
+		t.Fatalf("未确认的领取不可当成成功/说明状态: result=%+v err=%v", result, err)
+	}
+}
+
+func TestCheckinRequiresCheckedInInsideData(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == doubaoLandingPath {
+			_, _ = io.WriteString(w, `{"code":0,"data":{"chosen_type":2,"extra_params":{"campaign_group_code":"g_test"},"complete_page_info":{"buttons":[{"interaction_type":2}]}}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"code":0,"data":{"checked_in":false,"other":{"checked_in":true}}}`)
+	}))
+	defer server.Close()
+	p := New(50, 10)
+	p.apiOrigin, p.http = server.URL, server.Client()
+	result, err := p.Checkin(context.Background(), &model.Account{UID: "test-user", WebCookie: "sessionid=s; s_v_web_id=fp"})
+	if err != nil || result.OK || result.Already {
+		t.Fatalf("data 以外的 checked_in 不可确认为成功: result=%+v err=%v", result, err)
+	}
+}
+
+func TestCheckinCampaignErrorsAreReturned(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		kind provider.ErrKind
+	}{
+		{body: `{"code":710012001,"msg":"登录已过期"}`, kind: provider.ErrAuth},
+		{body: `{"code":500,"msg":"活动服务错误"}`, kind: provider.ErrUpstream},
+	} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, tc.body)
+		}))
+		p := New(50, 10)
+		p.apiOrigin, p.http = server.URL, server.Client()
+		_, err := p.Checkin(context.Background(), &model.Account{UID: "test-user", WebCookie: "sessionid=s; s_v_web_id=fp"})
+		server.Close()
+		if pe, ok := err.(*provider.Error); !ok || pe.Kind != tc.kind {
+			t.Errorf("响应错误分类不正确，want %v, got %T %v", tc.kind, err, err)
+		}
+	}
+}
 
 func TestParseSseAck(t *testing.T) {
 	ok := "event: SSE_ACK\ndata: {\"ack_client_meta\":{\"conversation_id\":\"c1\",\"section_id\":\"s1\"},\"query_list\":[{\"question_id\":\"q1\"}]}\n\n"
@@ -318,7 +464,7 @@ func TestClassifyJSONErrorBody(t *testing.T) {
 	}
 	// 风控限流码 → ErrRate（短冷却、不罚号）
 	for _, code := range []int64{710022002, 710022004} {
-		err = classifyJSONErrorBody(`{"code":`+itoa(code)+`,"msg":"请求过于频繁"}`)
+		err = classifyJSONErrorBody(`{"code":` + itoa(code) + `,"msg":"请求过于频繁"}`)
 		if err == nil || err.Kind != provider.ErrRate {
 			t.Fatalf("风控码 %d 应归 ErrRate，实际 %+v", code, err)
 		}
