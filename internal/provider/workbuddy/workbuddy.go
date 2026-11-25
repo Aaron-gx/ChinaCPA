@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -1310,6 +1311,11 @@ func (p *Provider) ChatStream(ctx context.Context, a *model.Account, modelName s
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()
+		// 诊断：上游 11129/11133 时落盘出站体的「结构指纹」（不含消息正文，只留
+		// tools schema + 每条消息的 role/内容类型/长度），定位校验触发点用。
+		if bytes.Contains(raw, []byte("11129")) || bytes.Contains(raw, []byte("11133")) {
+			dumpFailFingerprint(body, string(raw))
+		}
 		return &provider.ChatResult{
 			Status:   resp.StatusCode,
 			RespBody: raw,
@@ -1471,6 +1477,72 @@ func rewriteChatBody(body []byte, modelName, uid string) []byte {
 func aggregateOpenAISSE(body io.Reader, modelName string) ([]byte, error) {
 	out, _, _, err := provider.AggregateOpenAISSE(body, modelName)
 	return out, err
+}
+
+// dumpFailFingerprint 把触发 11129/11133 的出站体写成「结构指纹」：
+// 完整 tools 数组（schema 无会话内容）+ 每条消息的 role/类型/长度摘要。
+// 落盘到 WORKBUDDY_DUMP_DIR（默认 .），诊断完成后可删。
+func dumpFailFingerprint(body []byte, resp string) {
+	var obj map[string]any
+	if json.Unmarshal(body, &obj) != nil {
+		return
+	}
+	fp := map[string]any{
+		"ts":     time.Now().UnixMilli(),
+		"resp":   truncate(resp, 500),
+		"model":  obj["model"],
+		"stream": obj["stream"],
+	}
+	if tools, ok := obj["tools"].([]any); ok {
+		fp["tools"] = tools // tools schema 不含会话内容，完整保留
+		fp["n_tools"] = len(tools)
+	}
+	if msgs, ok := obj["messages"].([]any); ok {
+		summary := make([]map[string]any, 0, len(msgs))
+		for i, m := range msgs {
+			mm, _ := m.(map[string]any)
+			if mm == nil {
+				continue
+			}
+			row := map[string]any{"i": i, "role": mm["role"]}
+			switch c := mm["content"].(type) {
+			case string:
+				row["kind"] = "text"
+				row["len"] = len(c)
+			case []any:
+				kinds := make([]string, 0, len(c))
+				total := 0
+				for _, part := range c {
+					pm, _ := part.(map[string]any)
+					if pm == nil {
+						continue
+					}
+					kinds = append(kinds, fmt.Sprint(pm["type"]))
+					if pm["type"] == "text" {
+						if s, ok := pm["text"].(string); ok {
+							total += len(s)
+						}
+					}
+				}
+				row["kind"] = kinds
+				row["len"] = total
+			default:
+				row["kind"] = fmt.Sprintf("%T", mm["content"])
+			}
+			if tc, ok := mm["tool_calls"]; ok {
+				if arr, ok := tc.([]any); ok {
+					row["n_tool_calls"] = len(arr)
+				}
+			}
+			summary = append(summary, row)
+		}
+		fp["msgs"] = summary
+	}
+	raw, err := json.Marshal(fp)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(fmt.Sprintf("dump_fp_%d.json", time.Now().UnixMilli()), raw, 0o600)
 }
 
 // oneOf 返回第一个非空串。

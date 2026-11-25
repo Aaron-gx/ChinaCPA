@@ -2,7 +2,10 @@
 // 只接受 JSON 字符串，而 OpenAI 协议里是 JSON Schema 对象，出站前统一转换。
 package provider
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // NormalizeToolParamsString 原地归一化请求体 map 里的 tools 参数格式。
 func NormalizeToolParamsString(obj map[string]any) {
@@ -94,20 +97,86 @@ func NormalizeToolSchemaPatterns(obj map[string]any) {
 			continue
 		}
 		if p, ok := fn["parameters"].(map[string]any); ok {
+			mergeAllOfPatterns(p)
 			walkDeleteComplexPatterns(p)
 		}
 	}
 }
 
-// walkDeleteComplexPatterns 递归遍历 schema 任意层，删除括号嵌套深度超阈值的
-// pattern 键（含 properties/items/anyOf/propertyNames 等任意位置）。返回是否有改动。
+// mergeAllOfPatterns 把 allOf 里 ≥2 个纯 pattern 分支合并为单一 pattern。
+// 上游校验器（WorkBuddy deepseek 后端）拒收 allOf 多 pattern 组合
+// （HTTP 400 code=11129，实测仅在请求含 tool 往返消息时触发——
+// ZCode 会话的 REA 插件工具 mcp__rea__binary_session 的 expected_server_path
+// 是 3 个 pattern 的 allOf，首条工具调用轮必挂）。多个 pattern 语义是「全部
+// 匹配」，等价 lookahead 串联；这里用 | 拼接——pattern 只是校验元数据，
+// function-calling 不执行，宽松合并可接受。递归覆盖任意层级。
+func mergeAllOfPatterns(node any) bool {
+	switch v := node.(type) {
+	case map[string]any:
+		changed := false
+		if allOf, ok := v["allOf"].([]any); ok && len(allOf) >= 2 {
+			var merged []string
+			rest := make([]any, 0, len(allOf))
+			for _, branch := range allOf {
+				bm, _ := branch.(map[string]any)
+				if bm == nil {
+					rest = append(rest, branch)
+					continue
+				}
+				if pat, ok := bm["pattern"].(string); ok && len(bm) == 1 {
+					merged = append(merged, pat)
+					continue
+				}
+				mergeAllOfPatterns(branch)
+				rest = append(rest, branch)
+			}
+			if len(merged) >= 2 {
+				pat := "(?:" + strings.Join(merged, ")|(?:") + ")"
+				if len(rest) == 0 {
+					// 分支全是 pattern：合并为单 pattern，直接提升
+					v["pattern"] = pat
+					delete(v, "allOf")
+				} else {
+					v["allOf"] = append(rest, map[string]any{"pattern": pat})
+				}
+				changed = true
+			}
+		}
+		for _, sub := range v {
+			if mergeAllOfPatterns(sub) {
+				changed = true
+			}
+		}
+		return changed
+	case []any:
+		changed := false
+		for _, sub := range v {
+			if mergeAllOfPatterns(sub) {
+				changed = true
+			}
+		}
+		return changed
+	default:
+		return false
+	}
+}
+
+// walkDeleteComplexPatterns 递归遍历 schema 任意层，删除上游拒收的 pattern 键
+// （含 properties/items/anyOf/propertyNames 等任意位置）。返回是否有改动。
+// 拒收形态（均实测 11129/11101）：
+//  1. 括号嵌套深度超阈值（ZCode REA 插件的环境键正则）
+//  2. 含 UTF-16 代理对区间转义 \uD800-\uDFFF —— 上游 proto JSON 解码器把它
+//     解成孤立代理半字节，非法 UTF-8。REA 的 expected_server_path 三段 allOf
+//     里就有一段；此前 allOf 多 pattern 组合挂的真正毒源就是它。
 func walkDeleteComplexPatterns(node any) bool {
 	switch v := node.(type) {
 	case map[string]any:
 		changed := false
-		if p, ok := v["pattern"].(string); ok && regexParenDepth(p) > patternMaxDepth {
-			delete(v, "pattern")
-			changed = true
+		if p, ok := v["pattern"].(string); ok {
+			if regexParenDepth(p) > patternMaxDepth || regexHasSurrogateEscape(p) {
+				delete(v, "pattern")
+				changed = true
+			}
 		}
 		for _, sub := range v {
 			if walkDeleteComplexPatterns(sub) {
@@ -126,6 +195,14 @@ func walkDeleteComplexPatterns(node any) bool {
 	default:
 		return false
 	}
+}
+
+// regexHasSurrogateEscape 检查正则文本里是否含 \uD800-\uDFFF 形式的
+// 代理对区间转义（大小写不敏感）。
+func regexHasSurrogateEscape(pat string) bool {
+	up := strings.ToUpper(pat)
+	return strings.Contains(up, `\UD800`) || strings.Contains(up, `\UDFFF`) ||
+		strings.Contains(up, `\UD7FF`) || strings.Contains(up, `\UE000`)
 }
 
 // regexParenDepth 返回正则里括号的最大嵌套深度（忽略字符类 [...] 内的括号）。
